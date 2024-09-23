@@ -1,0 +1,126 @@
+#!/usr/bin/python
+# Welcome to gimmeCubes! Getting your ESP cube files since 04-03-2024!
+# Proudly written by Christian Knox, and made actually functional by Turki Alturaifi, for the Peng Liu Group
+import sys
+import os
+import subprocess
+
+# Still don't understand why the hell this is important
+if len(sys.argv) < 2:
+    print("Usage: {} <filename>".format(sys.argv[0]))
+    sys.exit(1)
+
+# Sets the parameters for the batch job
+filename = sys.argv[1] 
+mem = "12GB"
+walltime = 24
+
+# Sets internal variables for file creation
+baseName = os.path.splitext(filename)[0]
+outputDenName = baseName+"Den.cube"
+outputPotName = baseName+"Pot.cube"
+submitDenName = baseName+"Den.cmd"
+submitPotName = baseName+"Pot.cmd"
+outputMOName = baseName+"MO.cube"
+submitMOName = baseName+"MO.cube"
+
+# Opens the job file for Density for writing
+output = open(submitDenName,'w')
+
+# Generic crap from regular qg16
+output.write("#!/usr/bin/env bash\n")
+output.write("#SBATCH --job-name="+str(baseName)+"\n")
+output.write("#SBATCH --output="+outputDenName+"\n")
+output.write("#SBATCH --ntasks-per-node=12"+"\n")
+output.write("#SBATCH --mem="+mem+"\n")
+output.write("#SBATCH --time="+str(walltime)+":00:00\n")
+output.write("#SBATCH --cluster=smp\n")
+output.write("#SBATCH --partition=smp\n")
+output.write("#SBATCH --nodes=1\n")
+output.write("\n")
+output.write("module purge\n")
+output.write("module load gaussian/16-C.01\n")
+output.write("\n")
+output.write("export GAUSS_SCRDIR=$SLURM_SCRATCH\n")
+output.write("ulimit -s unlimited\n")
+output.write("export LC_COLLATE=C\n")
+output.write("\n")
+
+# Writes the specifics for running the Density Cube
+output.write("cubegen 1 density=scf "+filename+" "+outputDenName+" 0""\n")
+output.write("\n")
+
+# Close the Density job file
+output.close()
+
+# Submit the Density job
+os.system("sbatch " + submitDenName)
+
+# Opens the job file for Potential for writing
+output = open(submitPotName,'w')
+
+# Generic crap from regular qg16
+output.write("#!/usr/bin/env bash\n")
+output.write("#SBATCH --job-name="+str(baseName)+"\n")
+output.write("#SBATCH --output="+outputPotName+"\n")
+output.write("#SBATCH --ntasks-per-node=12"+"\n")
+output.write("#SBATCH --mem="+mem+"\n")
+output.write("#SBATCH --time="+str(walltime)+":00:00\n")
+output.write("#SBATCH --cluster=smp\n")
+output.write("#SBATCH --partition=smp\n")
+output.write("#SBATCH --nodes=1\n")
+output.write("\n")
+output.write("module purge\n")
+output.write("module load gaussian/16-C.01\n")
+output.write("\n")
+output.write("export GAUSS_SCRDIR=$SLURM_SCRATCH\n")
+output.write("ulimit -s unlimited\n")
+output.write("export LC_COLLATE=C\n")
+output.write("\n")
+
+# Writes the specifics for running the Potential Cube
+output.write("cubegen 1 potential=scf "+filename+" "+outputPotName+" 0""\n")
+output.write("\n")
+
+# Close the Potential job file
+output.close()
+
+# Submits the Potential job
+os.system("sbatch " + submitPotName)
+
+# Opens the job file for Molecular Orbitals for writing
+output = open(submitMOName,'w')
+
+# Generic crap from regular qg16
+output.write("#!/usr/bin/env bash\n")
+output.write("#SBATCH --job-name="+str(baseName)+"\n")
+output.write("#SBATCH --output="+outputMOName+"\n")
+output.write("#SBATCH --ntasks-per-node=12"+"\n")
+output.write("#SBATCH --mem="+mem+"\n")
+output.write("#SBATCH --time="+str(walltime)+":00:00\n")
+output.write("#SBATCH --cluster=smp\n")
+output.write("#SBATCH --partition=smp\n")
+output.write("#SBATCH --nodes=1\n")
+output.write("\n")
+output.write("module purge\n")
+output.write("module load gaussian/16-C.01\n")
+output.write("\n")
+output.write("export GAUSS_SCRDIR=$SLURM_SCRATCH\n")
+output.write("ulimit -s unlimited\n")
+output.write("export LC_COLLATE=C\n")
+output.write("\n")
+
+# Writes the specifics for running the Density Cube
+output.write("cubegen 1 MO=Valence "+filename+" "+outputMOName+" 0""\n")
+output.write("\n")
+
+# Close the Molecular Orbital job file
+output.close()
+
+# Submits the Potential job
+os.system("sbatch " + submitMOName)
+
+# Remove the job files
+os.system("rm -f "+outputDenName)
+os.system("rm -f "+outputPotName)
+os.system("rm -f "+outputMOName)

@@ -1,0 +1,140 @@
+#!/usr/bin/python
+
+import sys
+import os
+import subprocess
+
+ncpusd=12
+memsd = "96GB"
+walltime = "24"
+
+# nproc:  # of cpus from .com files
+# ncpus:  # of cpus from command line
+# ncpusd: default # of cpus
+nproc = 0
+ncpus = 0
+mem = ""
+
+l = len(sys.argv)
+
+# read ncpus, walltime
+if l >= 4:
+   ncpus    = int(sys.argv[3])
+
+if l >= 3:
+   walltime = sys.argv[2]
+
+if l < 2:
+   print 'Usage: '+os.path.basename(sys.argv[0])+' filename.com walltime(='+walltime+') ncpus(='+str(ncpusd)+')'
+   sys.exit(1)
+
+filename = sys.argv[1]
+
+if not os.path.isfile(filename):
+   print "Cannot find "+filename
+   sys.exit(1)
+
+basename = os.path.splitext(filename)[0]
+ofname = basename+".out"
+chkname = basename+".chk"
+qfname = basename+".cmd"
+output = open(qfname,'w')
+
+# read ncpus and mem from .com file 
+input = open(filename,'r+')
+
+while True:
+   line = input.readline()
+   
+   # break if EOF or error or for blank line
+   if not line:
+      break
+
+   if len(line) == 0:
+      break
+
+   line = line.strip()
+   s = line.split('=')
+   s0 = s[0].lower()
+   if s0 == '%nprocshared' or s0 == '%nproc':
+      nproc = int(s[1]) 
+      print "ncpus read from input file. ncpu=%d." % nproc
+      if ncpus != 0 and ncpus != nproc:
+          print ""
+          print "  Warning: ncpus is different from nproc in input file."
+          print "  Commmand line input 'ncpu=%d' was ignored." % ncpus
+          print "  Using `nproc=%d` from Gaussian input file." % nproc
+          print ""
+      ncpus = nproc
+   if s0 == '%mem':
+      mem = s[1]
+      for chara in 'GB':
+        mem = mem.replace(chara, '')
+      memTemp = int(mem)
+      memTemp = memTemp + 2
+      mem = str(memTemp)+'GB'
+      memTemp2 = memTemp - 2
+      memTemp3 = str(memTemp2) + "+2 GB"
+      print "mem read from input file. mem=%s." % memTemp3
+
+
+# set ncpus to default if nproc was not found in .com file
+if nproc == 0:
+   if ncpus == 0:
+      ncpus = ncpusd
+   else:
+      memsd = str(ncpus*2)+"GB"
+   print "set nprocshared=%d." % ncpus
+
+#  update %nprocshared in .com file
+   input.seek(0)
+   old = input.read()
+   input.seek(0)
+   input.write("%%nprocshared=%d\n" % ncpus)
+   input.write(old)
+
+# set mem to default if mem was not found in .com file
+if mem == "":
+   mem = memsd
+   print "set mem=%s." % mem
+
+#  update %mem in .com file
+   input.seek(0)
+   old = input.read()
+   input.seek(0)
+   input.write("%%mem=%s\n" % mem)
+   input.write(old)
+
+input.close()
+
+#l=len(basename)
+#if l > 16:
+#   pbsname = basename[:12]+".."+basename[l-2:l]
+#else:
+#   pbsname = basename
+
+output.write("#!/usr/bin/env bash\n")
+output.write("#SBATCH --job-name="+str(basename)+"\n")
+output.write("#SBATCH --output="+ofname+"\n")
+output.write("#SBATCH --ntasks-per-node="+str(ncpus)+"\n")
+output.write("#SBATCH --mem="+mem+"\n")
+output.write("#SBATCH --time="+str(walltime)+":00:00\n")
+output.write("#SBATCH --cluster=smp\n")
+output.write("#SBATCH --partition=smp\n")
+output.write("#SBATCH --nodes=1\n")
+
+output.write("\n")
+output.write("module purge\n")
+output.write("module load gaussian\n")
+output.write("\n")
+output.write("export GAUSS_SCRDIR=$SLURM_SCRATCH\n")
+output.write("ulimit -s unlimited\n")
+output.write("export LC_COLLATE=C\n")
+output.write("\n")
+output.write("g16 < "+filename+"\n")
+output.write("\n")
+output.close()
+
+os.system("sbatch "+qfname)
+os.system("rm -f "+qfname)
+
