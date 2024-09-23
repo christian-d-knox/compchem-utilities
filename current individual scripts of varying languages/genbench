@@ -1,0 +1,244 @@
+#!/bin/bash
+
+#Welcome to GenBench, helping you automate the benchmarking process since 2024-08-07!
+#Written for other lazy SOB's by Christian Drew Knox, for the Peng Liu Group
+#WARNING! THIS SCRIPT USES pg2xyz AS A DEPENDENCY!
+
+bname=`echo $1 | sed -e 's/.log//g'`
+bname=`echo $bname | sed -e 's/.out//g'`
+
+mem='24GB'
+nproc=12
+
+#PLEASE remember to change the charge!!!
+charge='0 1'
+
+#This chunk represents some pre-defined benchmark settings. Feel free to alter them till your heart's content
+method1="# m062x/6-311+G(d,p) scrf=(smd,solvent=TetraHydroFuran)"
+suffix1='_SP'
+method2="# m062x/aug-cc-pVTZ scrf=(smd,solvent=TetraHydroFuran)"
+suffix2='_ccSP'
+method3="# b3lyp/6-311+G(d,p) EmpiricalDispersion=GD3BJ scrf=(smd,solvent=TetraHydroFuran)"
+suffix3='_b3bjSP'
+method4="# wb97XD/6-311+G(d,p) scrf=(smd,solvent=TetraHydroFuran)"
+suffix4='_wbSP'
+method5="# blyp/6-311+G(d,p) EmpiricalDispersion=GD3BJ scrf=(smd,solvent=TetraHydroFuran)"
+suffix5='_blbjSP'
+method6="# m06L/6-311+G(d,p) scrf=(smd,solvent=TetraHydroFuran)"
+suffix6='_mlSP'
+method7="# m062x/def2TZVP scrf=(smd,solvent=TetraHydroFuran)"
+suffix7='_mdef'
+method8="# wb97XD/def2TZVP EmpiricalDispersion=GD3BJ scrf=(smd,solvent=TetraHydroFuran)"
+suffix8='_wdef'
+#DLPNO-CCSD(T) gets its own section because it's weird
+ccsd1="! cc-pVTZ cc-pVTZ/C DLPNO-CCSD(T) TightSCF NormalPNO CPCM"
+ccsd2="%cpcm smd true"
+ccsd3='	  SMDsolvent "diethyl ether"'
+suffix9='_ccsdSP'
+
+ccsd5="! def2-TZVP def2-TZVP/C DLPNO-CCSD(T) TightSCF NormalPNO CPCM"
+ccsd6="%cpcm smd true"
+ccsd7='	  SMDsolvent "diethyl ether"'
+suffix10='_ccsdSP'
+#PLEASE edit the CCSD(T) charge and multiplicity as well!!!
+ccsd4="* xyz 0 1"
+
+##########
+#The following code block is the template for each submission.
+oname=$bname$suffix1
+ctrline=$method1
+
+echo '%mem='$mem      > $oname.com
+echo '%nproc='$nproc >> $oname.com
+echo $ctrline        >> $oname.com
+echo ''              >> $oname.com
+echo 'single point SMD solvation model calculation' >> $oname.com
+echo ''              >> $oname.com
+echo $charge         >> $oname.com
+pg2xyz.g09 $1            >> $oname.com
+echo ' '             >> $oname.com
+
+#The following is the submission template for each bench file
+
+echo 'Generated M06-2X benchmark file'
+
+qg16.smp $bname$suffix1.com
+
+echo 'Submitted M06-2X benchmark job'
+##########
+oname=$bname$suffix2
+ctrline=$method2
+
+echo '%mem='$mem      > $oname.com
+echo '%nproc='$nproc >> $oname.com
+echo $ctrline        >> $oname.com
+echo ''              >> $oname.com
+echo 'single point SMD solvation model calculation' >> $oname.com
+echo ''              >> $oname.com
+echo $charge         >> $oname.com
+pg2xyz.g09 $1            >> $oname.com
+echo ' '             >> $oname.com
+
+echo 'Generated cc-P benchmark file'
+
+qg16.smp $bname$suffix2.com
+
+echo 'Submitted cc-P benchmark job'
+##########
+oname=$bname$suffix3
+ctrline=$method3
+
+echo '%mem='$mem      > $oname.com
+echo '%nproc='$nproc >> $oname.com
+echo $ctrline        >> $oname.com
+echo ''              >> $oname.com
+echo 'single point SMD solvation model calculation' >> $oname.com
+echo ''              >> $oname.com
+echo $charge         >> $oname.com
+pg2xyz.g09 $1            >> $oname.com
+echo ' '             >> $oname.com
+
+echo 'Generated B3LYP-D3BJ benchmark file'
+
+qg16.smp $bname$suffix3.com
+
+echo 'Submitted B3LYP-D3BJ benchmark job'
+##########
+oname=$bname$suffix4
+ctrline=$method4
+
+echo '%mem='$mem      > $oname.com
+echo '%nproc='$nproc >> $oname.com
+echo $ctrline        >> $oname.com
+echo ''              >> $oname.com
+echo 'single point SMD solvation model calculation' >> $oname.com
+echo ''              >> $oname.com
+echo $charge         >> $oname.com
+pg2xyz.g09 $1            >> $oname.com
+echo ' '             >> $oname.com
+
+echo 'Generated wB97X-D benchmark file'
+
+qg16.smp $bname$suffix4.com
+
+echo 'Submitted wB97X-D benchmark job'
+##########
+oname=$bname$suffix5
+ctrline=$method5
+
+echo '%mem='$mem      > $oname.com
+echo '%nproc='$nproc >> $oname.com
+echo $ctrline        >> $oname.com
+echo ''              >> $oname.com
+echo 'single point SMD solvation model calculation' >> $oname.com
+echo ''              >> $oname.com
+echo $charge         >> $oname.com
+pg2xyz.g09 $1            >> $oname.com
+echo ' '             >> $oname.com
+
+echo 'Generated BLYP-D3BJ benchmark file'
+
+qg16.smp $bname$suffix5.com
+
+echo 'Submitted BLYP-D3BJ benchmark job'
+##########
+oname=$bname$suffix6
+ctrline=$method6
+
+echo '%mem='$mem      > $oname.com
+echo '%nproc='$nproc >> $oname.com
+echo $ctrline        >> $oname.com
+echo ''              >> $oname.com
+echo 'single point SMD solvation model calculation' >> $oname.com
+echo ''              >> $oname.com
+echo $charge         >> $oname.com
+pg2xyz.g09 $1            >> $oname.com
+echo ' '             >> $oname.com
+
+echo 'Generated M06-L benchmark file'
+
+qg16.smp $bname$suffix6.com
+
+echo 'Submitted M06-L benchmark job'
+##########
+oname=$bname$suffix7
+ctrline=$method7
+
+echo '%mem='$mem      > $oname.com
+echo '%nproc='$nproc >> $oname.com
+echo $ctrline        >> $oname.com
+echo ''              >> $oname.com
+echo 'single point SMD solvation model calculation' >> $oname.com
+echo ''              >> $oname.com
+echo $charge         >> $oname.com
+pg2xyz.g09 $1            >> $oname.com
+echo ' '             >> $oname.com
+
+echo 'Generated M06-2X def2 benchmark file'
+
+qg16.smp $bname$suffix7.com
+
+echo 'Submitted M06-2X def2 benchmark job'
+##########
+oname=$bname$suffix8
+ctrline=$method8
+
+echo '%mem='$mem      > $oname.com
+echo '%nproc='$nproc >> $oname.com
+echo $ctrline        >> $oname.com
+echo ''              >> $oname.com
+echo 'single point SMD solvation model calculation' >> $oname.com
+echo ''              >> $oname.com
+echo $charge         >> $oname.com
+pg2xyz.g09 $1            >> $oname.com
+echo ' '             >> $oname.com
+
+echo 'Generated wb97X-D def2 benchmark file'
+
+qg16.smp $bname$suffix8.com
+
+echo 'Submitted wB97X-D def2 benchmark job'
+##########
+
+#This code block is entirely original, for use in automating DLPNO-CCSD(T) input creation
+oname=$bname$suffix9
+
+echo '%pal nprocs 12' > $oname.inp
+echo 'end' >> $oname.inp
+echo $ccsd1 >> $oname.inp
+echo $ccsd2 >> $oname.inp
+echo $ccsd3 >> $oname.inp
+echo 'end' >> $oname.inp
+echo '%maxcore 6000' >> $oname.inp
+echo "$ccsd4" >> $oname.inp
+pg2xyz.g09 $1 >> $oname.inp
+echo '*' >> $oname.inp
+echo '' >> $oname.inp
+
+echo 'Generated DLPNO-CCSD(T) benchmark job'
+
+qorca.smp $bname$suffix9.inp
+
+echo 'Submitted DLPNO-CCSD(T) benchmark job'
+###########
+oname=$bname$suffix10
+
+echo '%pal nprocs 12' > $oname.inp
+echo 'end' >> $oname.inp
+echo $ccsd5 >> $oname.inp
+echo $ccsd6 >> $oname.inp
+echo $ccsd7 >> $oname.inp
+echo 'end' >> $oname.inp
+echo '%maxcore 6000' >> $oname.inp
+echo "$ccsd4" >> $oname.inp
+pg2xyz.g09 $1 >> $oname.inp
+echo '*' >> $oname.inp
+echo '' >> $oname.inp
+
+echo 'Generated DLPNO-CCSD(T) def2 benchmark job'
+
+qorca.smp $bname$suffix10.inp
+
+echo 'Submitted DLPNO-CCSD(T) def2 benchmark job'
+
+echo 'Successfully finished GenBench routine'

@@ -1,0 +1,9 @@
+#!/usr/bin/perl
+
+$cmd = shift @ARGV;
+
+foreach $file (@ARGV)
+{
+        system("$cmd $file");
+}
+

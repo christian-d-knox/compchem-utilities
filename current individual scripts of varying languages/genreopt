@@ -1,0 +1,40 @@
+#!/bin/bash
+
+bname=`echo $1 | sed -e 's/.log//g'`
+bname=`echo $bname | sed -e 's/.out//g'`
+
+mem='24GB'
+nproc=12
+charge='0 1'
+#method="# 6-311+g(d,p) m062x scrf=(smd,solvent=DiethylEther)"
+method="# opt freq m062x/6-31G(d)"
+#method="# m062x/6-311+G(d,p) scrf=(smd,solvent=DMSO)"
+suffix='_reopt'
+
+#########################################################################
+
+oname=$bname$suffix
+ctrline=$method
+
+echo '%mem='$mem      > $oname.com
+echo '%nproc='$nproc >> $oname.com
+echo $ctrline        >> $oname.com
+echo ''              >> $oname.com
+echo 'single point SMD solvation model calculation' >> $oname.com
+echo ''              >> $oname.com
+echo $charge         >> $oname.com
+pg2xyz.g09 $1            >> $oname.com
+#echo 'stoichiometry=C3H2F6O1'             >> $oname.com
+#echo 'solventname=HFIP'             >> $oname.com
+#echo 'eps=16.7'             >> $oname.com
+#echo 'rsolv=4.6'             >> $oname.com
+echo ' '             >> $oname.com
+
+#########################################################################
+
+echo 'Generated reoptimization input file(s)!'
+
+qg16.smp $bname$suffix.com
+
+echo 'Submitted reoptimization job(s)!'
+
