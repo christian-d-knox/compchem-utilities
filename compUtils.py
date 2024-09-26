@@ -164,7 +164,7 @@ def runJob(fileList):
                 outputFile.write("#SBATCH --ntasks-per-node=" + str(cpus) + "\n")
                 outputFile.write("#SBATCH --time=" + str(defaultWallTime) + ":00:00\n")
                 outputFile.write("#SBATCH --cluster=smp\n")
-                outputFile.write("#SBATCH --partition=smp\n")
+                outputFile.write("#SBATCH --partition=" + defaultPartition + "\n")
 
                 outputFile.write("\n")
                 outputFile.write("# Load the module\n")
