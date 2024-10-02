@@ -48,21 +48,16 @@ def commandLineParser():
     if args.run:
         # Compiles the entire list of files to run (built-in 'runall' capabilities)
         fileNames = glob.glob(args.run)
-        # Basic-tier error-handling for nonexistent files
-        fullPaths = [os.path.join(os.getcwd(), file) for file in fileNames]
-        missingFiles = [file for file in fileNames if not os.path.isfile(os.path.join(os.getcwd(), file))]
-        if missingFiles:
-            print(f"Could not locate: {', '.join(missingFiles)}")
+        runJob(grabPaths(fileNames))
 
-            #workingDirectory = os.getcwd() + '/'
-            #print("Current working directory is " + str(workingDirectory))
-            #fullPath = os.path.join(workingDirectory, str(file))
-            #fullPaths.append(fullPath)
-            #index = fileNames.index(file)
-            #if not os.path.isfile(fullPaths[index]):
-                #print("Are you sure that " + str(file) + " exists???")
-                #sys.exit(file)
-        runJob(fullPaths)
+# This subroutine allows for easily compiling file paths for multiple methods
+def grabPaths(files):
+    fullPaths = [os.path.join(os.getcwd(), file) for file in files]
+    # Basic-tier error-handling for nonexistent files
+    missingFiles = [file for file in files if not os.path.isfile(os.path.join(os.getcwd(), file))]
+    if missingFiles:
+        print(f"Could not locate: {', '.join(missingFiles)}")
+    return fullPaths
 
 # This routine is for job submission to the cluster
 def runJob(fileList):
@@ -159,12 +154,12 @@ def runJob(fileList):
             firstSubLine = subLine[0].lower()
             if firstSubLine == '%maxcore':
                 ram = int(subLine[1]) * cpus / 1000
-                jobRam = ram + 2
+                jobRam = int(ram + 2)
                 print("Successfully read memory and will submit with " + str(ram) + " + 2 GB")
             # Sets the RAM to a default amount
             else:
                 ram = cpus * 2
-                jobRam = ram + 2
+                jobRam = int(ram + 2)
                 print("Couldn't find RAM amount and will submit with " + str(ram) + " + 2 GB instead")
 
             inputFile.close()
