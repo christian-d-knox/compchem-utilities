@@ -13,7 +13,8 @@ import argparse
 import glob
 
 # Set your defaults HERE
-defaultSinglePoint = "M062X/6-311+G(d,p) scrf=(smd,solvent=TetraHydroFuran)"
+binDirectory = "/ihome/pliu/cdk67/bin/"
+defaultSinglePoint = "M062X/6-311+G(d,p) scrf=(smd,solvent=TetraHydroFuran)" # Soon to be obsolete
 defaultCPU = 12
 defaultWallTime = "24"
 # Change partition to pliu for SMP if preferred
@@ -34,17 +35,11 @@ def commandLineParser():
     parser.add_argument('-sp', '--singlePoint', type=str, help="Indicates the 'single point' subroutine for the listed file(s)")
     parser.add_argument('-b', '--bench', type=str, help="Indicates the 'benchmark' subroutine, for creating a single point becnhmark on the listed file(s)")
     parser.add_argument('-st', '--stalk', help="Indicates the 'stalking' subroutine, which will watch the jobs currently running based on their outputs, and update the terminal periodically")
-    parser.add_argument('-c', '--checkpoint', help="Enables checkpoint functionality for the 'run' routine")
+    parser.add_argument('-c', '--checkpoint', action='store_true', help="Enables checkpoint functionality for the 'run' routine")
     parser.add_argument('-i', '--install', help="Indicates the 'install' subroutine, to install any dependencies CompUtils relies upon")
 
     # Figures out what the hell you told it to do
     args = parser.parse_args()
-
-    # Checkpoint flag handling
-    if args.checkpoint:
-        isCheckpoint = True
-    else:
-        isCheckpoint = False
 
     # Run flag handling
     if args.run:
@@ -52,21 +47,121 @@ def commandLineParser():
         # Compiles the entire list of files to run (built-in 'runall' capabilities)
         fileNames = glob.glob(args.run)
         print("So you want me to run on these files?" + str(fileNames[-1]))
-        # Basic-tier error-handling for nonexistent files
-        fullPaths = [os.path.join(os.getcwd(), file) for file in fileNames]
-        missingFiles = [file for file in fileNames if not os.path.isfile(os.path.join(os.getcwd(), file))]
-        if missingFiles:
-            print(f"Could not locate: {', '.join(missingFiles)}")
+        runJob(grabPaths(fileNames))
 
-            #workingDirectory = os.getcwd() + '/'
-            #print("Current working directory is " + str(workingDirectory))
-            #fullPath = os.path.join(workingDirectory, str(file))
-            #fullPaths.append(fullPath)
-            #index = fileNames.index(file)
-            #if not os.path.isfile(fullPaths[index]):
-                #print("Are you sure that " + str(file) + " exists???")
-                #sys.exit(file)
-        runJob(fullPaths)
+    if args.singlePoint:
+        print("I saw the single point flag!")
+        # Compiles the entire list of files to run
+        fileNames = glob.glob(args.singlePoint)
+        print("So you want me to run on these files?" + str(fileNames[-1]))
+        genSinglePoint(grabPaths(fileNames))
+
+# This subroutine allows for easily compiling file paths for multiple methods
+def grabPaths(fileList):
+    fullPaths = [os.path.join(os.getcwd(), file) for file in fileList]
+    # Basic-tier error-handling for nonexistent files
+    missingFiles = [file for file in fileList if not os.path.isfile(os.path.join(os.getcwd(), file))]
+    if missingFiles:
+        print(f"Could not locate: {', '.join(missingFiles)}")
+    return fullPaths
+
+def genSinglePoint(fileList):
+    print("Ideally, I'm making a single point file now")
+    for x in range(len(fileList)):
+        # First checks for benchmarking.txt in the /bin
+        if os.path.isfile(os.path.join(binDirectory, "benchmarking.txt")):
+            print("Found the methods file!")
+            methodFile = open(os.path.join(binDirectory, "benchmarking.txt"), "r")
+            geometryFile = open(fileList[x])
+        else:
+            print("Couldn't find your methods!")
+            return
+
+        # Handles the creation of the output crap
+        baseName, extension = os.path.splitext(fileList[x])
+        baseName = os.path.basename(fileList[x])
+
+        # This chunk helps handle the special case of doing DLPNO in ORCA *specifically*
+        methodLine = methodFile.readline()
+        methodSubs = methodLine.strip().split("/")
+        methodFirstSub = methodSubs[0]
+
+        if methodFirstSub != "DLPNO-CCSD(T)":
+            outputName = baseName + ".gjf"
+            # More G16 shit
+        else:
+            outputName = baseName + ".inp"
+            # More ORCA shit
+
+
+
+
+# Houkmol XYZ file Generator
+# Originally scripted in AWK by Jan Lanbowski, translated to PERL and hacked by Paul Ha-Yeon Cheong
+# Translated to Python using AI and then fixed by Christian Drew Knox (as such, is not thoroughly documented)
+def getCoords(fileName, outputFile):
+    print("I'm in getCoords now!")
+    atSymbol = {
+        1: 'H', 2: 'He', 3: 'Li', 4: 'Be', 5: 'B', 6: 'C', 7: 'N', 8: 'O', 9: 'F', 10: 'Ne',
+        11: 'Na', 12: 'Mg', 13: 'Al', 14: 'Si', 15: 'P', 16: 'S', 17: 'Cl', 18: 'Ar', 19: 'K',
+        20: 'Ca', 21: 'Sc', 22: 'Ti', 23: 'V', 24: 'Cr', 25: 'Mn', 26: 'Fe', 27: 'Co', 28: 'Ni',
+        29: 'Cu', 30: 'Zn', 31: 'Ga', 32: 'Ge', 33: 'As', 34: 'Se', 35: 'Br', 36: 'Kr',
+
+        42: 'Mo', 44: 'Ru', 45: 'Rh', 46: 'Pd', 47: 'Ag', 48: 'Cd', 50: 'Sn', 51: 'Sb',
+        53: 'I', 54: 'Xe', 77: 'Ir', 78: 'Pt', 79: 'Au', 80: 'Hg', 81: 'Tl', 82: 'Pb',
+        83: 'Bi'
+    }
+
+    at = {}
+    X = {}
+    Y = {}
+    z = {}
+    j = 0
+    i = 0
+    energy = None
+
+    def getLine0(file):
+        line = file.readline()
+        if line:
+            return line.strip()
+        return None
+
+    with open(os.path.abspath(fileName), 'r') as file:
+        for line in file:
+            line = line.strip()  # strip record separator
+            Fld = line.split()
+
+            if len(Fld) > 2 and Fld[1] == 'Standard' and Fld[2] == 'orientation:':
+                for _ in range(5):
+                    getLine0(file)
+                while len(Fld) > 1:
+                    i += 1
+                    at[i] = Fld[2]
+                    if len(Fld) == 6:
+                        X[i] = Fld[3]
+                        Y[i] = Fld[4]
+                        z[i] = Fld[5]
+                    else:
+                        X[i] = Fld[4]
+                        Y[i] = Fld[5]
+                        z[i] = Fld[6]
+                    line = getLine0(file)
+                    if line:
+                        Fld = line.split()
+                    else:
+                        break
+
+            if len(Fld) > 2 and Fld[1] == 'SCF' and Fld[2] == 'Done:':
+                energy = Fld[5]
+
+            if len(Fld) > 3 and Fld[3] == 'Threshold':
+                getLine0(file)
+                j += 1
+
+    # print(i)
+    # print('Point ', j, ' Energy= ', energy)
+    for k in range(1, i + 1):
+        outputFile.write(f"{atSymbol[at[k]]}, {X[k]}, {Y[k]}, {z[k]}\n")
 
 # This routine is for job submission to the cluster
 def runJob(fileList):
@@ -170,12 +265,12 @@ def runJob(fileList):
             firstSubLine = subLine[0].lower()
             if firstSubLine == '%maxcore':
                 ram = int(subLine[1]) * cpus / 1000
-                jobRam = ram + 2
+                jobRam = int(ram + 2)
                 print("Successfully read memory and will submit with " + str(ram) + " + 2 GB")
             # Sets the RAM to a default amount
             else:
                 ram = cpus * 2
-                jobRam = ram + 2
+                jobRam = int(ram + 2)
                 print("Couldn't find RAM amount and will submit with " + str(ram) + " + 2 GB instead")
 
             inputFile.close()
@@ -215,6 +310,5 @@ def runJob(fileList):
 
             os.system("sbatch " + queueName)
             #os.system("rm -f " + queueName)
-
 
 commandLineParser()
