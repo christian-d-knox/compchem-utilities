@@ -1,0 +1,185 @@
++===================================================================================+
+|                                                                                   |
+|       ____                      _   _ _   _ _                        _   ___      |
+|      / ___|___  _ __ ___  _ __ | | | | |_(_) |___  __   _____ _ __  / | / _ \     |
+|     | |   / _ \| '_ ` _ \| '_ \| | | | __| | / __| \ \ / / _ \ '__| | || | | |    |
+|     | |__| (_) | | | | | | |_) | |_| | |_| | \__ \  \ V /  __/ |    | || |_| |    |
+|      \____\___/|_| |_| |_| .__/ \___/ \__|_|_|___/   \_/ \___|_|    |_(_)___/     |
+|                          |_|                                                      |
+|                                                                                   |
++===================================================================================+
+
+Welcome to Computational Chemistry Utilities (CompUtils)!
+This utility is brought to you by Christian Drew Knox, for the Peng Liu Group at The
+University of Pittsburgh.
+
+This program exists to combine many in-house scripts we have developed over the years
+into one comprehensive package for anyone's use.
+
+Current Implementations:
+- Every function is pre-packaged with runall functionality
+- Both qg16 and qorca submission
+- genosp and genCC (mixed basis not implemented)
+- pg2xyz (completely re-coded, as it needed translated)
+- genbench
+- improved implementation of obsessiveQueue
+
+This utility comes pre-packaged with terminal flags that trigger it's corresponding
+features. This manual is sorted by these flags, in order of what I anticipate to be
+most commonly used.
+
+*************************************************************************************
+
+The runJob function is accessed through the -r or --run flag, and must receive a file
+name or list of names as an argument. Multiple filenames can be accepted by escaping
+the wildcard in the terminal, as shown below:
+
+    python3 /ihome/pliu/user/bin/compUtils.py -r \*.gjf
+
+The run function distinguishes between Gaussian16 and ORCA jobs specifically based
+off of the first line, and as such the first few lines of every job must be formatted
+in a very specific way.
+
+For Gaussian16 jobs, the first two lines must be CPUs and RAM, in that order. Two
+different CPU structures are accepted:
+%nprocshared=12           OR          %nproc=12
+%mem=24GB                 OR          %mem=24GB
+
+For ORCA submissions, exactly one input formatting is accepted:
+%pal=12
+end
+%maxcore=6000
+
+You may notice that ORCA file input takes its memory in the units of MB instead of GB
+This is an entirely intentional inclusion of historical differences, in order to
+further enforce that the program looks for specific formatting to distinguish between
+the job types.
+
+*************************************************************************************
+
+The genSP functionality is accessed through the -sp or --singlePoint flag, and
+similarly accepts a filename or list from the terminal.
+
+This function was designed to operate on Gaussian16 outputs to generate G16 or ORCA
+inputs for single point corrections. In your /bin/ folder, where you keep this
+program, you should create a file called benchmarking.txt . This file is where the
+function will find your desired single point method. You should specify the method
+similarly to shown below:
+
+M062X 6-311+G(d,p) scrf=(smd,solvent=TetraHydroFuran)
+
+This line will be read and inserted into the new single point input exactly as it
+appears. It is therefore vital that you format this line exactly how whatever program
+you want to calculate with will need to read it.
+
+genSP will default to running jobs in Gaussian16, unless you specify specific
+functionals. Currently, only DLPNO-CCSD(T) is treated differently, and is run in ORCA
+Within the code of the program, near the top, is a line for default CPU count. The
+program will use this to determine the single point input requirements. RAM amount
+is set to CPUs * 2 for Gaussian16, and CPUs * 6 for DLPNO (roughly optimized values)
+
+genSP automatically reads the output to find the charge and multiplicity, so there is
+never any need to specify that information (a noticeable QoL improvement from prior
+scripts).This function will not only create and automatically submit the single point
+inputs, but it will also generate an XYZ file for your own use in programs like
+CYLView.
+
+Note: Due to the way I had to translate and re-implement pg2xyz as my own getCoords
+function, this specific functionality runs noticeably slower than prior command-line
+scripts to accomplish the same thing. Suggestions/improvements to getCoords are
+welcomed and appreciated.
+
+*************************************************************************************
+
+The benchmarking functionality is accessed by -b or --bench flags, and accepts a G16
+output as its input. This runs extremely similarly to genSP, so the differences will
+be enumerated here.
+
+genBench will first pass through genSP to make the standard single point and generate
+the XYZ file. This was an optimization decision to reduce the number of calls to
+getCoords, which is the least efficient function in the program. Subsequent benchmark
+inputs are generated from the other lines of benchmarking.txt and submitted to the
+intended suite of choice (G16 or ORCA). The XYZ file that is created during the genSP
+routine is what is read and accessed for quickly creating the other inputs (or in the
+case of ORCA inputs, the XYZ file is used explicitly as the input geometry. It is
+therefore very important to leave this file in the directory, and copy it out if
+needed).
+
+*************************************************************************************
+
+The newest form of functionality, termed job stalking, is achieved by -s or --stalk
+It takes no inputs, instead setting a flag within the program to compile the list of
+jobs it submits to watch (in an improved measure from obsessiveQueue).
+
+The runJob function creates, but leaves, the CMD files required for cluster
+submission. jobStalk watches these CMDs and their corresponding outputs to tell you
+if your jobs are:
+- currently in the queue
+- currently running (in which case, the CMD will be deleted)
+- finished successfully
+- finished via error termination
+
+It will run this check periodically, based on the time specified by the defaultStalk
+variable near the top of the program. Change this variable depending on how often
+you desire updates on your jobs.
+
+*************************************************************************************
+
+Planned features:
+- checkpoint flag for file generation
+- re-implement gimmeCubes by flag (with added fchk functionality)
+- install flag to auto-install any dependencies
+- re-optimization flag for re-running the exact same job with the final coordinates
+    of the failed job
+
+Desired features (will likely require collaboration with other lab mates):
+- inclusion of mixed basis-set handling for genSP and genBench
+- inclusion of PES generation (Thomas Tugwell)
+- continued incorporation of other functions we handle by one-off scripts
+
+=====================================================================================
+
++===================================================================================+
+|                                                                                   |
+|      _____         _           _           _      ____       _        _ _         |
+|     |_   _|__  ___| |__  _ __ (_) ___ __ _| |    |  _ \  ___| |_ __ _(_) |___     |
+|       | |/ _ \/ __| '_ \| '_ \| |/ __/ _` | |    | | | |/ _ \ __/ _` | | / __|    |
+|       | |  __/ (__| | | | | | | | (_| (_| | |    | |_| |  __/ || (_| | | \__ \    |
+|       |_|\___|\___|_| |_|_| |_|_|\___\__,_|_|    |____/ \___|\__\__,_|_|_|___/    |
+|                                                                                   |
+|                                                                                   |
++===================================================================================+
+
+CompUtils was built by a novice programmer with the intention of simplifying a job
+that many people create may single-function scripts to do. As such, there are bound
+to be inefficiencies in the code that could be improved upon. In this section, some
+of the design philosophy and decisions are described. Ultimately, however, compUtils
+was written in an attempt to be as user-readable as possible, so modifications should
+be convenient enough to make.
+
+For functions that act upon files, they can accept either a single filename or a
+wildcard to grab all files in the current working directory. In order to ensure the
+program works from the /bin/, compUtils will make sure it accesses the absolute paths
+of every file it is handed or creates. Since it can accept a list of files, every
+function by default will iterate through the entire list of files passed into it.
+
+Much of the code is a translated carry-over from other in-house scripts within the
+group that work fine but are tedious to modify due to their lack of documentation
+and nondescriptive variable names. This means that many functions operate at a fairly
+high level of efficiency (or, at least, as efficient as the group is used to).
+
+The exception to this is getCoords, a translation of pg2xyz from PERL -> Python. This
+function was the bane of my existence to re-code, and I'm still not entirely sure
+exactly how the original works. In its newest implementation, it reads the output
+backwards to find the final instance of the coordinates (as these are updated at
+every optimization step) to write them to an XYZ file. This XYZ file is then read and
+used for the generation of every new input (genSP and/or genBench). The getCoords
+function is clearly the slowest in the utility due to its implementation, and hence
+why the decision was made to minimize the number of times it is called (only once for
+any file handed into the program). As-is, I am entirely at a loss for how to code a
+faster implementation of this function, but it does its job fine for what is needed.
+
+
+(PERL command to invert text file??)
+(Use grep to find the pointer faster than reverse reading??)
+(Make it executable?)
