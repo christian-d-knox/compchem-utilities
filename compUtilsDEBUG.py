@@ -421,7 +421,7 @@ def runJob(fileList, isStalking):
             if firstSubLine == '%maxcore':
                 ramTemp = int(subLine[1])
                 print(str(ramTemp) + " MB")
-                ramConvert = int(ramTemp / 1000 * 6)
+                ramConvert = int(ramTemp / 1000 * cpus)
                 print(str(ramConvert) + " GB")
                 jobRam = int(ramConvert + 2)
                 print("Successfully read memory and will submit with " + str(ramConvert) + " + 2 GB")
