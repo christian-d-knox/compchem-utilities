@@ -285,7 +285,6 @@ def runJob(fileList):
     for x in range(len(fileList)):
         # The following is more or less copied directly from my modified qg16
         # Sets up all the basic filenames for the rest of submission
-        print(fileList[x])
         baseName, extension = os.path.splitext(fileList[x])
         baseName = os.path.basename(baseName)
         outputName = baseName + ".out"
@@ -315,7 +314,7 @@ def runJob(fileList):
         # Gaussian16 submission
         if firstSubLine == '%nprocshared'or firstSubLine =='%nproc':
             cpus = int(subLine[1])
-            print("Successfully read " + str(cpus) + " cores from " + fileList[x])
+            print("Successfully read " + str(cpus) + " cores from " + baseName + ".gjf")
 
             # Looks for memory in input file
             currentLine = inputFile.readline()
@@ -364,7 +363,7 @@ def runJob(fileList):
         # ORCA submission
         if firstSubLine == '%pal':
             cpus = int(subLine[2])
-            print("Successfully read " + str(cpus) + " cores from " + fileList[x])
+            print("Successfully read " + str(cpus) + " cores from " + baseName + ".inp")
 
             # Looks for memory in ORCA file
             currentLine = inputFile.readline()
@@ -376,7 +375,7 @@ def runJob(fileList):
             if firstSubLine == '%maxcore':
                 ramTemp = int(subLine[1])
                 print(str(ramTemp) + " MB")
-                ramConvert = int(ramTemp / 1000 * 6)
+                ramConvert = int(ramTemp / 1000 * cpus)
                 print(str(ramConvert) + " GB")
                 jobRam = int(ramConvert + 2)
                 print("Successfully read memory and will submit with " + str(ramConvert) + " + 2 GB")
