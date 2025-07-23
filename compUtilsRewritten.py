@@ -12,7 +12,10 @@ import glob
 binDirectory = "/ihome/pliu/cdk67/bin/"
 defaultCPU = 12
 defaultWallTime = "24"
+defaultMemoryRatio = 2
+defaultDLPNORatio = 6
 # Change partition to pliu for SMP if preferred
+defaultCluster = "smp"
 defaultPartition = "smp"
 defaultSinglePointExtra = "_SP"
 coordExtension = ".xyz"
@@ -199,7 +202,7 @@ def genFile(inputFile, coordFile, methodLine, charge, multiplicity):
             with open(coordFile, 'r') as jobCoords, open(outputFullPath, 'w') as jobInput:
                 # Sets the job's CPU and RAM
                 jobCPU = str(defaultCPU)
-                jobMem = str(defaultCPU * 2)
+                jobMem = str(defaultCPU * defaultMemoryRatio)
                 # Writes the standard Gaussian16 formatted opening
                 jobInput.write("%nprocshared=" + jobCPU)
                 jobInput.write("\n%mem=" + jobMem +"GB")
@@ -223,7 +226,10 @@ def genFile(inputFile, coordFile, methodLine, charge, multiplicity):
             with open(outputFullPath, 'w') as jobInput:
                 # Sets the job's CPU and RAM
                 jobCPU = str(defaultCPU)
-                jobMem = str(6000)
+                if methodLine == "DLPNO-CCSD(T)":
+                    jobMem = str(defaultCPU * defaultDLPNORatio * 1000)
+                else:
+                    jobMem = str(defaultCPU * defaultMemoryRatio * 1000)
                 # Writes the standard ORCA formatted opening
                 jobInput.write("%pal nprocs " + jobCPU)
                 jobInput.write("\nend")
@@ -337,6 +343,7 @@ def runJob(fileList):
         # Sets up all the basic filenames for the rest of submission
         baseName, extension = os.path.splitext(fileList[x])
         baseName = os.path.basename(baseName)
+        extension = extension.strip().split(".")[-1]
         outputName = baseName + ".out"
         queueName = baseName + ".cmd"
 
@@ -346,6 +353,7 @@ def runJob(fileList):
         #while True:
         # Reads the first line of the file
         currentLine = inputFile.readline()
+        currentLine = currentLine.strip()
 
         # Craps out if the first link doesn't exist, or is entirely blank
         if not currentLine:
@@ -355,122 +363,196 @@ def runJob(fileList):
             print("Yo this line's BLANK, dawg.")
             break
 
-        # This chunk analyzes the first line of the input to help determine what gets submitted where
-        # Analysis is ENTIRELY BASED on the first line, PLEASE specify the cores accordingly
-        currentLine = currentLine.strip()
-        subLine = currentLine.split('=')
-        firstSubLine = subLine[0].lower()
+        ## This chunk analyzes the first line of the input to help determine what gets submitted where
+        ## Analysis is ENTIRELY BASED on the first line, PLEASE specify the cores accordingly
+        #currentLine = currentLine.strip()
+        #subLine = currentLine.split('=')
+        #firstSubLine = subLine[0].lower()
 
-        # Gaussian16 submission
-        if firstSubLine == '%nprocshared'or firstSubLine =='%nproc':
-            cpus = int(subLine[1])
-            print("Successfully read " + str(cpus) + " cores from " + baseName + ".gjf")
+        match extension:
+            case "gjf":
+                subLine = currentLine.split('=')
+                firstSubLine = subLine[0].lower()
+                if firstSubLine == '%nprocshared'or firstSubLine =='%nproc':
+                    cpus = int(subLine[1])
+                    print("Successfully read " + str(cpus) + " cores from " + baseName + ".gjf")
 
-            # Looks for memory in input file
-            currentLine = inputFile.readline()
-            currentLine = currentLine.strip()
-            subLine = currentLine.split('=')
-            firstSubLine = subLine[0].lower()
-            if firstSubLine == '%mem':
-                ram = int(subLine[1].replace("GB", ""))
-                jobRam = ram + 2
-                print("Successfully read memory and will submit with " + str(ram) + " + 2 GB")
-            # Sets the job to run with a default amount of RAM. Does not update the input because neither of us could be bothered to care.
-            else:
-                ram = cpus * 2
-                jobRam = ram + 2
-                print("Couldn't find RAM amount and will submit with " + str(ram) + " + 2 GB instead")
-            inputFile.close()
+                    # Looks for memory in input file
+                    currentLine = inputFile.readline()
+                    currentLine = currentLine.strip()
+                    subLine = currentLine.split('=')
+                    firstSubLine = subLine[0].lower()
+                    if firstSubLine == '%mem':
+                        ram = int(subLine[1].replace("GB", ""))
+                        jobRam = ram + 2
+                        print("Successfully read memory and will submit with " + str(ram) + " + 2 GB")
+                    # Sets the job to run with a default amount of RAM. Does not update the input because neither of us could be bothered to care.
+                    else:
+                        ram = cpus * defaultMemoryRatio
+                        jobRam = ram + 2
+                        print("Couldn't find RAM amount and will submit with " + str(ram) + " + 2 GB instead")
+                else:
+                    cpus = defaultCPU
+                    ram = cpus * defaultMemoryRatio
+                    jobRam = ram + 2
 
-            # Writes the CMD for submission
-            outputFile.write("#!/usr/bin/env bash\n")
-            outputFile.write("#SBATCH --job-name=" + str(baseName) + "\n")
-            outputFile.write("#SBATCH --output=" + outputName + "\n")
-            outputFile.write("#SBATCH --ntasks-per-node=" + str(cpus) + "\n")
-            outputFile.write("#SBATCH --mem=" + str(jobRam) + "GB\n")
-            outputFile.write("#SBATCH --time=" + str(defaultWallTime) + ":00:00\n")
-            outputFile.write("#SBATCH --cluster=smp\n")
-            outputFile.write("#SBATCH --partition=" + defaultPartition + "\n")
-            outputFile.write("#SBATCH --nodes=1\n")
+                inputFile.close()
 
-            outputFile.write("\n")
-            outputFile.write("module purge\n")
-            outputFile.write("module load gaussian\n")
-            outputFile.write("\n")
-            outputFile.write("export GAUSS_SCRDIR=$SLURM_SCRATCH\n")
-            outputFile.write("ulimit -s unlimited\n")
-            outputFile.write("export LC_COLLATE=C\n")
-            outputFile.write("\n")
-            outputFile.write("g16 < " + fileList[x] + "\n")
-            outputFile.write("\n")
-            outputFile.close()
+                # Writes the CMD for submission
+                outputFile.write("#!/usr/bin/env bash\n")
+                outputFile.write("#SBATCH --job-name=" + str(baseName) + "\n")
+                outputFile.write("#SBATCH --output=" + outputName + "\n")
+                outputFile.write("#SBATCH --ntasks-per-node=" + str(cpus) + "\n")
+                outputFile.write("#SBATCH --mem=" + str(jobRam) + "GB\n")
+                outputFile.write("#SBATCH --time=" + str(defaultWallTime) + ":00:00\n")
+                outputFile.write("#SBATCH --cluster=" + defaultCluster + "\n")
+                outputFile.write("#SBATCH --partition=" + defaultPartition + "\n")
+                outputFile.write("#SBATCH --nodes=1\n")
 
-            os.system("sbatch " + queueName)
+                outputFile.write("\n")
+                outputFile.write("module purge\n")
+                outputFile.write("module load gaussian\n")
+                outputFile.write("\n")
+                outputFile.write("export GAUSS_SCRDIR=$SLURM_SCRATCH\n")
+                outputFile.write("ulimit -s unlimited\n")
+                outputFile.write("export LC_COLLATE=C\n")
+                outputFile.write("\n")
+                outputFile.write("g16 < " + fileList[x] + "\n")
+                outputFile.write("\n")
+                outputFile.close()
 
-        # Checks for ORCA-type submission
-        subLine = currentLine.split()
-        firstSubLine = subLine[0].lower()
-        # ORCA submission
-        if firstSubLine == '%pal':
-            cpus = int(subLine[2])
-            print("Successfully read " + str(cpus) + " cores from " + baseName + ".inp")
+                os.system("sbatch " + queueName)
 
-            # Looks for memory in ORCA file
-            currentLine = inputFile.readline()
-            # Due to input re-writing, need to read the *third* line instead of the second
-            currentLine = inputFile.readline()
-            currentLine = currentLine.strip()
-            subLine = currentLine.split()
-            firstSubLine = subLine[0].lower()
-            if firstSubLine == '%maxcore':
-                ramTemp = int(subLine[1])
-                print(str(ramTemp) + " MB")
-                ramConvert = int(ramTemp / 1000 * cpus)
-                print(str(ramConvert) + " GB")
-                jobRam = int(ramConvert + 2)
-                print("Successfully read memory and will submit with " + str(ramConvert) + " + 2 GB")
-            # Sets the RAM to a default amount
-            else:
-                ram = cpus * 6
-                jobRam = int(ram + 2)
-                print("Couldn't find RAM amount and will submit with " + str(ram) + " + 2 GB instead")
+            case "inp":
+                subLine = currentLine.split()
+                firstSubLine = subLine[0].lower()
+                # ORCA submission
+                if firstSubLine == '%pal':
+                    cpus = int(subLine[2])
+                    print("Successfully read " + str(cpus) + " cores from " + baseName + ".inp")
 
-            inputFile.close()
+                    # Looks for memory in ORCA file
+                    currentLine = inputFile.readline()
+                    # Due to input re-writing, need to read the *third* line instead of the second
+                    currentLine = inputFile.readline()
+                    currentLine = currentLine.strip()
+                    subLine = currentLine.split()
+                    firstSubLine = subLine[0].lower()
+                    if firstSubLine == '%maxcore':
+                        ramTemp = int(subLine[1])
+                        print(str(ramTemp) + " MB")
+                        ramConvert = int(ramTemp / 1000 * cpus)
+                        print(str(ramConvert) + " GB")
+                        jobRam = int(ramConvert + 2)
+                        print("Successfully read memory and will submit with " + str(ramConvert) + " + 2 GB")
+                    # Sets the RAM to a default amount
+                    else:
+                        ram = cpus * 6
+                        jobRam = int(ram + 2)
+                        print("Couldn't find RAM amount and will submit with " + str(ram) + " + 2 GB instead")
+                else:
+                    cpus = defaultCPU
+                    ram = cpus * defaultMemoryRatio
+                    jobRam = ram + 2
 
-            # Writes the CMD for job submission
-            outputFile.write("#!/bin/bash\n")
-            outputFile.write("#SBATCH --job-name=" + str(baseName) + "\n")
-            outputFile.write("#SBATCH --output=" + outputName + "\n")
-            outputFile.write("#SBATCH --nodes=1\n")
-            outputFile.write("#SBATCH --mem=" + str(jobRam) + "GB\n")
-            outputFile.write("#SBATCH --ntasks-per-node=" + str(cpus) + "\n")
-            outputFile.write("#SBATCH --time=" + str(defaultWallTime) + ":00:00\n")
-            outputFile.write("#SBATCH --cluster=smp\n")
-            outputFile.write("#SBATCH --partition=" + defaultPartition + "\n")
+                inputFile.close()
 
-            outputFile.write("\n")
-            outputFile.write("# Load the module\n")
-            outputFile.write("module purge\n")
-            # New!! Now runs in ORCA 6.0.0 instead of 4.2.0 .
-            outputFile.write("module load gcc/10.2.0 gcc/4.8.5 openmpi/4.1.1 orca/6.0.0\n")
-            outputFile.write("\n")
-            outputFile.write("# Copy files to SLURM_SCRATCH\n")
-            outputFile.write("files=(" + str(baseName+".inp") + ")\n")
-            outputFile.write("for i in ${files[@]}; do\n")
-            outputFile.write("    cp $SLURM_SUBMIT_DIR/$i $SLURM_SCRATCH/$i\n")
-            outputFile.write("done\n")
-            outputFile.write("\n")
-            outputFile.write("# cd to the SCRATCH space\n")
-            outputFile.write("cd $SLURM_SCRATCH\n")
-            outputFile.write("\n")
-            outputFile.write("# run the job, $(which orca) is necessary\n")
-            outputFile.write("$(which orca) " + str(baseName+".inp") + "\n")
-            outputFile.write("\n")
-            outputFile.write("# finally, copy back gbw and prop files\n")
-            outputFile.write("cp $SLURM_SCRATCH/*.{gbw,prop} $SLURM_SUBMIT_DIR\n")
-            outputFile.write("\n")
-            outputFile.close()
+                # Writes the CMD for job submission
+                outputFile.write("#!/bin/bash\n")
+                outputFile.write("#SBATCH --job-name=" + str(baseName) + "\n")
+                outputFile.write("#SBATCH --output=" + outputName + "\n")
+                outputFile.write("#SBATCH --nodes=1\n")
+                outputFile.write("#SBATCH --mem=" + str(jobRam) + "GB\n")
+                outputFile.write("#SBATCH --ntasks-per-node=" + str(cpus) + "\n")
+                outputFile.write("#SBATCH --time=" + str(defaultWallTime) + ":00:00\n")
+                outputFile.write("#SBATCH --cluster=" + defaultCluster + "\n")
+                outputFile.write("#SBATCH --partition=" + defaultPartition + "\n")
 
-            os.system("sbatch " + queueName)
+                outputFile.write("\n")
+                outputFile.write("# Load the module\n")
+                outputFile.write("module purge\n")
+                # New!! Now runs in ORCA 6.0.0 instead of 4.2.0 .
+                outputFile.write("module load gcc/10.2.0 gcc/4.8.5 openmpi/4.1.1 orca/6.0.0\n")
+                outputFile.write("\n")
+                outputFile.write("# Copy files to SLURM_SCRATCH\n")
+                outputFile.write("files=(" + str(baseName+".inp") + ")\n")
+                outputFile.write("for i in ${files[@]}; do\n")
+                outputFile.write("    cp $SLURM_SUBMIT_DIR/$i $SLURM_SCRATCH/$i\n")
+                outputFile.write("done\n")
+                outputFile.write("\n")
+                outputFile.write("# cd to the SCRATCH space\n")
+                outputFile.write("cd $SLURM_SCRATCH\n")
+                outputFile.write("\n")
+                outputFile.write("# run the job, $(which orca) is necessary\n")
+                outputFile.write("$(which orca) " + str(baseName+".inp") + "\n")
+                outputFile.write("\n")
+                outputFile.write("# finally, copy back gbw and prop files\n")
+                outputFile.write("cp $SLURM_SCRATCH/*.{gbw,prop} $SLURM_SUBMIT_DIR\n")
+                outputFile.write("\n")
+                outputFile.close()
+
+                os.system("sbatch " + queueName)
+
+            case "in":
+                subLine = currentLine.split('=')
+                firstSubLine = subLine[0].lower()
+                if firstSubLine == '%mem':
+                    ram = int(subLine[1].replace("GB", ""))
+                    jobRam = ram + 2
+                    print("Successfully read memory and will submit with " + str(ram) + " + 2 GB")
+
+                    currentLine = inputFile.readline().strip()
+                    subLine = currentLine.split('=')
+                    firstSubLine = subLine[0].lower()
+                    if firstSubLine == '%nprocshared' or firstSubLine == '%nproc':
+                        cpus = int(subLine[1])
+                        print("Successfully read " + str(cpus) + " cores from " + baseName + ".in")
+                        # Sets the job to run with a default amount of RAM. Does not update the input because neither of us could be bothered to care.
+                else:
+                    cpus = defaultCPU
+                    ram = cpus * defaultMemoryRatio
+                    jobRam = ram + 2
+                    print("Couldn't find RAM amount and will submit with " + str(ram) + " + 2 GB instead")
+                inputFile.close()
+
+                # Writes queueFile for submission to the cluster
+                outputFile.write("#!/usr/bin/env bash\n")
+                outputFile.write("#SBATCH --job-name=" + baseName + "\n")
+                outputFile.write("#SBATCH --output=" + outputName + "\n")
+                outputFile.write("#SBATCH --ntasks-per-node=" + str(cpus) + "\n")
+                outputFile.write("#SBATCH --mem=" + str(jobRam) + "\n")
+                outputFile.write("#SBATCH --time=" + str(defaultWallTime) + ":00:00\n")
+                outputFile.write("#SBATCH --cluster=" + defaultCluster + "\n")
+                outputFile.write("#SBATCH --partition=" + defaultPartition + "\n")
+                outputFile.write("#SBATCH --nodes=1\n")
+
+                outputFile.write("\n")
+                outputFile.write("module purge\n")
+                outputFile.write("module load qchem/6.3.0-pliu\n")
+                outputFile.write("\n")
+                # This crap was in the original and I have no clue if it's still necessary
+                # output.write("export QCSCRATCH=$LOCAL\n")
+                # output.write("export QC=/ihome/pliu/xiq23/qchem/qchem_for_peng_20151014\n")
+                # output.write("export PATH=$PATH:$QC/bin\n")
+                # output.write("export QCAUX=/ihome/pliu/xiq23/qchem/qcaux4\n")
+                outputFile.write("\n")
+                outputFile.write("# Change to working directory\n")
+                outputFile.write("cp $SLURM_SUBMIT_DIR/" + fileList[x] + " $SLURM_SCRATCH\n")
+                outputFile.write("cd $SLURM_SCRATCH\n")
+                outputFile.write("\n")
+                # No clue what this line is and if it's needed, it's not in the Q-Chem documentation
+                outputFile.write("df -h\n")
+
+                # Re-wrote the script in order to make this line *actually* match the Q-Chem documentation
+                # Re-wrote to allow nthreads to match ncpu since each thread only runs on 1 CPU (see Q-Chem manual)
+                # Do NOT specify outfile, it LITERALLY breaks shit for some reason
+                outputFile.write("qchem -slurm -nt " + str(cpus) + " " + fileList[x] + " " + "\n")
+                outputFile.write("du -h\n")
+                outputFile.write("\n")
+                outputFile.close()
+
+                os.system("sbatch " + queueName)
+                # os.system("rm -f "+queuefile)
+
 
 commandLineParser()
