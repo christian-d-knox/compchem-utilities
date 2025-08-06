@@ -10,6 +10,9 @@ import glob
 import time
 import subprocess
 from termcolor import cprint
+import numpy
+import pandas
+
 
 # Set your defaults HERE
 binDirectory = "/ihome/pliu/cdk67/bin/"
@@ -30,6 +33,12 @@ defaultMethodNames = ["B3LYP","M062X","M06","M06L","B2PLYP","wB97XD","DLPNO-CCSD
 defaultTargetProgram = ["G16","G16","G16","G16","G16","G16","O"]
 defaultMethod = "M062X"
 defaultMethodLine = "M062X 6-311+G(d,p)"
+defaultPotCube = "Pot"
+defaultDenCube = "Den"
+defaultValenceCube = "Val"
+defaultSpinCube = "Spin"
+defaultCubeExtension = ".cube"
+defaultQueueExtension = ".cmd"
 
 # Defines global variables for use in various functions
 fileNames = []
@@ -63,6 +72,7 @@ if os.path.isfile(os.path.join(binDirectory, "programs.txt")):
         methodList = methodNames
 else:
     isCustomTarget = False
+    # noinspection PyRedeclaration
     methodList = defaultMethodNames
     targetProgram = defaultTargetProgram
     cprint("Notice: Could not find programs.txt in ~/bin/.", "light_red")
@@ -76,8 +86,9 @@ def commandLineParser():
     parser.add_argument('-r', '--run', type=str, help="Indicates the 'run' subroutine for the listed file(s)")
     parser.add_argument('-sp', '--singlePoint', type=str, help="Indicates the 'single point' subroutine for the listed file(s)")
     parser.add_argument('-b', '--bench', type=str, help="Indicates the 'benchmark' subroutine, for creating a single point becnhmark on the listed file(s)")
-    parser.add_argument('-c', '--checkpoint', action='store_true', help="Enables checkpoint functionality for the 'run' routine")
+    parser.add_argument('-ch', '--checkpoint', action='store_true', help="Enables checkpoint functionality for the 'run' routine")
     parser.add_argument('-t','--test',type=str,help="Activates whatever function I'm trying to test.")
+    parser.add_argument('-cu','--cube',type=str,help="Indicates the gimmeCubes functionality on a given Gaussian16 checkpoint file.")
 
     # Figures out what the hell you told it to do
     args = parser.parse_args()
@@ -105,6 +116,13 @@ def commandLineParser():
             outputFileName = fileCreation(grabPaths(fileName),coordExtension,"")
             coordinateScraper(fileName,outputFileName)
 
+    if args.cube:
+        cubeList = str(input("Enter the list of options you want for cube files generated, separated by spaces (e.g. Pot Den Val Spin): "))
+        fileNames = glob.glob(args.cube)
+        # This splits the entered keylist into separate keys, passed into gimmeCubes as an array which can be iterated through
+        cubeOptions = cubeList.split(" ")
+        for fileName in fileNames:
+            gimmeCubes(fileName,cubeOptions)
 
 # NEW!! Finally handle filename creation in one place to stop the infinite copypasta
 def fileCreation(baseFile,extensionType,extra):
@@ -131,6 +149,7 @@ def coordinateScraper(fileName, outputFileName):
     cprint("Time taken to scrape coordinates by PERL script is " + str(coordinateScrapeTime) + " seconds.", "light_cyan")
 
 # NEW!! Handles extensions so I don't have to copypasta this
+# noinspection PyShadowingNames
 def extensionGetter(method):
     programTarget = ""
     for x in range(len(methodList)):
@@ -476,5 +495,45 @@ def runJob(fileList):
                     os.system("sbatch " + queueName)
                     os.remove(queueName)
                     cprint(f"Submitted job " + baseName + " to Q-Chem 6.3", "light_green")
+
+def gimmeCubes(checkFile,cubeKeyList):
+    baseName, extension = os.path.splitext(fileList[x])
+    baseName = os.path.basename(baseName)
+    for cubeKey in cubeKeyList:
+        match cubeKey:
+            case defaultSpinCube:
+                outputName = fileCreation(checkFile,defaultCubeExtension,cubeKey)
+                queueName = fileCreation(checkFile,defaultQueueExtension,cubeKey)
+            case defaultDenCube:
+                outputName = fileCreation(checkFile,defaultDenCubeExtension,cubeKey)
+                queueName = fileCreation(checkFile,defaultQueueExtension,cubeKey)
+            case defaultPotCube:
+                outputName = fileCreation(checkFile,defaultCubeExtension,cubeKey)
+                queueName = fileCreation(checkFile,defaultQueueExtension,cubeKey)
+            case defaultValenceCube:
+                outputName = fileCreation(checkFile,defaultValenceCubeExtension,cubeKey)
+                queueName = fileCreation(checkFile,defaultQueueExtension,cubeKey)
+            case _:
+                cprint("Error: Unknown keyword found in keylist for " + baseName + " : " + cubeKey, "light_red")
+        with open(queueName,"w") as queueFile:
+            # Generic crap from regular qg16
+            queueFile.write("#!/usr/bin/env bash\n")
+            queueFile.write("#SBATCH --job-name=" + str(baseName) + "\n")
+            queueFile.write("#SBATCH --output=" + outputDenName + "\n")
+            queueFile.write("#SBATCH --ntasks-per-node=12" + "\n")
+            queueFile.write("#SBATCH --mem=" + mem + "\n")
+            queueFile.write("#SBATCH --time=" + str(walltime) + ":00:00\n")
+            queueFile.write("#SBATCH --cluster=smp\n")
+            queueFile.write("#SBATCH --partition=smp\n")
+            queueFile.write("#SBATCH --nodes=1\n\n")
+            queueFile.write("module purge\n")
+            queueFile.write("module load gaussian/16-C.01\n\n")
+            queueFile.write("export GAUSS_SCRDIR=$SLURM_SCRATCH\n")
+            queueFile.write("ulimit -s unlimited\n")
+            queueFile.write("export LC_COLLATE=C\n\n")
+
+            # Writes the specifics for running the Density Cube
+            queueFile.write("cubegen 1 density=scf " + filename + " " + outputDenName + " 0""\n")
+            queueFile.write("\n")
 
 commandLineParser()
