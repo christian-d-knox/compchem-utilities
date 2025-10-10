@@ -12,8 +12,6 @@ import glob
 import time
 import subprocess
 from termcolor import cprint
-#import numpy
-#import pandas
 import re
 from contextlib import closing
 from mmap import mmap, ACCESS_READ
@@ -25,6 +23,7 @@ class Defaults:
     CPU = 12
     memoryRatio = 2
     highMemoryRatio = 6
+    memoryBuffer = 2
     wallTime = "24"
     cluster = "smp"
     partition = "pliu"
@@ -47,15 +46,16 @@ class Defaults:
     denCube = "Den"
     valenceCube = "Val"
     spinCube = "Spin"
+    # Job Stalking related
     stalkDuration = 120
     stalkFrequency = 5
+    terminationVariants = ["normal termination", "terminated normally", "error termination"]
+    # Copypasta reduction
     gaussianNonVariant = ["#SBATCH --nodes=1\n","\nmodule purge\nmodule load gaussian\n\n","export GAUSS_SCRDIR=$SLURM_SCRATCH\nulimit -s unlimited\nexport LC_COLLATE=C\n"]
     orcaNonVariant = ["\n# Load the module\nmodule purge\n","module load orca/6.0.1\n\n","# Copy files to SLURM_SCRATCH\n","for i in ${files[@]}; do\n","    cp $SLURM_SUBMIT_DIR/$i $SLURM_SCRATCH/$i\ndone\n\n","# cd to the SCRATCH space\n","cd $SLURM_SCRATCH\n\n","# run the job, $(which orca) is necessary\n","# finally, copy back gbw and prop files\n","cp $SLURM_SCRATCH/*.{gbw,prop} $SLURM_SUBMIT_DIR\n\n"]
     qChemNonVariant = []
     coreLineVariants = ["%nproc","%nprocshared","%pal"]
     ramLineVariants = ["%mem","%maxcore"]
-    terminationVariants = ["normal termination","terminated normally","error termination"]
-    memoryBuffer = 2
 
 # Defines global variables for use in various functions
 fileNames = []
@@ -125,7 +125,6 @@ def commandLineParser():
     args = parser.parse_args()
 
     global isStalking
-    global stalkingSet
 
     # Stalking flag first
     if args.stalk:
@@ -139,8 +138,6 @@ def commandLineParser():
             baseName, extension = grabPaths(job)
             newMolecule = Molecule(job, baseName, 0, 0, 0, extension)
             runJob(newMolecule)
-        if isStalking:
-            jobStalking(stalkingSet, Defaults.stalkDuration, Defaults.stalkFrequency)
 
     if args.singlePoint:
         # Compiles the entire list of files to run
@@ -164,9 +161,6 @@ def commandLineParser():
 
         else:
             cprint("Notice: Benchmarking is unavailable without requisite file. Please create your own or download the template from GitHub.", "light_red")
-
-    if args.test:
-        pass
 
     if args.cube:
         cubeList = str(input("Enter the list of options you want for cube files generated, separated by spaces (e.g. Pot Den Val Spin): "))
@@ -604,3 +598,6 @@ def jobStalking(jobSet, duration, frequency):
         cprint("Consider editing the default stalk duration and frequency if your jobs regularly timeout.","light_red")
 
 commandLineParser()
+
+if isStalking:
+    jobStalking(stalkingSet, Defaults.stalkDuration, Defaults.stalkFrequency)
