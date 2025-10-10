@@ -63,6 +63,8 @@ instead of if / elif / else chains (speed improvement)
 - Created installer file to automatically install package dependencies
  - Also creates aliases for proper python module and for CompUtils itself,
  immediately sources alias file for user convenience
+- Re-wrote job CPU and RAM finder to be order-independent in the first 5 lines
+- Implemented a working version of Job Stalking
 
 *************************************************************************************
 
@@ -88,20 +90,19 @@ accepted by escaping the wildcard in the terminal, as shown in the example below
 The run function distinguishes between Gaussian16, ORCA, and QChem jobs based on
 their respective file extensions. These defaults can be changed within CompUtils.
 CPU and RAM determinations, however are based off of the first few lines, and as such
-they must be formatted in a very specific way.
+they must be formatted in a specific way. The first five lines of the input file must
+contain the CPU and RAM information. 
 
-For Gaussian16 jobs, the first two lines must be CPUs and RAM, in that order. Two
-different CPU structures are accepted:
+For Gaussian16 jobs, two different CPU structures are accepted:
 %nprocshared=12           OR          %nproc=12
 %mem=24GB                 OR          %mem=24GB
 
-For ORCA submissions, exactly one input formatting is accepted:
+For ORCA submissions, one CPU and RAM input configuration is accepted:
 %pal=12
 end
 %maxcore=6000
 
-For QChem submissions, RAM and CPUs must be specified in that order. Two
-configurations are accepted:
+For QChem submissions, two configurations are accepted:
 %mem=24GB                 OR          %mem=24GB
 %nprocshared=12           OR          %nproc=12
 
@@ -168,25 +169,40 @@ file in the directory, and copy it out if needed).
 
 -----------------------------------jobStalking flag----------------------------------
 
-An unfinished form of functionality, termed job stalking, is achieved by -s or
---stalk. It takes no inputs, instead setting a flag within the program to compile the
-list of jobs it submits to watch (in an improved measure from obsessiveQueue).
+Finally operational, an automatic queue checking function termed job stalking, is 
+achieved by -s or --stalk. It takes no inputs, instead setting a flag within the 
+program to compile the list of jobs it submits to watch (in an improved measure from 
+obsessiveQueue).
 
-jobStalk is intended to tell you the following about its compiled list of jobs:
+jobStalk informs you about the following properties of its compiled list of jobs:
 - currently in the queue
 - currently running (in which case, the CMD will be deleted)
 - finished successfully
 - finished via error termination
 
-It will run this check periodically, based on the time specified by the defaultStalk
-variable near the top of the program. Change this variable depending on how often
-you desire updates on your jobs.
+It will run this check periodically, based on the time specified by the frequency and
+duration defaults within the defaults section near the top of the program. Change 
+these variables depending on how often you desire updates on your jobs.
+
+jobStalking will automatically terminate when all jobs have terminated, or when its
+default duration has been exceeded.
+
+-----------------------------------gimmeCubes flag-----------------------------------
+
+Accessed via the -cu or --cube flag, gimmeCubes has been entirely improved from its
+standalone module. This flag requires the specification of a valid fchk file.
+
+gimmeCubes runs interactively with the user, allowing you to select the types of cube
+files to generate based on the defaults specified in the program. Currently supports:
+	Density 	via 	Den
+	Potential 	via 	Pot
+	Valence MO's 	via 	Val
+	Spin 		via 	Spin
 
 *************************************************************************************
 
 Planned features:
 - checkpoint flag for file generation
-- re-implement gimmeCubes by flag (with added fchk functionality)
 - re-optimization flag for re-running the exact same job with the final coordinates
     of the failed job
 
