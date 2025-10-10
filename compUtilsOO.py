@@ -125,7 +125,6 @@ def commandLineParser():
     args = parser.parse_args()
 
     global isStalking
-    global stalkingSet
 
     # Stalking flag first
     if args.stalk:
@@ -139,8 +138,6 @@ def commandLineParser():
             baseName, extension = grabPaths(job)
             newMolecule = Molecule(job, baseName, 0, 0, 0, extension)
             runJob(newMolecule)
-        if isStalking:
-            jobStalking(stalkingSet, Defaults.stalkDuration, Defaults.stalkFrequency)
 
     if args.singlePoint:
         # Compiles the entire list of files to run
@@ -604,3 +601,6 @@ def jobStalking(jobSet, duration, frequency):
         cprint("Consider editing the default stalk duration and frequency if your jobs regularly timeout.","light_red")
 
 commandLineParser()
+
+if isStalking:
+    jobStalking(stalkingSet, Defaults.stalkDuration, Defaults.stalkFrequency)
