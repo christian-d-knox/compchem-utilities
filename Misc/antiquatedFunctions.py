@@ -86,3 +86,21 @@ def getCoords(fileName, outputFileName):
         endTime = time.time()
         processLength = str(round(endTime - startTime, 2))
         cprint("Time taken to scrape coordinates by normal method is " + processLength + " seconds.", "light_cyan")
+
+
+# Finally PROPERLY executes the PERL script and pipes output into Python for post-processing
+def coordinateScraper(fileName, outputFileName):
+    startTime = time.time()
+    scrapedCoords = subprocess.run(['pg2xyz.sh',fileName], capture_output=True, text=True, check=True)
+    coordList = scrapedCoords.stdout
+    coordList = coordList.splitlines()
+    with open(outputFileName, 'w') as outputFile:
+        outputFile.write(str(len(coordList)) + "\nPointless Comment Line\n")
+        for index, line in enumerate(coordList):
+            modLine = line + "\n"
+            outputFile.write(modLine)
+            coordList[index] = modLine
+    endTime = time.time()
+    coordinateScrapeTime = round(endTime-startTime,2)
+    cprint("Time taken to scrape coordinates by PERL script is " + str(coordinateScrapeTime) + " seconds.", "light_cyan")
+    return coordList
