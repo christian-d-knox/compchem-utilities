@@ -41,6 +41,7 @@ class Defaults:
     # What runs where. Edit carefully (recommended to use programs.txt instead)
     methodNames = ["B3LYP","M062X","M06","M06L","B2PLYP","wB97XD","DLPNO-CCSD(T)","BLYP"]
     targetProgram = ["G16","G16","G16","G16","G16","G16","O","G16"]
+    mixedBasisVariants = ["Gen","GenECP","gen","genecp"]
     # Cube Keylists
     potCube = "Pot"
     denCube = "Den"
@@ -276,6 +277,7 @@ def genSinglePoint(molecule):
 
 # Separate method for input file generation to improve code efficiency. No longer returns anything as path to input is previously stored
 def genFile(molecule, index):
+    mixedBasis = False
     inputFile = molecule.fullPath
     coordFile = molecule.baseName + Defaults.coordExtension
     match molecule.extensionType:
@@ -292,10 +294,22 @@ def genFile(molecule, index):
                 jobInput.write(molecule.charge + " " + molecule.multiplicity + "\n")
                 # Iterates through the XYZ to scrape the coordinates (getCoords isn't efficient to call repeatedly,
                 # and this is actually *much* more useful)
+                for keyWord in fullMethodLine[index].split():
+                    if keyWord in Defaults.mixedBasisVariants:
+                        mixedBasis = True
+                        break
                 for line in molecule.coordinateList:
                     # Skips the atoms and blank line in the XYZ because that will break shit
                     if len(line.split()) > 3:
                         jobInput.write(line)
+                if os.path.isfile("mixedbasis.txt") and mixedBasis:
+                    jobInput.write("\n")
+                    with open("mixedbasis.txt") as mixedBasisFile:
+                        for line in mixedBasisFile:
+                            jobInput.write(line)
+                else:
+                    cprint("Mixed basis information not found. Aborting.","light_red")
+                    return
                 jobInput.write("\n\n")
 
         case Defaults.orcaExtension:
