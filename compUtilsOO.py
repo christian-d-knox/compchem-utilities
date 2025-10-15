@@ -15,6 +15,7 @@ from termcolor import cprint
 #import numpy
 #import pandas
 import re
+import regex
 from contextlib import closing
 from mmap import mmap, ACCESS_READ
 
@@ -48,7 +49,7 @@ class Defaults:
     valenceCube = "Val"
     spinCube = "Spin"
     stalkDuration = 120
-    stalkFrequency = 5
+    stalkFrequency = 0.25
     gaussianNonVariant = ["#SBATCH --nodes=1\n","\nmodule purge\nmodule load gaussian\n\n","export GAUSS_SCRDIR=$SLURM_SCRATCH\nulimit -s unlimited\nexport LC_COLLATE=C\n"]
     orcaNonVariant = ["\n# Load the module\nmodule purge\n","module load orca/6.0.1\n\n","# Copy files to SLURM_SCRATCH\n","for i in ${files[@]}; do\n","    cp $SLURM_SUBMIT_DIR/$i $SLURM_SCRATCH/$i\ndone\n\n","# cd to the SCRATCH space\n","cd $SLURM_SCRATCH\n\n","# run the job, $(which orca) is necessary\n","# finally, copy back gbw and prop files\n","cp $SLURM_SCRATCH/*.{gbw,prop} $SLURM_SUBMIT_DIR\n\n"]
     qChemNonVariant = []
@@ -566,13 +567,33 @@ def jobStalking(jobSet, duration, frequency):
                     cprint("Job " + str(result[index].split()[0]) + " is currently pending. Expected start time is " + str(result[index].split()[3]), "light_yellow")
                     stalkStatus.remove(result[index].split()[0])
                 case "RUNNING":
-                    cprint("Job " + str(result[index].split()[0]) + " is currently running. Current duration is " + str(result[index].split()[4]), "light_magenta")
-                    stalkStatus.remove(result[index].split()[0])
+                    for job in jobSet:
+                        convergeCriteria = "Unknown"
+                        if job[0] == result[index].split()[0]:
+                            if os.path.isfile(job[1]):
+                                with open(job[1],'r+') as file:
+                                    with closing(mmap(file.fileno(),0,access=ACCESS_READ)) as data:
+                                        tableHeader = "         Item               Value     Threshold  Converged?"
+                                        tableBytes = tableHeader.encode()
+                                        finalTableHeader = regex.search(tableBytes, data, regex.REVERSE)
+                                        if len(finalTableHeader.group().decode()) != 0:
+                                            convergeCriteria = 0
+                                            pointer = finalTableHeader.ends()
+                                            data.seek(pointer[0])
+                                            data.read(2)
+                                            convergeMet = []
+                                            for index in range(0,4):
+                                                convergeLine = data.readline().decode()
+                                                convergeMet.append(convergeLine.split()[4])
+                                                convergeCriteria = convergeMet.count("YES")
+                        cprint("Job " + str(result[index].split()[0]) + " is currently running, and has converged on " + str(convergeCriteria) + " out of 4 criteria. Current duration is " + str(result[index].split()[4]), "light_magenta")
+                        stalkStatus.remove(result[index].split()[0])
+                        break
 
         jobCopy = jobSet.copy()
 
         for job in jobCopy:
-            if job[0] in stalkStatus:
+            if job[0] in stalkStatus and os.path.isfile(job[1]):
                 with open(job[1], "r+") as file:
                     with closing(mmap(file.fileno(), 0, access=ACCESS_READ)) as data:
                         for termination in Defaults.terminationVariants:
