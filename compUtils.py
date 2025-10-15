@@ -619,25 +619,25 @@ def jobStalking(jobSet, duration, frequency):
                     stalkStatus.remove(result[index].split()[0])
                 case "RUNNING":
                     for job in jobSet:
-                        convergeCriteria = "Unknown"
-                        if job[0] == result[index].split()[0]:
-                            if os.path.isfile(job[1]):
-                                with open(job[1],'r+') as file:
-                                    with closing(mmap(file.fileno(),0,access=ACCESS_READ)) as data:
-                                        tableHeader = "         Item               Value     Threshold  Converged?"
-                                        tableBytes = tableHeader.encode()
-                                        finalTableHeader = regex.search(tableBytes, data, regex.REVERSE)
-                                        if len(finalTableHeader.group().decode()) != 0:
-                                            convergeCriteria = 0
-                                            pointer = finalTableHeader.ends()
-                                            data.seek(pointer[0])
-                                            data.read(2)
-                                            convergeMet = []
-                                            for index in range(0,4):
-                                                convergeLine = data.readline().decode()
-                                                convergeMet.append(convergeLine.split()[4])
-                                                convergeCriteria = convergeMet.count("YES")
-                        cprint("Job " + str(result[index].split()[0]) + " is currently running, and has converged on " + str(convergeCriteria) + " out of 4 criteria. Current duration is " + str(result[index].split()[4]), "light_magenta")
+                        #convergeCriteria = "Unknown"
+                        #if job[0] == result[index].split()[0]:
+                            #if os.path.isfile(job[1]):
+                                #with open(job[1],'r+') as file:
+                                    #with closing(mmap(file.fileno(),0,access=ACCESS_READ)) as data:
+                                        #tableHeader = "         Item               Value     Threshold  Converged?"
+                                        #tableBytes = tableHeader.encode()
+                                        #finalTableHeader = regex.search(tableBytes, data, regex.REVERSE)
+                                        #if len(finalTableHeader.group().decode()) != 0:
+                                            #convergeCriteria = 0
+                                            #pointer = finalTableHeader.ends()
+                                            #data.seek(pointer[0])
+                                            #data.read(2)
+                                            #convergeMet = []
+                                            #for index in range(0,4):
+                                                #convergeLine = data.readline().decode()
+                                                #convergeMet.append(convergeLine.split()[4])
+                                                #convergeCriteria = convergeMet.count("YES")
+                        cprint("Job " + str(result[index].split()[0]) + " is currently running. Current duration is " + str(result[index].split()[4]), "light_magenta")
                         stalkStatus.remove(result[index].split()[0])
                         break
 
