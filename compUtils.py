@@ -12,7 +12,9 @@ import glob
 import time
 import subprocess
 from termcolor import cprint
-import re
+#import numpy
+#import pandas
+import regex
 from contextlib import closing
 from mmap import mmap, ACCESS_READ
 
@@ -23,7 +25,6 @@ class Defaults:
     CPU = 12
     memoryRatio = 2
     highMemoryRatio = 6
-    memoryBuffer = 2
     wallTime = "24"
     cluster = "smp"
     partition = "pliu"
@@ -41,22 +42,21 @@ class Defaults:
     # What runs where. Edit carefully (recommended to use programs.txt instead)
     methodNames = ["B3LYP","M062X","M06","M06L","B2PLYP","wB97XD","DLPNO-CCSD(T)","BLYP"]
     targetProgram = ["G16","G16","G16","G16","G16","G16","O","G16"]
-    mixedBasisVariants = ["Gen","GenECP","gen","genecp"]
+    mixedBasisVariants = ["Gen", "GenECP", "gen", "genecp"]
     # Cube Keylists
     potCube = "Pot"
     denCube = "Den"
     valenceCube = "Val"
     spinCube = "Spin"
-    # Job Stalking related
     stalkDuration = 120
-    stalkFrequency = 5
-    terminationVariants = ["normal termination", "terminated normally", "error termination"]
-    # Copypasta reduction
+    stalkFrequency = 0.25
     gaussianNonVariant = ["#SBATCH --nodes=1\n","\nmodule purge\nmodule load gaussian\n\n","export GAUSS_SCRDIR=$SLURM_SCRATCH\nulimit -s unlimited\nexport LC_COLLATE=C\n"]
     orcaNonVariant = ["\n# Load the module\nmodule purge\n","module load orca/6.0.1\n\n","# Copy files to SLURM_SCRATCH\n","for i in ${files[@]}; do\n","    cp $SLURM_SUBMIT_DIR/$i $SLURM_SCRATCH/$i\ndone\n\n","# cd to the SCRATCH space\n","cd $SLURM_SCRATCH\n\n","# run the job, $(which orca) is necessary\n","# finally, copy back gbw and prop files\n","cp $SLURM_SCRATCH/*.{gbw,prop} $SLURM_SUBMIT_DIR\n\n"]
     qChemNonVariant = []
     coreLineVariants = ["%nproc","%nprocshared","%pal"]
     ramLineVariants = ["%mem","%maxcore"]
+    terminationVariants = ["normal termination","terminated normally","error termination"]
+    memoryBuffer = 2
 
 # Defines global variables for use in various functions
 fileNames = []
@@ -76,13 +76,14 @@ stalkingSet = set()
 
 # NEW!! Attempting to keep track of everything related to a job in one central location
 class Molecule:
-    def __init__(self, fullPath, baseName, charge, multiplicity, coordinateList, extensionType):
+    def __init__(self, fullPath, baseName, charge, multiplicity, coordinateList, extensionType, rootName):
         self.fullPath = fullPath
         self.baseName = baseName
         self.charge = charge
         self.multiplicity = multiplicity
         self.coordinateList = coordinateList
         self.extensionType = extensionType
+        self.rootName = rootName
 
 # Actually perform some operations globally for more code efficiency
 if os.path.isfile(os.path.join(Defaults.binDirectory, "benchmarking.txt")):
@@ -137,7 +138,7 @@ def commandLineParser():
         jobList = glob.glob(args.run)
         for job in jobList:
             baseName, extension = grabPaths(job)
-            newMolecule = Molecule(job, baseName, 0, 0, 0, extension)
+            newMolecule = Molecule(job, baseName, 0, 0, 0, extension, baseName)
             runJob(newMolecule)
 
     if args.singlePoint:
@@ -146,8 +147,8 @@ def commandLineParser():
         for job in jobList:
             baseName, extension = grabPaths(job)
             charge, multiplicity = gaussianChargeFinder(job)
-            coordList = coordinateScraper(job,baseName + Defaults.coordExtension)
-            newMolecule = Molecule(job, baseName, charge, multiplicity, coordList, extension)
+            coordList = getCoords(job,baseName + Defaults.coordExtension)
+            newMolecule = Molecule(job, baseName, charge, multiplicity, coordList, extension, baseName)
             genSinglePoint(newMolecule)
 
     if args.bench:
@@ -156,12 +157,15 @@ def commandLineParser():
             for job in jobList:
                 baseName, extension = grabPaths(job)
                 charge, multiplicity = gaussianChargeFinder(job)
-                coordList = coordinateScraper(job,baseName + Defaults.coordExtension)
-                newMolecule = Molecule(job, baseName, charge, multiplicity, coordList, extension)
+                coordList = getCoords(job,baseName + Defaults.coordExtension)
+                newMolecule = Molecule(job, baseName, charge, multiplicity, coordList, extension, baseName)
                 genBench(newMolecule)
 
         else:
             cprint("Notice: Benchmarking is unavailable without requisite file. Please create your own or download the template from GitHub.", "light_red")
+
+    if args.test:
+        pass
 
     if args.cube:
         cubeList = str(input("Enter the list of options you want for cube files generated, separated by spaces (e.g. Pot Den Val Spin): "))
@@ -170,7 +174,7 @@ def commandLineParser():
         cubeOptions = cubeList.split(" ")
         for job in jobList:
             baseName, extension = grabPaths(job)
-            newMolecule = Molecule(job, baseName, 0, 0, 0, extension)
+            newMolecule = Molecule(job, baseName, 0, 0, 0, extension, baseName)
             gimmeCubes(newMolecule, cubeOptions)
 
 # Finally handle filename creation in one place to stop the infinite copypasta
@@ -181,22 +185,56 @@ def fileCreation(baseName, extensionType, extra):
         fullFile = baseName + extensionType
     return fullFile
 
-# Finally PROPERLY executes the PERL script and pipes output into Python for post-processing
-def coordinateScraper(fileName, outputFileName):
-    startTime = time.time()
-    scrapedCoords = subprocess.run(['pg2xyz.sh',fileName], capture_output=True, text=True, check=True)
-    coordList = scrapedCoords.stdout
-    coordList = coordList.splitlines()
-    with open(outputFileName, 'w') as outputFile:
-        outputFile.write(str(len(coordList)) + "\nPointless Comment Line\n")
-        for index, line in enumerate(coordList):
-            modLine = line + "\n"
-            outputFile.write(modLine)
-            coordList[index] = modLine
-    endTime = time.time()
-    coordinateScrapeTime = round(endTime-startTime,2)
-    cprint("Time taken to scrape coordinates by PERL script is " + str(coordinateScrapeTime) + " seconds.", "light_cyan")
-    return coordList
+# A new fully pythonic solution to coordinate scraping, agnostic of the PERL bullshit on H2P
+def getCoords(fileName, outputFileName):
+    coordinateList = []
+    atSymbol = {
+        1: 'H', 2: 'He', 3: 'Li', 4: 'Be', 5: 'B', 6: 'C', 7: 'N', 8: 'O', 9: 'F', 10: 'Ne',
+        11: 'Na', 12: 'Mg', 13: 'Al', 14: 'Si', 15: 'P', 16: 'S', 17: 'Cl', 18: 'Ar', 19: 'K',
+        20: 'Ca', 21: 'Sc', 22: 'Ti', 23: 'V', 24: 'Cr', 25: 'Mn', 26: 'Fe', 27: 'Co', 28: 'Ni',
+        29: 'Cu', 30: 'Zn', 31: 'Ga', 32: 'Ge', 33: 'As', 34: 'Se', 35: 'Br', 36: 'Kr',
+
+        42: 'Mo', 44: 'Ru', 45: 'Rh', 46: 'Pd', 47: 'Ag', 48: 'Cd', 50: 'Sn', 51: 'Sb',
+        53: 'I', 54: 'Xe', 77: 'Ir', 78: 'Pt', 79: 'Au', 80: 'Hg', 81: 'Tl', 82: 'Pb',
+        83: 'Bi'
+    }
+
+    # Initialize local empty lists
+    at = []
+    X = []
+    Y = []
+    Z = []
+
+    with open(fileName, 'r+') as inFile, open(outputFileName, 'w') as outputFile:
+        with closing(mmap(inFile.fileno(), 0, access=ACCESS_READ)) as data:
+            tableHeader = "                         Standard orientation:                         "
+            tableBytes = tableHeader.encode()
+            finalTableHeader = regex.search(tableBytes, data, regex.REVERSE)
+            pointer = finalTableHeader.ends()
+            data.seek(pointer[0])
+            data.read(2)
+            for index in range(4):
+                data.readline()
+            line = data.readline().decode().strip()
+            while len(line.split()) > 2:
+                # Extracts the Atomic Number, and X Y Z coordinates into their respective lists
+                at.append(str(line.split()[1]))
+                X.append(str(line.split()[3]))
+                Y.append(str(line.split()[4]))
+                Z.append(str(line.split()[5]))
+                line = data.readline().decode().strip()
+
+        outputFile.write(str(len(at))+"\nPointless Comment Line\n")
+        for k in range(len(at)):
+            # Ensures the list elements are integers for dictionary pairing
+            at[k] = int(at[k])
+            # Translates from Atomic Number to Atomic Symbol, along with ensuring all elements of each list are strings
+            # Build the entire line to be written, and ensure it's properly formatted
+            coordLine = str(atSymbol[at[k]]) + "   " + str(X[k]) + "   " + str(Y[k]) + "   " + str(Z[k]) + "\n"
+            coordLine = coordLine.replace(' ', ' ')
+            outputFile.write(coordLine)
+            coordinateList.append(coordLine)
+    return coordinateList
 
 # Handles extensions so I don't have to copypasta this
 def extensionGetter(method):
@@ -252,8 +290,9 @@ def genBench(molecule):
     startTime = time.time()
     for index in range(1, len(methodLine)):
         molecule.extensionType = extensionGetter(methodLine[index])
-        inputFile = fileCreation(molecule.baseName, molecule.extensionType, f"-{index}-" + methodLine[index] + Defaults.singlePointExtra)
+        inputFile = fileCreation(molecule.rootName, molecule.extensionType, f"-{index}-" + methodLine[index].replace("(","").replace(")","") + Defaults.singlePointExtra)
         molecule.fullPath = inputFile
+        molecule.baseName = molecule.rootName + f"-{index}-" + methodLine[index].replace("(","").replace(")","") + Defaults.singlePointExtra
         genFile(molecule,index)
         runJob(molecule)
     endTime = time.time()
@@ -267,6 +306,7 @@ def genSinglePoint(molecule):
     molecule.extensionType = extensionGetter(methodLine[0])
     inputFile = fileCreation(molecule.baseName, molecule.extensionType, Defaults.singlePointExtra)
     molecule.fullPath = inputFile
+    molecule.baseName = molecule.baseName + Defaults.singlePointExtra
 
     # Calls the separate file generation method, feeds directly into runJob
     genFile(molecule, 0)
@@ -277,9 +317,9 @@ def genSinglePoint(molecule):
 
 # Separate method for input file generation to improve code efficiency. No longer returns anything as path to input is previously stored
 def genFile(molecule, index):
-    mixedBasis = False
     inputFile = molecule.fullPath
-    coordFile = molecule.baseName + Defaults.coordExtension
+    coordFile = molecule.rootName + Defaults.coordExtension
+    mixedBasis = False
     match molecule.extensionType:
         case Defaults.gaussianExtension:
             # No longer accesses the XYZ file due to Molecule coordinateList property
@@ -288,7 +328,7 @@ def genFile(molecule, index):
                 jobCPU = str(Defaults.CPU)
                 jobMem = str(Defaults.CPU * Defaults.memoryRatio)
                 # Writes the standard Gaussian16 formatted opening
-                jobInput.write("%nprocshared=" + jobCPU + "\n%mem=" + jobMem +"GB")
+                jobInput.write("%nprocshared=" + jobCPU + "\n%mem=" + jobMem + "GB")
                 # If the methodLine from benchmarking.txt is garbage, the calculation will fail. Not my fault.
                 jobInput.write("\n# " + fullMethodLine[index] + "\nUseless Comment line\n\n")
                 jobInput.write(molecule.charge + " " + molecule.multiplicity + "\n")
@@ -299,16 +339,14 @@ def genFile(molecule, index):
                         mixedBasis = True
                         break
                 for line in molecule.coordinateList:
-                    # Skips the atoms and blank line in the XYZ because that will break shit
-                    if len(line.split()) > 3:
-                        jobInput.write(line)
+                    jobInput.write(line)
                 if os.path.isfile("mixedbasis.txt") and mixedBasis:
                     jobInput.write("\n")
                     with open("mixedbasis.txt") as mixedBasisFile:
                         for line in mixedBasisFile:
                             jobInput.write(line)
-                else:
-                    cprint("Mixed basis information not found. Aborting.","light_red")
+                elif mixedBasis and not os.path.isfile("mixedbasis.txt"):
+                    cprint("Mixed basis information not found. Aborting.", "light_red")
                     return
                 jobInput.write("\n\n")
 
@@ -318,15 +356,18 @@ def genFile(molecule, index):
                 # Sets the job's CPU and RAM
                 jobCPU = str(Defaults.CPU)
                 if methodLine == "DLPNO-CCSD(T)":
-                    jobMem = str(Defaults.CPU * Defaults.highMemoryRatio * 1000)
+                    jobMem = str(Defaults.highMemoryRatio * 1000)
                 else:
-                    jobMem = str(Defaults.CPU * Defaults.memoryRatio * 1000)
+                    jobMem = str(Defaults.memoryRatio * 1000)
                 # Writes the standard ORCA formatted opening
                 jobInput.write("%pal nprocs " + jobCPU + "\nend" + "\n%maxcore " + jobMem)
                 # If the methodLine from benchmarking.txt is garbage, the calculation will fail. Not my fault.
-                jobInput.write("\n! " + fullMethodLine[index])
+                jobInput.write("\n! " + fullMethodLine[index] + "\n")
                 # ORCA is smart enough to read from an XYZ directly
-                jobInput.write(f"* xyzfile {molecule.charge} {molecule.multiplicity} {coordFile} *")
+                jobInput.write(f"* xyz {molecule.charge} {molecule.multiplicity} \n")
+                for line in molecule.coordinateList:
+                    jobInput.write(line)
+                jobInput.write("\n*")
 
         case Defaults.qChemExtension:
             pass
@@ -360,9 +401,9 @@ def runJob(molecule):
             case Defaults.gaussianExtension:
                 # NEW!! Uses regex to search for substrings in any order in the top 5 lines of input. No more stickler formatting!
                 for line in firstFiveLines:
-                    if re.search(Defaults.coreLineVariants[0],line) or re.search(Defaults.coreLineVariants[1],line):
+                    if regex.search(Defaults.coreLineVariants[0],line) or regex.search(Defaults.coreLineVariants[1],line):
                         coresLine = line
-                    if re.search(Defaults.ramLineVariants[0],line):
+                    if regex.search(Defaults.ramLineVariants[0],line):
                         ramLine = line
                 if len(coresLine) == 0:
                     cpus = Defaults.CPU
@@ -401,9 +442,9 @@ def runJob(molecule):
             case Defaults.orcaExtension:
                 # NEW!! Uses regex to search for substrings in any order in the top 5 lines of input. No more stickler formatting!
                 for line in firstFiveLines:
-                    if re.search(Defaults.coreLineVariants[2], line):
+                    if regex.search(Defaults.coreLineVariants[2], line):
                         coresLine = line
-                    if re.search(Defaults.ramLineVariants[1], line):
+                    if regex.search(Defaults.ramLineVariants[1], line):
                         ramLine = line
                 if len(coresLine) == 0:
                     cpus = Defaults.CPU
@@ -435,10 +476,10 @@ def runJob(molecule):
                     # Now runs in ORCA 6.0.0 instead of 4.2.0 .
                     for index in range(0,3):
                         outputFile.write(Defaults.orcaNonVariant[index])
-                    outputFile.write("files=(" + str(molecule.fullPath) + ")\n")
+                    outputFile.write("files=(" + str(molecule.baseName + Defaults.orcaExtension) + ")\n")
                     for index in range(3,8):
                         outputFile.write(Defaults.orcaNonVariant[index])
-                    outputFile.write("$(which orca) " + str(molecule.fullPath) + "\n\n")
+                    outputFile.write("$(which orca) " + str(molecule.baseName + Defaults.orcaExtension) + "\n\n")
                     for index in range(8,10):
                         outputFile.write(Defaults.orcaNonVariant[index])
 
@@ -577,18 +618,38 @@ def jobStalking(jobSet, duration, frequency):
                     cprint("Job " + str(result[index].split()[0]) + " is currently pending. Expected start time is " + str(result[index].split()[3]), "light_yellow")
                     stalkStatus.remove(result[index].split()[0])
                 case "RUNNING":
-                    cprint("Job " + str(result[index].split()[0]) + " is currently running. Current duration is " + str(result[index].split()[4]), "light_magenta")
-                    stalkStatus.remove(result[index].split()[0])
+                    for job in jobSet:
+                        convergeCriteria = "Unknown"
+                        if job[0] == result[index].split()[0]:
+                            if os.path.isfile(job[1]):
+                                with open(job[1],'r+') as file:
+                                    with closing(mmap(file.fileno(),0,access=ACCESS_READ)) as data:
+                                        tableHeader = "         Item               Value     Threshold  Converged?"
+                                        tableBytes = tableHeader.encode()
+                                        finalTableHeader = regex.search(tableBytes, data, regex.REVERSE)
+                                        if len(finalTableHeader.group().decode()) != 0:
+                                            convergeCriteria = 0
+                                            pointer = finalTableHeader.ends()
+                                            data.seek(pointer[0])
+                                            data.read(2)
+                                            convergeMet = []
+                                            for index in range(0,4):
+                                                convergeLine = data.readline().decode()
+                                                convergeMet.append(convergeLine.split()[4])
+                                                convergeCriteria = convergeMet.count("YES")
+                        cprint("Job " + str(result[index].split()[0]) + " is currently running, and has converged on " + str(convergeCriteria) + " out of 4 criteria. Current duration is " + str(result[index].split()[4]), "light_magenta")
+                        stalkStatus.remove(result[index].split()[0])
+                        break
 
         jobCopy = jobSet.copy()
 
         for job in jobCopy:
-            if job[0] in stalkStatus:
+            if job[0] in stalkStatus and os.path.isfile(job[1]):
                 with open(job[1], "r+") as file:
                     with closing(mmap(file.fileno(), 0, access=ACCESS_READ)) as data:
                         for termination in Defaults.terminationVariants:
                             termBytes = termination.encode()
-                            termLine = re.search(termBytes, data, re.IGNORECASE)
+                            termLine = regex.search(termBytes, data, regex.IGNORECASE)
                             if termLine is not None:
                                 finishedJobs.append((job[0], termination))
                                 break
