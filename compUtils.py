@@ -329,7 +329,7 @@ def genFile(molecule, index):
                 # Writes the standard Gaussian16 formatted opening
                 jobInput.write("%nprocshared=" + jobCPU + "\n%mem=" + jobMem + "GB")
                 # If the methodLine from benchmarking.txt is garbage, the calculation will fail. Not my fault.
-                jobInput.write("\n# " + fullMethodLine[index] + "\nUseless Comment line\n\n")
+                jobInput.write("\n# " + fullMethodLine[index].replace("\n","") + "\n\nUseless Comment line\n\n")
                 jobInput.write(molecule.charge + " " + molecule.multiplicity + "\n")
                 # Iterates through the XYZ to scrape the coordinates (getCoords isn't efficient to call repeatedly,
                 # and this is actually *much* more useful)
@@ -361,7 +361,7 @@ def genFile(molecule, index):
                 # Writes the standard ORCA formatted opening
                 jobInput.write("%pal nprocs " + jobCPU + "\nend" + "\n%maxcore " + jobMem)
                 # If the methodLine from benchmarking.txt is garbage, the calculation will fail. Not my fault.
-                jobInput.write("\n! " + fullMethodLine[index] + "\n")
+                jobInput.write("\n! " + fullMethodLine[index].replace("\n","") + "\n\n")
                 # ORCA is smart enough to read from an XYZ directly
                 jobInput.write(f"* xyz {molecule.charge} {molecule.multiplicity} \n")
                 for line in molecule.coordinateList:
