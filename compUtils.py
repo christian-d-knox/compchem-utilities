@@ -2,7 +2,7 @@
 # Welcome to Computational Chemistry Utilities!
 # Now bigger, harder, faster, and stronger than ever before!
 # This package has been crafted lovingly through untold pain and suffering
-# Last major commit to the project was 2025-10-10 (previously 2025-10-09)
+# Last major commit to the project was 2025-10-15 (previously 2025-10-10)
 # Last minor commit to the project was 2025-10-7
 
 # Imports the various libraries needed for main() and each function()
@@ -318,7 +318,6 @@ def genSinglePoint(molecule):
 # Separate method for input file generation to improve code efficiency. No longer returns anything as path to input is previously stored
 def genFile(molecule, index):
     inputFile = molecule.fullPath
-    coordFile = molecule.rootName + Defaults.coordExtension
     mixedBasis = False
     match molecule.extensionType:
         case Defaults.gaussianExtension:
@@ -594,7 +593,6 @@ def gimmeCubes(molecule, cubeKeyList):
         cprint(f"Submitted cube job " + molecule.baseName + " " + cubeKey + " to the cluster.", "light_green")
 
 # For realsies this time
-# This is complicated, come back to it later. Luckily the base idea SHOULD work
 def jobStalking(jobSet, duration, frequency):
     startTime = time.time()
     # Prints queue in format of JOBNAME STATUS NODE/REASON START_TIME CURRENT_DURATION
@@ -607,7 +605,9 @@ def jobStalking(jobSet, duration, frequency):
         stalker = subprocess.run(command, shell=True, capture_output=True)
         result = stalker.stdout.splitlines()
         for index in range(len(result)):
+            # noinspection PyShadowingNames
             line = result[index].decode("utf-8")
+            # noinspection PyTypeChecker
             result[index] = line
             # Adds job basename to stalkStatus for comparison
             stalkStatus.add(result[index].split()[0])
@@ -619,27 +619,27 @@ def jobStalking(jobSet, duration, frequency):
                     stalkStatus.remove(result[index].split()[0])
                 case "RUNNING":
                     for job in jobSet:
-                        #convergeCriteria = "Unknown"
-                        #if job[0] == result[index].split()[0]:
-                            #if os.path.isfile(job[1]):
-                                #with open(job[1],'r+') as file:
-                                    #with closing(mmap(file.fileno(),0,access=ACCESS_READ)) as data:
-                                        #tableHeader = "         Item               Value     Threshold  Converged?"
-                                        #tableBytes = tableHeader.encode()
-                                        #finalTableHeader = regex.search(tableBytes, data, regex.REVERSE)
-                                        #if len(finalTableHeader.group().decode()) != 0:
-                                            #convergeCriteria = 0
-                                            #pointer = finalTableHeader.ends()
-                                            #data.seek(pointer[0])
-                                            #data.read(2)
-                                            #convergeMet = []
-                                            #for index in range(0,4):
-                                                #convergeLine = data.readline().decode()
-                                                #convergeMet.append(convergeLine.split()[4])
-                                                #convergeCriteria = convergeMet.count("YES")
-                        cprint("Job " + str(result[index].split()[0]) + " is currently running. Current duration is " + str(result[index].split()[4]), "light_magenta")
-                        stalkStatus.remove(result[index].split()[0])
-                        break
+                        convergeCriteria = "Unknown"
+                        if job[0] == result[index].split()[0]:
+                            if os.path.isfile(job[1]) and os.path.getsize(job[1]) > 0:
+                                with open(job[1],'r+') as file:
+                                    with closing(mmap(file.fileno(),0,access=ACCESS_READ)) as data:
+                                        tableHeader = "         Item               Value     Threshold  Converged?"
+                                        tableBytes = tableHeader.encode()
+                                        finalTableHeader = regex.search(tableBytes, data, regex.REVERSE)
+                                        if len(finalTableHeader.group().decode()) != 0:
+                                            convergeCriteria = 0
+                                            pointer = finalTableHeader.ends()
+                                            data.seek(pointer[0])
+                                            data.read(2)
+                                            convergeMet = []
+                                            for outdex in range(0,4):
+                                                convergeLine = data.readline().decode()
+                                                convergeMet.append(convergeLine.split()[4])
+                                                convergeCriteria = convergeMet.count("YES")
+                            cprint("Job " + str(result[index].split()[0]) + " is currently running, and has converged on " + str(convergeCriteria) + " out of 4 criteria. Current duration is " + str(result[index].split()[4]), "light_magenta")
+                            stalkStatus.remove(result[index].split()[0])
+                            break
 
         jobCopy = jobSet.copy()
 
