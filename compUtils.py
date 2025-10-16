@@ -64,6 +64,7 @@ fullPaths = []
 totalJobList = []
 totalOutputs = []
 isStalking = False
+isCheck = False
 isCustomTarget = True
 canBench = True
 methodLine = []
@@ -127,10 +128,13 @@ def commandLineParser():
     args = parser.parse_args()
 
     global isStalking
+    global isCheck
 
     # Stalking flag first
     if args.stalk:
         isStalking = True
+    if args.checkpoint:
+        isCheck = True
 
     # Run flag handling
     if args.run:
@@ -175,6 +179,8 @@ def commandLineParser():
         for job in jobList:
             baseName, extension = grabPaths(job)
             newMolecule = Molecule(job, baseName, 0, 0, 0, extension, baseName)
+            if extension == ".chk":
+                formCheck(newMolecule)
             gimmeCubes(newMolecule, cubeOptions)
 
 # Finally handle filename creation in one place to stop the infinite copypasta
@@ -184,6 +190,14 @@ def fileCreation(baseName, extensionType, extra):
     else:
         fullFile = baseName + extensionType
     return fullFile
+
+# Formats checkpoints automatically
+def formCheck(molecule):
+    os.system("module purge")
+    os.system("module load gaussian")
+    os.system("formchk " + molecule.fullPath)
+    molecule.extensionType = ".fchk"
+    molecule.fullPath = molecule.rootName + molecule.extensionType
 
 # A new fully pythonic solution to coordinate scraping, agnostic of the PERL bullshit on H2P
 def getCoords(fileName, outputFileName):
@@ -317,6 +331,7 @@ def genSinglePoint(molecule):
 
 # Separate method for input file generation to improve code efficiency. No longer returns anything as path to input is previously stored
 def genFile(molecule, index):
+    global isCheck
     inputFile = molecule.fullPath
     mixedBasis = False
     match molecule.extensionType:
@@ -328,6 +343,8 @@ def genFile(molecule, index):
                 jobMem = str(Defaults.CPU * Defaults.memoryRatio)
                 # Writes the standard Gaussian16 formatted opening
                 jobInput.write("%nprocshared=" + jobCPU + "\n%mem=" + jobMem + "GB")
+                if isCheck:
+                    jobInput.write("\n%chk=" + molecule.baseName + ".chk")
                 # If the methodLine from benchmarking.txt is garbage, the calculation will fail. Not my fault.
                 jobInput.write("\n# " + fullMethodLine[index].replace("\n","") + "\n\nUseless Comment line\n\n")
                 jobInput.write(molecule.charge + " " + molecule.multiplicity + "\n")
@@ -432,7 +449,7 @@ def runJob(molecule):
                     outputFile.write("\ng16 < " + molecule.fullPath + "\n\n")
 
                 os.system("sbatch " + queueName)
-                #os.remove(queueName)
+                os.remove(queueName)
                 cprint(f"Submitted job " + molecule.baseName + " to Gaussian16", "light_green")
                 if isStalking:
                     molecule.fullPath = molecule.baseName + Defaults.outputExtension
@@ -483,7 +500,7 @@ def runJob(molecule):
                         outputFile.write(Defaults.orcaNonVariant[index])
 
                 os.system("sbatch " + queueName)
-                #os.remove(queueName)
+                os.remove(queueName)
                 cprint(f"Submitted job " + molecule.baseName + " to ORCA 6.0.1", "light_green")
                 if isStalking:
                     molecule.fullPath = molecule.baseName + Defaults.outputExtension
@@ -578,7 +595,7 @@ def gimmeCubes(molecule, cubeKeyList):
             queueFile.write("#SBATCH --job-name=" + molecule.baseName + "\n")
             queueFile.write("#SBATCH --output=" + outputName + "\n")
             queueFile.write("#SBATCH --ntasks-per-node=" + str(Defaults.CPU) + "\n")
-            queueFile.write("#SBATCH --mem=" + str(jobRam) + "\n")
+            queueFile.write("#SBATCH --mem=" + str(jobRam) + "GB\n")
             queueFile.write("#SBATCH --time=" + Defaults.wallTime + ":00:00\n")
             queueFile.write("#SBATCH --cluster=" + Defaults.cluster + "\n")
             queueFile.write("#SBATCH --partition=" + Defaults.partition + "\n")

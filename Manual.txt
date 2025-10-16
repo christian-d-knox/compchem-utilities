@@ -18,12 +18,13 @@ into one comprehensive package for anyone's use.
 
 Current Implementations:
 - Every function is pre-packaged with runall functionality
-- Both qg16, qorca, and qchem submission
-- genosp and genCC (mixed basis not implemented)
-- pg2xyz
+- qg16, qorca, and qchem submission
+- genosp and genCC (mixed basis finally implemented)
+- pg2xyz functionality
 - genbench
-- Installer file for critical dependencies
+- Installer file for conda and conda environment
 - Colored terminal text (wow!)
+- gimmeCubes and obsessiveQueue functionality
 
 This utility comes pre-packaged with terminal flags that trigger its corresponding
 features. This manual is sorted by these flags, in order of what I anticipate to be
@@ -41,6 +42,35 @@ most commonly used.
 |                                          |___/                      |___/         |
 |                                                                                   |
 +===================================================================================+
+
+--------------------------------CompUtils 2.1 Release--------------------------------
+- Re-wrote bits of runJob to align with the H2P OS upgrade
+ - Several times, as they kept changing it
+- Something in the xyzfile submission in ORCA has fundamentally broken so it has been
+ replaced with just the coordinate block for the time being.
+- jobStalking terminal flag bug fixed
+- jobStalking now tells you if a job is Queued, Running, or Terminated
+ - Differentiates between Normal and Error termination
+ - Jobs noted as Running will be automatically checked for convergence criteria
+- Re-wrote installer entirely to utilize miniconda and a custom conda environment
+ - New installer will put in development version of miniconda3, and required
+  compUtils environment. Ideally this circumvents the retarded package management on
+  H2P
+- Had to completely rewrite coordinateScraper because the H2P OS upgrade broke the
+ PERL dependency script from before the ancient times of yesteryear
+ - Now utilizes a purely Pythonic version of RegEx to accomplish the same goal in the
+  exact same time frame, based on internal testing
+- Migrated from re to regex for increased functionality
+- Implemented support for mixed basis sets in G16 via local (cwd) mixedbasis.txt
+ detection for the following keywords: Gen GenECP gen genecp
+ - Support is only for individual keywords, use of slash nomenclature will not work
+- Fixed several bugs in genFile created from the massive overhauls of the 2.0 release
+- Implemented gimmeCubes functionality with interactively triggered keywords
+- Changed the filenaming convention of genBench to be easily interpretable
+- Updated gimmeCubes to accept both .chk and .fchk with automatic checkpoint
+ formatting
+- Fully implemented checkpoint generation flag
+- Other assorted bugfixes I'm too stupid to remember without writing them down
 
 --------------------------------CompUtils 2.0 Release--------------------------------
 - Completely refactored code into Python 3.10 to allow for match / case statements
@@ -81,8 +111,8 @@ instead of if / elif / else chains (speed improvement)
 
 ---------------------------------------run flag--------------------------------------
 
-The runJob function is accessed through the -r or --run flag, and must receive an
-escaped file name or list of names as an argument. Multiple filenames can be
+The runJob function is accessed through the -r or --run flag, and must receive a file
+name or escaped list of names as an argument. Multiple filenames can be
 accepted by escaping the wildcard in the terminal, as shown in the example below:
 
     cu -r \*.gjf
@@ -91,7 +121,7 @@ The run function distinguishes between Gaussian16, ORCA, and QChem jobs based on
 their respective file extensions. These defaults can be changed within CompUtils.
 CPU and RAM determinations, however are based off of the first few lines, and as such
 they must be formatted in a specific way. The first five lines of the input file must
-contain the CPU and RAM information. 
+contain the CPU and RAM information.
 
 For Gaussian16 jobs, two different CPU structures are accepted:
 %nprocshared=12           OR          %nproc=12
@@ -109,8 +139,11 @@ For QChem submissions, two configurations are accepted:
 You may notice that ORCA file input takes its memory in the units of MB instead of GB
 This is an entirely intentional inclusion of historical differences, in order to
 further enforce that the program looks for specific formatting to distinguish between
-the job types. QChem input is revered of Gaussian16 because that's the way it was in
-the original submission script and I refuse to reinvent the wheel.
+the job types. We run jobs in QChem even less than ORCA, thus I merely used the
+original formatting from its independent script.
+
+It is worth noting that BOTH CompUtils and your program of choice are going to expect
+this information somewhere. I cannot be bothered to fix your own files for you.
 
 -------------------------------------genSP flag--------------------------------------
 
@@ -123,49 +156,76 @@ where you keep this program, you should create a file called benchmarking.txt or
 download the provided one on GitHub. This file is where the function will find your
 desired single point method. You should specify the method similarly to shown below:
 
-M062X 6-311+G(d,p) scrf=(smd,solvent=TetraHydroFuran)
+    M062X 6-311+G(d,p) scrf=(smd,solvent=TetraHydroFuran)
 
 This line will be read and inserted into the new single point input exactly as it
 appears. It is therefore vital that you format this line exactly how whatever program
 you want to calculate with will need to read it.
 
 genSP will create submission files based off of either the user-specified program
-associations within /bin/programs.txt , or a nonexhaustive list of hardcoded
+associations within ~/bin/programs.txt , or a nonexhaustive list of hardcoded
 defaults. It is recommended to do all editing via a programs.txt file formatted like
 below:
 
-M062X G16
-DLPNO-CCSD(T) O
-wB97M-V Q
+    M062X G16
+    DLPNO-CCSD(T) O
+    wB97M-V Q
 
 Where the computational method is defined first, and the shorthand code for the
-target program is second.
+target program is second. Any method that does not appear in programs.txt nor the
+hardcoded defaults will be assumed a G16 method.
+
+Mixed basis sets are now finally accessible for G16 jobs only. To do this in the
+least painful way (for the end-user) possible, you should create a file called
+mixedbasis.txt within the working directory of the jobs needing the mixed basis.
+Edit this file to the exact formatting of your mixed basis info, such as in the
+example on GitHub. Activate this functionality by any of the following keywords:
+
+    Gen | GenECP | gen | genecp
+
+Since the mixedbasis.txt file is strictly read from the cwd, this means you can
+easily run different jobs with different mixed bases as long as they're in different
+cwd's with their own text files.
 
 Within the code of the program, near the top, is a line for default CPU count and
-default memory ratio. When building job files, the program will assign the default
-CPU count, and ram equivalent to the CPU count x memory ratio.
+default memory ratio. When building job files automatically, the program will assign
+the default CPU count, and ram equivalent to the CPU count x memory ratio. For
+example, a default core count of 12 and memory ratio of 2 will request 12 * 2 = 24
+GB of RAM (before the additional buffer).
 
 genSP automatically reads the geometry output reference to find the charge and
 multiplicity, so there is never any need to specify that information (a noticeable
 QoL improvement from prior scripts).This function will not only create and
 automatically submit the single point inputs, but it will also generate an XYZ file
-for your own use in programs like CYLView (or in the case of ORCA, as part of the
-input).
+for your own use in programs like CYLView.
 
 ------------------------------------genBench flag------------------------------------
 
 The benchmarking functionality is accessed by -b or --bench flags, and accepts a G16
-output as its input. This runs extremely similarly to genSP, so the differences will
-be enumerated here.
+output as its input, similar to genSinglePoint. This runs extremely similarly to
+genSP, so the differences will be enumerated here.
 
 genBench will first pass through genSP to make the standard single point and generate
-the XYZ file. This was an optimization decision to reduce the number of calls to
-getCoords. Subsequent benchmark inputs are generated from the other lines of
-benchmarking.txt and submitted to the intended suite of choice (G16 or ORCA). The XYZ
-file that is created during the genSP routine is what is read and accessed for
-quickly creating the other inputs (or in the case of ORCA inputs, the XYZ file is
-used explicitly as the input geometry. It is therefore very important to leave this
-file in the directory, and copy it out if needed).
+the XYZ file. Subsequent benchmark inputs are generated from the other lines of
+benchmarking.txt and submitted to the intended suite of choice (G16 / ORCA / QChem).
+
+The filename formatting of genBench assumes two things: you know what your default
+single point method is, and you understand index based counting. For a benchmark of
+functionals Triangle, Apple, and Whattaburger, the filenames on some_complex will be:
+
+    some_complex_SP.gjf and .out
+    some_complex-1-Apple_SP.gjf and .out
+    some_complex-2-Whattaburger_SP.gjf and .out
+
+The above assumes all are G16 methods, but the -index- and Functional are both
+included in the filename to make it much easier to know which is what at a glance.
+
+-----------------------------------checkpoint flag-----------------------------------
+
+The checkpoint flag is accessed by -ch or --check, and will set an internal flag
+within the program. When CompUtils creates G16 job with this flag enabled, it will
+add in a line for checkpoint file generation, for later processing by the user (such
+as cube file generation).
 
 -----------------------------------jobStalking flag----------------------------------
 
@@ -176,7 +236,8 @@ obsessiveQueue).
 
 jobStalk informs you about the following properties of its compiled list of jobs:
 - currently in the queue
-- currently running (in which case, the CMD will be deleted)
+- currently running
+- how many convergence flags the last step achieved
 - finished successfully
 - finished via error termination
 
@@ -184,16 +245,19 @@ It will run this check periodically, based on the time specified by the frequenc
 duration defaults within the defaults section near the top of the program. Change 
 these variables depending on how often you desire updates on your jobs.
 
-jobStalking will automatically terminate when all jobs have terminated, or when its
-default duration has been exceeded.
+jobStalking will automatically terminate when all jobs it identified as tagged have
+terminated, or when its default duration has been exceeded.
 
 -----------------------------------gimmeCubes flag-----------------------------------
 
 Accessed via the -cu or --cube flag, gimmeCubes has been entirely improved from its
-standalone module. This flag requires the specification of a valid fchk file.
+standalone module. This flag requires the specification of a valid .chk or .fchk
+file. If a .chk file is provided, the program will format the checkpoint to an .fchk
+first. Note: this will force a module purge in your terminal.
 
 gimmeCubes runs interactively with the user, allowing you to select the types of cube
-files to generate based on the defaults specified in the program. Currently supports:
+files to generate based on the defaults specified in the program. It currently
+supports the following cube types:
 	Density 	via 	Den
 	Potential 	via 	Pot
 	Valence MO's 	via 	Val
@@ -202,18 +266,15 @@ files to generate based on the defaults specified in the program. Currently supp
 *************************************************************************************
 
 Planned features:
-- checkpoint flag for file generation
 - re-optimization flag for re-running the exact same job with the final coordinates
     of the failed job
 
 Desired features (will likely require collaboration with other lab mates):
-- inclusion of mixed basis-set handling for genSP and genBench
 - inclusion of PES generation (Thomas Tugwell)
 - continued incorporation of other functions we handle by one-off scripts
 
 Suggested features:
 - Make program executable
-- Make program object-oriented
 
 =====================================================================================
 
@@ -228,29 +289,30 @@ Suggested features:
 |                                                                                   |
 +===================================================================================+
 
-CompUtils was built by a novice programmer with the intention of simplifying a job
-that many people create many single-function scripts to do. As such, there are bound
-to be inefficiencies in the code that could be improved upon. In this section, some
-of the design philosophy and decisions are described. Ultimately, however, CompUtils
-was written in an attempt to be as user-readable as possible, so modifications should
-be convenient enough to make.
+CompUtils was built by a novice (likely now considered intermediate) programmer with
+the intention of simplifying a job that many people create many single-function
+scripts to do. As such, there is always room for improvement in the code that I
+aspire to make as good as I can. In this section, some of the design philosophy and
+decisions are described. Ultimately, however, CompUtils was written in an attempt to
+be as user-readable as possible, so modifications should be convenient enough to make.
 
 For functions that act upon files, they can accept either a single filename or a
-wildcard to grab all files in the current working directory. In order to ensure the
-program works from the /bin/, CompUtils will make sure it accesses the absolute paths
-of every file it is handed or creates. Since it can accept a list of files, every
-function by default will iterate through the entire list of files passed into it.
+wildcard to grab all files in the current working directory. Since it can accept a
+list of files, every function by default will iterate through the entire list of
+files passed into it.
 
 A chunk of the code is a translated carry-over from other in-house scripts within the
 group that work fine but are tedious to modify due to their lack of documentation
 and nondescriptive variable names. This means that many functions operate at a fairly
 high level of efficiency (or, at least, as efficient as the group is used to).
 
-Due to new subprocess capabilities and intense refactoring, CompUtils is
-significantly faster than it was in the past. This is mainly due to the ~10x speed
-improvement made through the complete re-write of getCoords -> coordinateScraper,
-which leverages a properly shell-executable version of the PERL script pg2xyz that
-the group has relied on for its entire lifetime. My previous pure Python solution was
-functional, but slower by an order of magnitude. I still learned a lot from this poor
-solution, but am infinitely happier that I finally figured out a faster
-implementation.
+The biggest under-the-hood magic is the Molecule object, which stores multiple
+important data types that a complex may require. This is how the program is able to
+achieve its speed even when doing a significant number of operations per file in a
+large batch of files.
+
+I've been very happy to pick up many news skills and knowledge as I've engaged in the
+problem-solving required to achieve my goal of an easy-to-use universal one-stop-shop
+type of tool for the group. Tinkering is a passion of mine, and while it may lead to
+frequent frustration, and I may be seen as reinventing the wheel, my only desire is
+to help myself and everyone else through the fruits of my labor.
