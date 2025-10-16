@@ -49,7 +49,7 @@ class Defaults:
     valenceCube = "Val"
     spinCube = "Spin"
     stalkDuration = 120
-    stalkFrequency = 0.25
+    stalkFrequency = 5
     gaussianNonVariant = ["#SBATCH --nodes=1\n","\nmodule purge\nmodule load gaussian\n\n","export GAUSS_SCRDIR=$SLURM_SCRATCH\nulimit -s unlimited\nexport LC_COLLATE=C\n"]
     orcaNonVariant = ["\n# Load the module\nmodule purge\n","module load orca/6.0.1\n\n","# Copy files to SLURM_SCRATCH\n","for i in ${files[@]}; do\n","    cp $SLURM_SUBMIT_DIR/$i $SLURM_SCRATCH/$i\ndone\n\n","# cd to the SCRATCH space\n","cd $SLURM_SCRATCH\n\n","# run the job, $(which orca) is necessary\n","# finally, copy back gbw and prop files\n","cp $SLURM_SCRATCH/*.{gbw,prop} $SLURM_SUBMIT_DIR\n\n"]
     qChemNonVariant = []
