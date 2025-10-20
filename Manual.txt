@@ -25,6 +25,7 @@ Current Implementations:
 - Installer file for conda and conda environment
 - Colored terminal text (wow!)
 - gimmeCubes and obsessiveQueue functionality
+- Interactively run GoodVibes and export data directly to Excel
 
 This utility comes pre-packaged with terminal flags that trigger its corresponding
 features. This manual is sorted by these flags, in order of what I anticipate to be
@@ -42,6 +43,15 @@ most commonly used.
 |                                          |___/                      |___/         |
 |                                                                                   |
 +===================================================================================+
+
+--------------------------------CompUtils 2.2 Release--------------------------------
+- Added an entire routing for running GoodVibes interactively through a series of y/n
+ questions
+ - Most questions cover the common keylist, but less-common input can be accepted in
+  the final prompt
+ - Data is given in the normal Goodvibes_output.dat and the automatically generated
+  GoodVibes.xslx
+ - Call this with the "-gv" flag and the filelist you plan to use (e.g. "\*.out")
 
 --------------------------------CompUtils 2.1 Release--------------------------------
 - Re-wrote bits of runJob to align with the H2P OS upgrade
@@ -262,6 +272,22 @@ supports the following cube types:
 	Potential 	via 	Pot
 	Valence MO's 	via 	Val
 	Spin 		via 	Spin
+
+------------------------------------goodVibes flag-----------------------------------
+
+Accessed via the -gv or --goodvibes flag, this chains together both of the related
+functions, goodVibesInteractive and goodVibesProcessor. You must provide the file or
+escaped filelist you plan to use with GoodVibes.
+
+    cu -gv \*.out
+
+Simply answer a series of y/n questions (providing additional info when needed) for
+the most common words in your keylist, and add any less common keys you want to use.
+
+Both the normal GoodVibes output, and a now properly formatted Excel file, will be
+generated in your cwd. This is a significant improvement over the original
+goodVibesToExcel script, as the file generated is properly formatted, and rewritten
+like an actual thinking human who cares did it.
 
 *************************************************************************************
 
