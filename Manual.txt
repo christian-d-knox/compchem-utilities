@@ -28,8 +28,7 @@ Current Implementations:
 - Interactively run GoodVibes and export data directly to Excel
 
 This utility comes pre-packaged with terminal flags that trigger its corresponding
-features. This manual is sorted by these flags, in order of what I anticipate to be
-most commonly used.
+features. This manual is sorted by these flags, in a semi-arbitrary ordering.
 
 *************************************************************************************
 
