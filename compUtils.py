@@ -2,7 +2,7 @@
 # Welcome to Computational Chemistry Utilities!
 # Now bigger, harder, faster, and stronger than ever before!
 # This package has been crafted lovingly through untold pain and suffering
-# Last major commit to the project was 2025-10-15 (previously 2025-10-10)
+# Last major commit to the project was 2025-10-20 (previously 2025-10-19)
 # Last minor commit to the project was 2025-10-7
 
 # Imports the various libraries needed for main() and each function()
@@ -99,6 +99,7 @@ else:
     methodLine = Defaults.method
     cprint("Notice: Could not find benchmarking.txt in ~/bin/.", "light_red")
     cprint("Benchmarking functionality is unavailable without requisite file. Please create your own or download the template from GitHub.", "light_red")
+
 if os.path.isfile(os.path.join(Defaults.binDirectory, "programs.txt")):
     with open(os.path.join(Defaults.binDirectory, "programs.txt"), 'r') as programFile:
         for targetLine in programFile:
@@ -763,8 +764,7 @@ def goodVibesProcessor(inputFile):
     dataFrame = pandas.DataFrame(outputData)
     dataFrame.columns = dataFrame.iloc[0]
     dataFrame = dataFrame[1:]
-    writer = pandas.ExcelWriter("GoodVibes.xlsx", engine='xlsxwriter',
-                                engine_kwargs={'options': {'strings_to_numbers': True}})
+    writer = pandas.ExcelWriter("GoodVibes.xlsx", engine='xlsxwriter', engine_kwargs={'options': {'strings_to_numbers': True}})
     dataFrame.to_excel(writer, index=False)
     workBook = writer.book
     workSheet = writer.sheets['Sheet1']
