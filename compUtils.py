@@ -13,7 +13,7 @@ import time
 import subprocess
 from termcolor import cprint
 #import numpy
-#import pandas
+import pandas
 import regex
 from contextlib import closing
 from mmap import mmap, ACCESS_READ
@@ -74,6 +74,7 @@ fileExtension = ""
 methodList = []
 targetProgram = []
 stalkingSet = set()
+booleanStrings = ["y","n"]
 
 # NEW!! Attempting to keep track of everything related to a job in one central location
 class Molecule:
@@ -123,6 +124,8 @@ def commandLineParser():
     parser.add_argument('-t','--test', type=str, help="Activates whatever function I'm trying to test.")
     parser.add_argument('-cu','--cube', type=str, help="Indicates the gimmeCubes functionality on a given Gaussian16 checkpoint file.")
     parser.add_argument('-st','--stalk', action='store_true', help="Activates job stalking.")
+    parser.add_argument('-ex', '--excel', type=str, help="Indicates the goodVibesToExcel functionality on a given GoodVibes output file.")
+    parser.add_argument('-gv', '--goodvibes', type=str, help="Activates the CompUtils interactive interface for GoodVibes.")
 
     # Figures out what the hell you told it to do
     args = parser.parse_args()
@@ -182,6 +185,16 @@ def commandLineParser():
             if extension == ".chk":
                 formCheck(newMolecule)
             gimmeCubes(newMolecule, cubeOptions)
+
+    if args.goodvibes:
+        jobList = glob.glob(args.goodvibes)
+        cprint("Interactive GoodVibes interface activated. Please select your keylist from the common ones.", "light_cyan")
+        totalKeyList = goodVibesInteractive()
+        for job in jobList:
+            os.system("goodvibes " + totalKeyList + " " + job)
+        cprint("GoodVibes has terminated. Handing output over to the excel exporter.", "light_cyan")
+        goodVibesProcessor("Goodvibes_output.dat")
+        cprint("Enjoy your Excel-formatted GoodVibes output!", "light_green")
 
 # Finally handle filename creation in one place to stop the infinite copypasta
 def fileCreation(baseName, extensionType, extra):
@@ -688,6 +701,76 @@ def jobStalking(jobSet, duration, frequency):
     if (time.time() - startTime) > duration * 60:
         cprint("Job stalking terminated by timeout. Your jobs are still running.","light_red")
         cprint("Consider editing the default stalk duration and frequency if your jobs regularly timeout.","light_red")
+
+# Because everyone hates remembering manuals
+def goodVibesInteractive():
+    keyList = []
+    isQuasiHarmonic = str(input("Utilize quasiharmonic S and H correction (Grimme)? (y/n)"))
+    if isQuasiHarmonic == booleanStrings[0]:
+        keyList.append("-q")
+    isFreqCut = str(input("Utilize a frequency cutoff? (y/n)"))
+    if isFreqCut == booleanStrings[0]:
+        freqCutoff = float(input("Enter the frequency cutoff (wavenumbers): "))
+        keyList.append("-f " + str(freqCutoff))
+    isTempCorrection = str(input("Utilize a temperature correction? (y/n)"))
+    if isTempCorrection == booleanStrings[0]:
+        tempCorrection = float(input("Enter temperature (K): "))
+        keyList.append("-t " + str(tempCorrection))
+    isConcCorrection = str(input("Utilize a concentration correction? (y/n)"))
+    if isConcCorrection == booleanStrings[0]:
+        concCorrection = float(input("Enter concentration (mol/l): "))
+        keyList.append("-c " + str(concCorrection))
+    isVibeScale = str(input("Utilize a vibrational scale factor? (y/n)"))
+    if isVibeScale == booleanStrings[0]:
+        vibeScale = float(input("Enter vibrational scale factor: "))
+        keyList.append("-v " + str(vibeScale))
+    isSinglePoint = str(input("Run program with single point corrections? (y/n)"))
+    if isSinglePoint == booleanStrings[0]:
+        isNonDefault = str(input("Is your filemask pattern different than the CompUtils default (_SP)? (y/n)"))
+        if isNonDefault == booleanStrings[0]:
+            singlePoint = str(input("Enter your filemask pattern without the underscore:"))
+            keyList.append("--spc " + str(singlePoint))
+        else:
+            keyList.append("--spc SP")
+    isNonCommonKeys = str(input("Do you want to run with additional, less common keys? (y/n)"))
+    if isNonCommonKeys == booleanStrings[0]:
+        nonCommonKeys = str(input("Enter all of your non-common keys exactly as GoodVibes must receive them, separated by spaces."))
+        keyList.append(nonCommonKeys)
+    finalKeyList = ""
+    for key in range(len(keyList)):
+        finalKeyList = finalKeyList + " " + keyList[key]
+    return finalKeyList
+
+def goodVibesProcessor(inputFile):
+    outputData = []
+    header = "Structure"
+    headerBytes = header.encode()
+    with open(inputFile, 'r') as inFile:
+        with closing(mmap(inFile.fileno(), 0, access=ACCESS_READ)) as data:
+            headerLocation = regex.search(headerBytes, data, regex.IGNORECASE)
+            pointer = headerLocation.starts()
+            data.seek(pointer[0])
+            line = data.readline()
+            tempSubs = line.decode().strip().split()
+            outputData.append(tempSubs)
+            data.readline()
+            line = data.readline().decode().strip()
+            while '*' not in line:
+                subLines = line.split()
+                subLines.pop(0)
+                outputData.append(subLines)
+                line = data.readline().decode().strip()
+    dataFrame = pandas.DataFrame(outputData)
+    dataFrame.columns = dataFrame.iloc[0]
+    dataFrame = dataFrame[1:]
+    writer = pandas.ExcelWriter("GoodVibes.xlsx", engine='xlsxwriter',
+                                engine_kwargs={'options': {'strings_to_numbers': True}})
+    dataFrame.to_excel(writer, index=False)
+    workBook = writer.book
+    workSheet = writer.sheets['Sheet1']
+    formatNumber = workBook.add_format({'num_format': '#,##0.000000'})
+    workSheet.set_column('B:J', 12, formatNumber)
+    writer.close()
 
 commandLineParser()
 
