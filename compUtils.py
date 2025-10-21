@@ -55,7 +55,7 @@ class Defaults:
     spinCube = "Spin"
     # Job stalking related
     stalkDuration = 120
-    stalkFrequency = 0.25
+    stalkFrequency = 5
     # Job submission related. Edit this across clusters
     gaussianNonVariant = ["#SBATCH --nodes=1\n","\nmodule purge\nmodule load gaussian\n\n",
                           "export GAUSS_SCRDIR=$SLURM_SCRATCH\nulimit -s unlimited\nexport LC_COLLATE=C\n"]
