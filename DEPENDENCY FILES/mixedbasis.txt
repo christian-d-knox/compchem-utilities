@@ -1,0 +1,9 @@
+C H N Cl 0
+6-31G(d)
+****
+Co 0
+SDD
+****
+
+Co 0
+SDD
