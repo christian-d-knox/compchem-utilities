@@ -52,6 +52,17 @@ most commonly used.
  - Data is given in the normal Goodvibes_output.dat and the automatically generated
   GoodVibes.xslx
  - Call this with the "-gv" flag and the filelist you plan to use (e.g. "\*.out")
+- Added a flag for automatic NBO7 keylist in Gaussian file generation routines
+ - This uses the STERIC keyword, which automatically turns on basically every other
+  keyword in the potential keylist
+ - If this behavior is not desired, edit this in the Defaults
+- Bin directory is now found automatically, no more need to specify within the program
+- Very minor speed improvement in RegEx modernization of charge finder module
+ - This newer architecture will also allow an easier time expanding it to other programs
+- Fixed a bug in jobStalking where if the output file was created mid-execution it crapped out
+- Migrated development environment to conda environment. Ideally this does not create any issues
+- Finally caved on making some lines multiline in order to be more readable
+- Updated docstrings within the program
 
 --------------------------------CompUtils 2.1 Release--------------------------------
 - Re-wrote bits of runJob to align with the H2P OS upgrade

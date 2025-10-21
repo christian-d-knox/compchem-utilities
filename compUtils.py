@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 # Welcome to Computational Chemistry Utilities!
 # Now bigger, harder, faster, and stronger than ever before!
-# This package has been crafted lovingly through untold pain and suffering
-# Last major commit to the project was 2025-10-15 (previously 2025-10-10)
+# This package has been hand-crafted lovingly through untold pain and suffering
+# Last major commit to the project was 2025-10-21 (previously 2025-10-20)
 # Last minor commit to the project was 2025-10-7
 
-# Imports the various libraries needed for main() and each function()
+# Imports the various libraries needed for all functions()
 import os
 import argparse
 import glob
 import time
 import subprocess
 from termcolor import cprint
-#import numpy
+#import numpy # Will implement this eventually (probably)
 import pandas
 import regex
 from contextlib import closing
@@ -20,11 +20,13 @@ from mmap import mmap, ACCESS_READ
 
 # Set your defaults HERE
 class Defaults:
-    binDirectory = "/ihome/pliu/cdk67/bin/"
+    # New!! No longer need to specify your bin directory
+    binDirectory = os.path.expanduser("~/bin")
     # Ordinary job defaults
     CPU = 12
     memoryRatio = 2
     highMemoryRatio = 6
+    memoryBuffer = 2
     wallTime = "24"
     cluster = "smp"
     partition = "pliu"
@@ -37,26 +39,36 @@ class Defaults:
     cubeExtension = ".cube"
     queueExtension = ".cmd"
     outputExtension = ".out"
+    # Single point calculation related
     method = "M062X"
     methodLine = "M062X 6-311+G(d,p)"
     # What runs where. Edit carefully (recommended to use programs.txt instead)
     methodNames = ["B3LYP","M062X","M06","M06L","B2PLYP","wB97XD","DLPNO-CCSD(T)","BLYP"]
     targetProgram = ["G16","G16","G16","G16","G16","G16","O","G16"]
+    # Optional job keylist data
+    nboKeylist = "$NBO STERIC PLOT ARCHIVE"
     mixedBasisVariants = ["Gen", "GenECP", "gen", "genecp"]
     # Cube Keylists
     potCube = "Pot"
     denCube = "Den"
     valenceCube = "Val"
     spinCube = "Spin"
+    # Job stalking related
     stalkDuration = 120
-    stalkFrequency = 5
-    gaussianNonVariant = ["#SBATCH --nodes=1\n","\nmodule purge\nmodule load gaussian\n\n","export GAUSS_SCRDIR=$SLURM_SCRATCH\nulimit -s unlimited\nexport LC_COLLATE=C\n"]
-    orcaNonVariant = ["\n# Load the module\nmodule purge\n","module load orca/6.0.1\n\n","# Copy files to SLURM_SCRATCH\n","for i in ${files[@]}; do\n","    cp $SLURM_SUBMIT_DIR/$i $SLURM_SCRATCH/$i\ndone\n\n","# cd to the SCRATCH space\n","cd $SLURM_SCRATCH\n\n","# run the job, $(which orca) is necessary\n","# finally, copy back gbw and prop files\n","cp $SLURM_SCRATCH/*.{gbw,prop} $SLURM_SUBMIT_DIR\n\n"]
+    stalkFrequency = 0.25
+    # Job submission related. Edit this across clusters
+    gaussianNonVariant = ["#SBATCH --nodes=1\n","\nmodule purge\nmodule load gaussian\n\n",
+                          "export GAUSS_SCRDIR=$SLURM_SCRATCH\nulimit -s unlimited\nexport LC_COLLATE=C\n"]
+    orcaNonVariant = ["\n# Load the module\nmodule purge\n","module load orca/6.0.1\n\n",
+                      "# Copy files to SLURM_SCRATCH\n","for i in ${files[@]}; do\n",
+                      "    cp $SLURM_SUBMIT_DIR/$i $SLURM_SCRATCH/$i\ndone\n\n","# cd to the SCRATCH space\n",
+                      "cd $SLURM_SCRATCH\n\n","# run the job, $(which orca) is necessary\n",
+                      "# finally, copy back gbw and prop files\n","cp $SLURM_SCRATCH/*.{gbw,prop} $SLURM_SUBMIT_DIR\n\n"]
     qChemNonVariant = []
+    # Formatting related
     coreLineVariants = ["%nproc","%nprocshared","%pal"]
     ramLineVariants = ["%mem","%maxcore"]
     terminationVariants = ["normal termination","terminated normally","error termination"]
-    memoryBuffer = 2
 
 # Defines global variables for use in various functions
 fileNames = []
@@ -65,6 +77,7 @@ totalJobList = []
 totalOutputs = []
 isStalking = False
 isCheck = False
+isNBO = False
 isCustomTarget = True
 canBench = True
 methodLine = []
@@ -74,9 +87,11 @@ fileExtension = ""
 methodList = []
 targetProgram = []
 stalkingSet = set()
+# Useful for user input processing
 booleanStrings = ["y","n"]
 
 # NEW!! Attempting to keep track of everything related to a job in one central location
+# This allows for file name, extension, charge, multiplicity, and coordinate list to be edited and stored on a per-complex basis
 class Molecule:
     def __init__(self, fullPath, baseName, charge, multiplicity, coordinateList, extensionType, rootName):
         self.fullPath = fullPath
@@ -87,7 +102,7 @@ class Molecule:
         self.extensionType = extensionType
         self.rootName = rootName
 
-# Actually perform some operations globally for more code efficiency
+# Globally checks for benchmarking and programs data, limiting functionality and alerting user
 if os.path.isfile(os.path.join(Defaults.binDirectory, "benchmarking.txt")):
     with open(os.path.join(Defaults.binDirectory, "benchmarking.txt"), "r") as methodFile:
         for line in methodFile:
@@ -98,7 +113,9 @@ else:
     fullMethodLine = Defaults.methodLine
     methodLine = Defaults.method
     cprint("Notice: Could not find benchmarking.txt in ~/bin/.", "light_red")
-    cprint("Benchmarking functionality is unavailable without requisite file. Please create your own or download the template from GitHub.", "light_red")
+    cprint("Benchmarking functionality is unavailable without requisite file. Please create your own or download the"
+        " template from GitHub.", "light_red")
+
 if os.path.isfile(os.path.join(Defaults.binDirectory, "programs.txt")):
     with open(os.path.join(Defaults.binDirectory, "programs.txt"), 'r') as programFile:
         for targetLine in programFile:
@@ -114,42 +131,48 @@ else:
 
 # Defines all the terminal flags the program can accept
 def commandLineParser():
+    global isStalking, isCheck, isNBO
+
     parser = argparse.ArgumentParser(description="The main command line argument parser for flag handling")
 
     #The various flags for defining the features of this utility
-    parser.add_argument('-r', '--run', type=str, help="Indicates the 'run' subroutine for the listed file(s)")
-    parser.add_argument('-sp', '--singlePoint', type=str, help="Indicates the 'single point' subroutine for the listed file(s)")
-    parser.add_argument('-b', '--bench', type=str, help="Indicates the 'benchmark' subroutine, for creating a single point becnhmark on the listed file(s)")
-    parser.add_argument('-ch', '--checkpoint', action='store_true', help="Enables checkpoint functionality for the 'run' routine")
-    parser.add_argument('-t','--test', type=str, help="Activates whatever function I'm trying to test.")
-    parser.add_argument('-cu','--cube', type=str, help="Indicates the gimmeCubes functionality on a given Gaussian16 checkpoint file.")
+    parser.add_argument('-r', '--run', type=str, help="Indicates the 'run' subroutine for the given filelist.")
+    parser.add_argument('-sp', '--singlePoint', type=str, help="Indicates the 'single point' subroutine for"
+        " the listed file(s)")
+    parser.add_argument('-b', '--bench', type=str, help="Indicates the 'benchmark' subroutine, for creating"
+        " a single point benchmark")
+    parser.add_argument('-ch', '--checkpoint', action='store_true', help="Enables checkpoint functionality "
+        "for the job creation subroutines.")
+    parser.add_argument('-cu','--cube', type=str, help="Indicates the gimmeCubes functionality on a given "
+        "Gaussian16 checkpoint file.")
     parser.add_argument('-st','--stalk', action='store_true', help="Activates job stalking.")
-    parser.add_argument('-ex', '--excel', type=str, help="Indicates the goodVibesToExcel functionality on a given GoodVibes output file.")
+    parser.add_argument('-ex', '--excel', type=str, help="Indicates the goodVibesToExcel functionality on a"
+        " given GoodVibes output file.")
     parser.add_argument('-gv', '--goodvibes', type=str, help="Activates the CompUtils interactive interface for GoodVibes.")
+    parser.add_argument('-nbo','--nbo7',action='store_true',help="Enables NBO7 keylist addition for job "
+        "creation subroutines.")
 
     # Figures out what the hell you told it to do
     args = parser.parse_args()
 
-    global isStalking
-    global isCheck
-
-    # Stalking flag first
+    # Flags that set bools come first
     if args.stalk:
         isStalking = True
     if args.checkpoint:
         isCheck = True
+    if args.nbo7:
+        isNBO = True
 
-    # Run flag handling
     if args.run:
         # Compiles the entire list of files to run (built-in 'runall' capabilities)
         jobList = glob.glob(args.run)
+        # Builds the molecule object per complex in input
         for job in jobList:
             baseName, extension = grabPaths(job)
             newMolecule = Molecule(job, baseName, 0, 0, 0, extension, baseName)
             runJob(newMolecule)
 
     if args.singlePoint:
-        # Compiles the entire list of files to run
         jobList = glob.glob(args.singlePoint)
         for job in jobList:
             baseName, extension = grabPaths(job)
@@ -167,15 +190,14 @@ def commandLineParser():
                 coordList = getCoords(job,baseName + Defaults.coordExtension)
                 newMolecule = Molecule(job, baseName, charge, multiplicity, coordList, extension, baseName)
                 genBench(newMolecule)
-
         else:
-            cprint("Notice: Benchmarking is unavailable without requisite file. Please create your own or download the template from GitHub.", "light_red")
-
-    if args.test:
-        pass
+            cprint("Notice: Benchmarking is unavailable without requisite file. Please create your own or download "
+                "the template from GitHub.", "light_red")
 
     if args.cube:
-        cubeList = str(input("Enter the list of options you want for cube files generated, separated by spaces (e.g. Pot Den Val Spin): "))
+        # Needs to run interactively in order to be useful
+        cubeList = str(input("Enter the list of options you want for cube files generated, separated by spaces (e.g. Pot"
+            " Den Val Spin): "))
         jobList = glob.glob(args.cube)
         # This splits the entered keylist into separate keys, passed into gimmeCubes as an array which can be iterated through
         cubeOptions = cubeList.split(" ")
@@ -233,10 +255,13 @@ def getCoords(fileName, outputFileName):
     Z = []
 
     with open(fileName, 'r+') as inFile, open(outputFileName, 'w') as outputFile:
+        # Maps the file into memory for reading byte-wise, without any read buffer. AFAIK this is the most memory efficient
+        # way to be able to read files of any size
         with closing(mmap(inFile.fileno(), 0, access=ACCESS_READ)) as data:
             tableHeader = "                         Standard orientation:                         "
             tableBytes = tableHeader.encode()
             finalTableHeader = regex.search(tableBytes, data, regex.REVERSE)
+            # Finds where the header ends, sets that as the pointer, and reads ahead two bytes to skip over the newline character
             pointer = finalTableHeader.ends()
             data.seek(pointer[0])
             data.read(2)
@@ -255,8 +280,7 @@ def getCoords(fileName, outputFileName):
         for k in range(len(at)):
             # Ensures the list elements are integers for dictionary pairing
             at[k] = int(at[k])
-            # Translates from Atomic Number to Atomic Symbol, along with ensuring all elements of each list are strings
-            # Build the entire line to be written, and ensure it's properly formatted
+            # Translates from Atomic Number to Atomic Symbol and builds the entire line to be written with proper formatting
             coordLine = str(atSymbol[at[k]]) + "   " + str(X[k]) + "   " + str(Y[k]) + "   " + str(Z[k]) + "\n"
             coordLine = coordLine.replace(' ', ' ')
             outputFile.write(coordLine)
@@ -265,8 +289,9 @@ def getCoords(fileName, outputFileName):
 
 # Handles extensions so I don't have to copypasta this
 def extensionGetter(method):
-    programTarget = ""
     global fileExtension
+
+    programTarget = ""
     for x in range(len(methodList)):
         if method == methodList[x]:
             programTarget = targetProgram[x]
@@ -278,26 +303,27 @@ def extensionGetter(method):
         case "Q":
             fileExtension = Defaults.qChemExtension
         case _:
-            cprint("Notice: Intended method is not specified in programs file nor hardcoded. Defaulting to Gaussian16.", "light_red")
+            cprint("Notice: Intended method is not specified in programs file nor hardcoded. Defaulting to Gaussian16.",
+            "light_red")
             fileExtension = Defaults.gaussianExtension
     return fileExtension
 
 # Gaussian16 Charge Finder in its own method
 def gaussianChargeFinder(geometryFile):
-    chargeLine = ""
-    chargeFirstSub = chargeLine.strip().split(" ")[0]
+    chargeLine = "Charge"
+    chargeLineBytes = chargeLine.encode()
     with open(geometryFile, 'r') as geomFile:
-        # This iterator finds the charge and multiplicity automatically, no more need to specify them.
-        while chargeFirstSub != "Charge":
-            chargeLine = geomFile.readline()
-            chargeFirstSub = chargeLine.strip().split(" ")[0]
-
-        chargeSub = chargeLine.strip().split(" ")
-        # This chunk handles the special case where a stupid non-breaking space is used for neutral charges?
-        if chargeSub[2] == '':
-            del chargeSub[2]
-        charge = chargeSub[2]
-        multiplicity = chargeSub[5]
+        with closing(mmap(geomFile.fileno(), 0, access=ACCESS_READ)) as data:
+            chargeLineLocation = regex.search(chargeLineBytes, data)
+            pointer = chargeLineLocation.starts()
+            data.seek(pointer[0])
+            targetLine = data.readline().decode()
+            chargeSub = targetLine.strip().split()
+            # This chunk handles the special case where a stupid non-breaking space is used for neutral charges?
+            if chargeSub[2] == '':
+                del chargeSub[2]
+            charge = chargeSub[2]
+            multiplicity = chargeSub[5]
     return charge, multiplicity
 
 # This subroutine returns file name and extension for ease-of-use
@@ -317,9 +343,11 @@ def genBench(molecule):
     startTime = time.time()
     for index in range(1, len(methodLine)):
         molecule.extensionType = extensionGetter(methodLine[index])
-        inputFile = fileCreation(molecule.rootName, molecule.extensionType, f"-{index}-" + methodLine[index].replace("(","").replace(")","") + Defaults.singlePointExtra)
+        inputFile = fileCreation(molecule.rootName, molecule.extensionType, f"-{index}-"
+            + methodLine[index].replace("(","").replace(")","") + Defaults.singlePointExtra)
         molecule.fullPath = inputFile
-        molecule.baseName = molecule.rootName + f"-{index}-" + methodLine[index].replace("(","").replace(")","") + Defaults.singlePointExtra
+        molecule.baseName = (molecule.rootName + f"-{index}-" + methodLine[index].replace("(","").replace(")","")
+            + Defaults.singlePointExtra)
         genFile(molecule,index)
         runJob(molecule)
     endTime = time.time()
@@ -342,9 +370,10 @@ def genSinglePoint(molecule):
     totalTime = round(endTime - startTime,2)
     cprint("Total single point time is " + str(totalTime) + " seconds.", "light_cyan")
 
-# Separate method for input file generation to improve code efficiency. No longer returns anything as path to input is previously stored
+# Separate method for input file generation to improve code efficiency. No longer returns anything as path to input is
+# previously stored in molecule
 def genFile(molecule, index):
-    global isCheck
+    global isCheck, isNBO
     inputFile = molecule.fullPath
     mixedBasis = False
     match molecule.extensionType:
@@ -359,16 +388,17 @@ def genFile(molecule, index):
                 if isCheck:
                     jobInput.write("\n%chk=" + molecule.baseName + ".chk")
                 # If the methodLine from benchmarking.txt is garbage, the calculation will fail. Not my fault.
-                jobInput.write("\n# " + fullMethodLine[index] + "\nUseless Comment line\n\n")
+                jobInput.write("\n# " + fullMethodLine[index].replace("\n","") + "\n\nUseless Comment line\n\n")
                 jobInput.write(molecule.charge + " " + molecule.multiplicity + "\n")
-                # Iterates through the XYZ to scrape the coordinates (getCoords isn't efficient to call repeatedly,
-                # and this is actually *much* more useful)
+                # New mixed basis checking
                 for keyWord in fullMethodLine[index].split():
                     if keyWord in Defaults.mixedBasisVariants:
                         mixedBasis = True
                         break
+                # Accessing the stored coordinate list is significantly faster in run-time than prior crappy implementation
                 for line in molecule.coordinateList:
                     jobInput.write(line)
+                # Adds in mixed basis info from local file
                 if os.path.isfile("mixedbasis.txt") and mixedBasis:
                     jobInput.write("\n")
                     with open("mixedbasis.txt") as mixedBasisFile:
@@ -378,6 +408,9 @@ def genFile(molecule, index):
                     cprint("Mixed basis information not found. Aborting.", "light_red")
                     return
                 jobInput.write("\n\n")
+                # New NBO7 section
+                if isNBO:
+                    jobInput.write(Defaults.nboKeylist + "FILE=" + molecule.baseName + "$END")
 
         case Defaults.orcaExtension:
             # Opens the job file
@@ -391,7 +424,7 @@ def genFile(molecule, index):
                 # Writes the standard ORCA formatted opening
                 jobInput.write("%pal nprocs " + jobCPU + "\nend" + "\n%maxcore " + jobMem)
                 # If the methodLine from benchmarking.txt is garbage, the calculation will fail. Not my fault.
-                jobInput.write("\n! " + fullMethodLine[index] + "\n")
+                jobInput.write("\n! " + fullMethodLine[index].replace("\n","") + "\n\n")
                 # ORCA is smart enough to read from an XYZ directly
                 jobInput.write(f"* xyz {molecule.charge} {molecule.multiplicity} \n")
                 for line in molecule.coordinateList:
@@ -403,12 +436,14 @@ def genFile(molecule, index):
 
 # This routine is for job submission to the cluster
 def runJob(molecule):
-    # Iteration is now done in commandLineParser()
+    global isStalking, stalkingSet
+
     # Sets up all the basic filenames for the rest of submission
     outputName = molecule.baseName + Defaults.outputExtension
     queueName = molecule.baseName + Defaults.queueExtension
-    global isStalking
-    global stalkingSet
+
+    # A potential minor speed uplift would be the closing(mmap()) implementation used basically everywhere else, since
+    # I've learned just how fast it is. Probably not necessary, though
     with open(molecule.fullPath, 'r+') as inputFile:
         coresLine = ""
         ramLine = ""
@@ -519,6 +554,7 @@ def runJob(molecule):
                     molecule.fullPath = molecule.baseName + Defaults.outputExtension
                     stalkingSet.add((molecule.baseName,molecule.fullPath))
 
+            # This will need updated to the modern architecture at some point
             case Defaults.qChemExtension:
                 subLine = currentLine.split('=')
                 firstSubLine = subLine[0].lower()
@@ -533,7 +569,6 @@ def runJob(molecule):
                     if firstSubLine == '%nprocshared' or firstSubLine == '%nproc':
                         cpus = int(subLine[1])
                         print("Successfully read " + str(cpus) + " cores from " + molecule.baseName + ".in")
-                        # Sets the job to run with a default amount of RAM. Does not update the input because neither of us could be bothered to care.
                 else:
                     cpus = Defaults.CPU
                     ram = cpus * Defaults.memoryRatio
@@ -577,7 +612,7 @@ def runJob(molecule):
                     molecule.fullPath = molecule.baseName + Defaults.outputExtension
                     stalkingSet.add((molecule.baseName,molecule.fullPath))
 
-# Graciously modified from my very own gimmeCubes
+# Better, interactive implementation of my own gimmeCubesv3
 def gimmeCubes(molecule, cubeKeyList):
     keyWord = ""
     queueName = ""
@@ -622,30 +657,35 @@ def gimmeCubes(molecule, cubeKeyList):
         os.remove(queueName)
         cprint(f"Submitted cube job " + molecule.baseName + " " + cubeKey + " to the cluster.", "light_green")
 
-# For realsies this time
+# Finally implemented in a way I can be proud of.
 def jobStalking(jobSet, duration, frequency):
     startTime = time.time()
-    # Prints queue in format of JOBNAME STATUS NODE/REASON START_TIME CURRENT_DURATION
+    # Prints queue in format of JOBNAME STATUS NODE/REASON START_TIME CURRENT_DURATION courtesy of my own improved
+    # obsessiveQueuev2
     command = ["squeue -h --me --format='%25j %10T %18R %S %20M'"]
     finishedJobs = []
+    # Repeats every frequency over duration
     while (time.time() - startTime) < duration * 60:
         stalkStatus = set()
+        # Tells the function that jobs you submitted are the ones to track
         for job in jobSet:
             stalkStatus.add(job[0])
+        # Executes the qeueue command for further processing
         stalker = subprocess.run(command, shell=True, capture_output=True)
         result = stalker.stdout.splitlines()
         for index in range(len(result)):
-            # noinspection PyShadowingNames
             line = result[index].decode("utf-8")
             # noinspection PyTypeChecker
             result[index] = line
             # Adds job basename to stalkStatus for comparison
             stalkStatus.add(result[index].split()[0])
 
+        # The heart of the magic, iterates over the output of the queue command using JOBNAME, STATUS, and CURRENT_DURATION
         for index in range(len(result)):
             match result[index].split()[1]:
                 case "PENDING":
-                    cprint("Job " + str(result[index].split()[0]) + " is currently pending. Expected start time is " + str(result[index].split()[3]), "light_yellow")
+                    cprint("Job " + str(result[index].split()[0]) + " is currently pending. Expected start time is "
+                       + str(result[index].split()[3]), "light_yellow")
                     stalkStatus.remove(result[index].split()[0])
                 case "RUNNING":
                     for job in jobSet:
@@ -657,24 +697,36 @@ def jobStalking(jobSet, duration, frequency):
                                         tableHeader = "         Item               Value     Threshold  Converged?"
                                         tableBytes = tableHeader.encode()
                                         finalTableHeader = regex.search(tableBytes, data, regex.REVERSE)
-                                        if len(finalTableHeader.group().decode()) != 0:
-                                            convergeCriteria = 0
-                                            pointer = finalTableHeader.ends()
-                                            data.seek(pointer[0])
-                                            data.read(2)
-                                            convergeMet = []
-                                            for outdex in range(0,4):
-                                                convergeLine = data.readline().decode()
-                                                convergeMet.append(convergeLine.split()[4])
-                                                convergeCriteria = convergeMet.count("YES")
-                            cprint("Job " + str(result[index].split()[0]) + " is currently running, and has converged on " + str(convergeCriteria) + " out of 4 criteria. Current duration is " + str(result[index].split()[4]), "light_magenta")
-                            stalkStatus.remove(result[index].split()[0])
+                                        # Checks for convergence section header, defaults to Unknown or Not Found
+                                        if finalTableHeader is not None:
+                                            if len(finalTableHeader.group().decode()) != 0:
+                                                convergeCriteria = 0
+                                                pointer = finalTableHeader.ends()
+                                                data.seek(pointer[0])
+                                                data.read(2)
+                                                convergeMet = []
+                                                for outdex in range(0,4):
+                                                    convergeLine = data.readline().decode()
+                                                    convergeMet.append(convergeLine.split()[4])
+                                                    convergeCriteria = convergeMet.count("YES")
+                                            cprint("Job " + str(result[index].split()[0]) + " is currently running, and "
+                                                "has converged on " + str(convergeCriteria) + " out of 4 criteria. Current "
+                                                "duration is " + str(result[index].split()[4]), "light_magenta")
+                                            stalkStatus.remove(result[index].split()[0])
+                                        else:
+                                            cprint("Job " + str(result[index].split()[0]) + " is currently running. Convergence "
+                                                "criterion header not found. Current duration is " + str(result[index].split()[4]),
+                                           "light_magenta")
+                                            stalkStatus.remove(result[index].split()[0])
                             break
 
         jobCopy = jobSet.copy()
 
+        # Finds how the job terminated and stores the data
         for job in jobCopy:
-            if job[0] in stalkStatus and os.path.isfile(job[1]):
+            # If the output is created during the execution of the subroutine, it won't be detected in the prior
+            # block and it will be size 0
+            if job[0] in stalkStatus and os.path.isfile(job[1]) and os.path.getsize(job[1]) > 0:
                 with open(job[1], "r+") as file:
                     with closing(mmap(file.fileno(), 0, access=ACCESS_READ)) as data:
                         for termination in Defaults.terminationVariants:
@@ -684,13 +736,17 @@ def jobStalking(jobSet, duration, frequency):
                                 finishedJobs.append((job[0], termination))
                                 break
                 jobSet.remove(job)
+            elif job[0] in stalkStatus and os.path.isfile(job[1]) and os.path.getsize(job[1]) == 0:
+                cprint("Job " + job[0] + " started running during stalk subroutine execution.", "light_magenta")
 
+        # Reports job termination data
         for job in finishedJobs:
             if job[1] == Defaults.terminationVariants[0] or job[1] == Defaults.terminationVariants[1]:
                 cprint("Job " + str(job[0]) + " has encountered " + Defaults.terminationVariants[0],"light_green")
             if job[1] == Defaults.terminationVariants[2]:
                 cprint("Job " + str(job[0]) + " has encountered " + Defaults.terminationVariants[2], "light_red")
 
+        # If all jobs for stalking are done, finish execution and release the terminal
         if len(jobSet) == 0:
             cprint("All jobs tagged for stalking have finished.","light_cyan")
             break
@@ -698,11 +754,12 @@ def jobStalking(jobSet, duration, frequency):
         cprint("Waiting " + str(frequency*60) + " seconds to ping the queue again.","light_blue")
         time.sleep(frequency * 60)
 
+    # Timeout warning
     if (time.time() - startTime) > duration * 60:
         cprint("Job stalking terminated by timeout. Your jobs are still running.","light_red")
         cprint("Consider editing the default stalk duration and frequency if your jobs regularly timeout.","light_red")
 
-# Because everyone hates remembering manuals
+# Because everyone hates remembering manuals. Walks through the most common use-cases with catch-all final custom keylist
 def goodVibesInteractive():
     keyList = []
     isQuasiHarmonic = str(input("Utilize quasiharmonic S and H correction (Grimme)? (y/n)"))
@@ -741,6 +798,7 @@ def goodVibesInteractive():
         finalKeyList = finalKeyList + " " + keyList[key]
     return finalKeyList
 
+# An improved version of goodVibesToExcelv3 that now properly formats the numbers in Excel as numbers
 def goodVibesProcessor(inputFile):
     outputData = []
     header = "Structure"
@@ -761,10 +819,12 @@ def goodVibesProcessor(inputFile):
                 outputData.append(subLines)
                 line = data.readline().decode().strip()
     dataFrame = pandas.DataFrame(outputData)
+    # Sets the headers to the table header from GoodVibes
     dataFrame.columns = dataFrame.iloc[0]
+    # Removes the header from the rest of the data
     dataFrame = dataFrame[1:]
-    writer = pandas.ExcelWriter("GoodVibes.xlsx", engine='xlsxwriter',
-                                engine_kwargs={'options': {'strings_to_numbers': True}})
+    # This whole block is just to get the numbers to number properly
+    writer = pandas.ExcelWriter("GoodVibes.xlsx", engine='xlsxwriter', engine_kwargs={'options': {'strings_to_numbers': True}})
     dataFrame.to_excel(writer, index=False)
     workBook = writer.book
     workSheet = writer.sheets['Sheet1']
