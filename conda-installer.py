@@ -2,7 +2,7 @@
 # Welcome to the Computational Chemistry Utilities Installer!
 # This utility serves to install all potentially important modules that compUtils (and normal work) leverages!
 # Written by Christian Drew Knox, for the Peng Liu Research Group
-# Last major commit: 2025-07-30
+# Last major commit: 2025-10-XX
 
 import os
 
