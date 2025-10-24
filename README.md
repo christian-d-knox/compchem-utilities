@@ -1,4 +1,4 @@
-This README is essentially a Quick-Start guide, and is NOT a substitute for the Manual. Please read it if you have amy
+This README is essentially a Quick-Start guide, and is NOT a substitute for the Manual. Please read it if you have any
 questions about how the program works, how its flags operate, etc.
 
 The bare minimum requirement for CompUtils to operate properly are the compUtils.py , compUtils.yml , and conda-installer.py
