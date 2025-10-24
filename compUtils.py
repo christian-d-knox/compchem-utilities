@@ -9,6 +9,7 @@
 import os
 import argparse
 import glob
+#import sys
 import time
 import subprocess
 from termcolor import cprint
@@ -80,6 +81,7 @@ isCheck = False
 isNBO = False
 isCustomTarget = True
 canBench = True
+indexOverride = 0
 methodLine = []
 fullMethodLine = []
 fileExtension = ""
@@ -131,7 +133,7 @@ else:
 
 # Defines all the terminal flags the program can accept
 def commandLineParser():
-    global isStalking, isCheck, isNBO
+    global isStalking, isCheck, isNBO, indexOverride
 
     parser = argparse.ArgumentParser(description="The main command line argument parser for flag handling")
 
@@ -148,6 +150,9 @@ def commandLineParser():
     parser.add_argument('-st','--stalk', action='store_true', help="Activates job stalking.")
     parser.add_argument('-ex', '--excel', type=str, help="Indicates the goodVibesToExcel functionality on a"
         " given GoodVibes output file.")
+    parser.add_argument('-ovr', '--override', type=int, help="Indicates an integer override for indexing, used"
+        " for accessing single point methods that are not the first line in a controlled manner. Keep in mind index counting"
+        " starts from 0, not from 1.")
     parser.add_argument('-gv', '--goodvibes', type=str, help="Activates the CompUtils interactive interface for GoodVibes.")
     parser.add_argument('-nbo','--nbo7',action='store_true',help="Enables NBO7 keylist addition for job "
         "creation subroutines.")
@@ -162,6 +167,9 @@ def commandLineParser():
         isCheck = True
     if args.nbo7:
         isNBO = True
+    if args.override:
+        indexOverride = args.override
+        cprint("Registered " + str(indexOverride) + " as the index override.", "light_cyan")
 
     if args.run:
         # Compiles the entire list of files to run (built-in 'runall' capabilities)
@@ -303,8 +311,8 @@ def extensionGetter(method):
         case "Q":
             fileExtension = Defaults.qChemExtension
         case _:
-            cprint("Notice: Intended method is not specified in programs file nor hardcoded. Defaulting to Gaussian16.",
-            "light_red")
+            cprint("Notice: One or more of your intended methods is not specified in programs file nor hardcoded. "
+                   "Defaulting to Gaussian16.","light_red")
             fileExtension = Defaults.gaussianExtension
     return fileExtension
 
@@ -339,19 +347,29 @@ def grabPaths(fileName):
 def genBench(molecule):
     # First, make the original Single Point
     genSinglePoint(molecule)
+    global indexOverride
     # Since methodFile is defined globally, no need to iterate a line to catch-up after genSinglePoint
     startTime = time.time()
-    for index in range(1, len(methodLine)):
+    if indexOverride != 0:
+        indexShift = indexOverride + 1
+    else:
+        indexShift = 1
+    for index in range(indexShift, len(methodLine)):
         molecule.extensionType = extensionGetter(methodLine[index])
-        inputFile = fileCreation(molecule.rootName, molecule.extensionType, f"-{index}-"
-            + methodLine[index].replace("(","").replace(")","") + Defaults.singlePointExtra)
+        isSMD = regex.search("smd", fullMethodLine[index], regex.IGNORECASE)
+        if isSMD:
+            filemaskExtra = (f"-{index}-" + methodLine[index].replace("(", "").replace(")", "")
+                + "SMD" + Defaults.singlePointExtra)
+        else:
+            filemaskExtra = (f"-{index}-" + methodLine[index].replace("(","").replace(")","")
+                + Defaults.singlePointExtra)
+        inputFile = fileCreation(molecule.rootName, molecule.extensionType, filemaskExtra)
         molecule.fullPath = inputFile
-        molecule.baseName = (molecule.rootName + f"-{index}-" + methodLine[index].replace("(","").replace(")","")
-            + Defaults.singlePointExtra)
+        molecule.baseName = (molecule.rootName + filemaskExtra)
         genFile(molecule,index)
         runJob(molecule)
     endTime = time.time()
-    totalTime = round(endTime-startTime,2)
+    totalTime = round(endTime - startTime,2)
     cprint("Total time for non-SP benchmark generation is: " + str(totalTime) + " seconds.", "light_cyan")
 
 def genSinglePoint(molecule):
@@ -362,9 +380,13 @@ def genSinglePoint(molecule):
     inputFile = fileCreation(molecule.baseName, molecule.extensionType, Defaults.singlePointExtra)
     molecule.fullPath = inputFile
     molecule.baseName = molecule.baseName + Defaults.singlePointExtra
+    if indexOverride != 0:
+        index = indexOverride
+    else:
+        index = 0
 
     # Calls the separate file generation method, feeds directly into runJob
-    genFile(molecule, 0)
+    genFile(molecule, index)
     runJob(molecule)
     endTime = time.time()
     totalTime = round(endTime - startTime,2)
@@ -833,6 +855,7 @@ def goodVibesProcessor(inputFile):
     writer.close()
 
 commandLineParser()
+#print(sys.orig_argv)
 
 if isStalking:
     jobStalking(stalkingSet, Defaults.stalkDuration, Defaults.stalkFrequency)
