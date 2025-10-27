@@ -2,7 +2,7 @@
 # Welcome to Computational Chemistry Utilities!
 # Now bigger, harder, faster, and stronger than ever before!
 # This package has been hand-crafted lovingly through untold pain and suffering
-# Last major commit to the project was 2025-10-24 (previously 2025-10-23)
+# Last major commit to the project was 2025-10-27 (previously 2025-10-24)
 # Last minor commit to the project was 2025-10-7
 
 # Imports the various libraries needed for all functions()
@@ -56,7 +56,7 @@ class Defaults:
     spinCube = "Spin"
     # Job stalking related
     stalkDuration = 120
-    stalkFrequency = 0.25
+    stalkFrequency = 5
     # Job submission related. Edit this across clusters
     gaussianNonVariant = ["\nmodule purge\nmodule load gaussian\n\n",
                           "export GAUSS_SCRDIR=$SLURM_SCRATCH\nulimit -s unlimited\nexport LC_COLLATE=C\n"]
