@@ -2,13 +2,14 @@
 # Welcome to Computational Chemistry Utilities!
 # Now bigger, harder, faster, and stronger than ever before!
 # This package has been hand-crafted lovingly through untold pain and suffering
-# Last major commit to the project was 2025-10-21 (previously 2025-10-20)
+# Last major commit to the project was 2025-10-24 (previously 2025-10-23)
 # Last minor commit to the project was 2025-10-7
 
 # Imports the various libraries needed for all functions()
 import os
 import argparse
 import glob
+#import sys
 import time
 import subprocess
 from termcolor import cprint
@@ -55,9 +56,9 @@ class Defaults:
     spinCube = "Spin"
     # Job stalking related
     stalkDuration = 120
-    stalkFrequency = 5
+    stalkFrequency = 0.25
     # Job submission related. Edit this across clusters
-    gaussianNonVariant = ["#SBATCH --nodes=1\n","\nmodule purge\nmodule load gaussian\n\n",
+    gaussianNonVariant = ["\nmodule purge\nmodule load gaussian\n\n",
                           "export GAUSS_SCRDIR=$SLURM_SCRATCH\nulimit -s unlimited\nexport LC_COLLATE=C\n"]
     orcaNonVariant = ["\n# Load the module\nmodule purge\n","module load orca/6.0.1\n\n",
                       "# Copy files to SLURM_SCRATCH\n","for i in ${files[@]}; do\n",
@@ -69,6 +70,26 @@ class Defaults:
     coreLineVariants = ["%nproc","%nprocshared","%pal"]
     ramLineVariants = ["%mem","%maxcore"]
     terminationVariants = ["normal termination","terminated normally","error termination"]
+    submissionList = []
+    hpcType = "H2P"
+
+class Stampede3Submission:
+    # JobName OutputName Error Nodes Partition Time
+    submissionList = ["#!/usr/bin/env bash","#SBATCH -J ","#SBATCH -o ","#SBATCH -e error.%j","#SBATCH -N 1 -n 1",
+                      "#SBATCH -p ","#SBATCH -t "]
+    hpcType = "Stampede3"
+
+class H2PSubmission:
+    # JobName OutputName Nodes CPUs Mem Time Cluster Partition
+    submissionList = ["#!/bin/bash -l","#SBATCH -J ","#SBATCH -o ","#SBATCH -N 1",
+                      "#SBATCH --ntasks-per-node=","#SBATCH --mem=","#SBATCH -t ","#SBATCH -M ","#SBATCH -p "]
+    hpcType = "H2P"
+
+class Bridges2Submission:
+    # JobName Nodes Partition NTasks Time
+    submissionList = ["#!/bin/csh","#SBATCH -J ","#SBATCH -N 1","#SBATCH -p ",
+                      "#SBATCH --ntasks-per-node=","#SBATCH -t "]
+    hpcType = "Bridges2"
 
 # Defines global variables for use in various functions
 fileNames = []
@@ -80,6 +101,7 @@ isCheck = False
 isNBO = False
 isCustomTarget = True
 canBench = True
+indexOverride = 0
 methodLine = []
 fullMethodLine = []
 fileExtension = ""
@@ -113,8 +135,8 @@ else:
     fullMethodLine = Defaults.methodLine
     methodLine = Defaults.method
     cprint("Notice: Could not find benchmarking.txt in ~/bin/.", "light_red")
-    cprint("Benchmarking functionality is unavailable without requisite file. Please create your own or download the"
-        " template from GitHub.", "light_red")
+    cprint("Benchmarking functionality is unavailable without requisite file. Please create your own or download "
+           "the template from GitHub.", "light_red")
 
 if os.path.isfile(os.path.join(Defaults.binDirectory, "programs.txt")):
     with open(os.path.join(Defaults.binDirectory, "programs.txt"), 'r') as programFile:
@@ -129,28 +151,94 @@ else:
     cprint("Notice: Could not find programs.txt in ~/bin/.", "light_red")
     cprint("Defaulting to hardcoded method targets.", "light_red")
 
+def firstTimeSetup():
+    systemType = str(input("Enter the name of the HPC cluster you are using (H2P, Expanse, Bridges2, Stampede3) :"))
+    with open(os.path.join(Defaults.binDirectory, "hpc.type"), "w") as hpcFile:
+        match systemType:
+            case "H2P":
+                hpcFile.write("H2P")
+                Defaults.hpcType = "H2P"
+                Defaults.submissionList = H2PSubmission.submissionList
+            case "Bridges2":
+                hpcFile.write("Bridges2")
+                Defaults.hpcType = "Bridges2"
+                Defaults.submissionList = Bridges2Submission.submissionList
+                Defaults.hpcType = "Bridges2"
+                Defaults.partition = "RM-shared"
+                Defaults.memoryRatio = 2
+                Defaults.memoryBuffer = 0
+                Defaults.highMemoryRatio = 2
+            case "Expanse":
+                print("CompUtils is not supported on the Expanse architecture due to being outdated and messy. Have a good day.")
+            case "Stampede3":
+                hpcFile.write("Stampede3")
+                Defaults.hpcType = "Stampede3"
+                Defaults.partition = "icx"
+                Defaults.CPU = 80
+                Defaults.memoryRatio = 200/80
+                Defaults.memoryBuffer = 0
+                Defaults.highMemoryRatio = 200/80
+                Defaults.submissionList = Stampede3Submission.submissionList
+            case _:
+                cprint("Unknown HPC architecture input. Aborting.", "light_red")
+                return
+
+if os.path.isfile(os.path.join(Defaults.binDirectory, "hpc.type")):
+    with open(os.path.join(Defaults.binDirectory, "hpc.type"), "r") as hpcFile:
+        hpcLine = hpcFile.readline().strip()
+        match hpcLine:
+            case "H2P":
+                Defaults.hpcType = "H2P"
+                Defaults.submissionList = H2PSubmission.submissionList
+                Defaults.cluster = "smp"
+                Defaults.partition = "pliu"
+            case "Bridges2":
+                Defaults.hpcType = "Bridges2"
+                Defaults.partition = "RM-shared"
+                Defaults.memoryRatio = 2
+                Defaults.memoryBuffer = 0
+                Defaults.highMemoryRatio = 2
+                Defaults.submissionList = Bridges2Submission.submissionList
+            case "Stampede3":
+                Defaults.hpcType = "Stampede3"
+                Defaults.partition = "icx"
+                Defaults.CPU = 80
+                Defaults.memoryRatio = 200/80
+                Defaults.memoryBuffer = 0
+                Defaults.highMemoryRatio = 200/80
+                Defaults.submissionList = Stampede3Submission.submissionList
+            case "Expanse":
+                print("CompUtils is NOT supported on Expanse. Have a good day.")
+            case _:
+                cprint("Unknown HPC architecture input. Aborting.", "light_red")
+else:
+    firstTimeSetup()
+
 # Defines all the terminal flags the program can accept
 def commandLineParser():
-    global isStalking, isCheck, isNBO
+    global isStalking, isCheck, isNBO, indexOverride
 
     parser = argparse.ArgumentParser(description="The main command line argument parser for flag handling")
 
     #The various flags for defining the features of this utility
     parser.add_argument('-r', '--run', type=str, help="Indicates the 'run' subroutine for the given filelist.")
     parser.add_argument('-sp', '--singlePoint', type=str, help="Indicates the 'single point' subroutine for"
-        " the listed file(s)")
+                                                               " the listed file(s)")
     parser.add_argument('-b', '--bench', type=str, help="Indicates the 'benchmark' subroutine, for creating"
-        " a single point benchmark")
+                                                        " a single point benchmark")
     parser.add_argument('-ch', '--checkpoint', action='store_true', help="Enables checkpoint functionality "
-        "for the job creation subroutines.")
+                                                                         "for the job creation subroutines.")
     parser.add_argument('-cu','--cube', type=str, help="Indicates the gimmeCubes functionality on a given "
-        "Gaussian16 checkpoint file.")
+                                                       "Gaussian16 checkpoint file.")
     parser.add_argument('-st','--stalk', action='store_true', help="Activates job stalking.")
     parser.add_argument('-ex', '--excel', type=str, help="Indicates the goodVibesToExcel functionality on a"
-        " given GoodVibes output file.")
+                                                         " given GoodVibes output file.")
+    parser.add_argument('-ovr', '--override', type=int, help="Indicates an integer override for indexing, used"
+                                                             " for accessing single point methods that are not the first"
+                                                             " line in a controlled manner. Keep in mind index counting "
+                                                             "starts from 0, not from 1.")
     parser.add_argument('-gv', '--goodvibes', type=str, help="Activates the CompUtils interactive interface for GoodVibes.")
-    parser.add_argument('-nbo','--nbo7',action='store_true',help="Enables NBO7 keylist addition for job "
-        "creation subroutines.")
+    parser.add_argument('-nbo','--nbo7',action='store_true',help="Enables NBO7 keylist addition for job creation subroutines.")
 
     # Figures out what the hell you told it to do
     args = parser.parse_args()
@@ -162,6 +250,9 @@ def commandLineParser():
         isCheck = True
     if args.nbo7:
         isNBO = True
+    if args.override:
+        indexOverride = args.override
+        cprint("Registered " + str(indexOverride) + " as the index override.", "light_cyan")
 
     if args.run:
         # Compiles the entire list of files to run (built-in 'runall' capabilities)
@@ -303,8 +394,8 @@ def extensionGetter(method):
         case "Q":
             fileExtension = Defaults.qChemExtension
         case _:
-            cprint("Notice: Intended method is not specified in programs file nor hardcoded. Defaulting to Gaussian16.",
-            "light_red")
+            cprint("Notice: One or more of your intended methods is not specified in programs file nor hardcoded. "
+                   "Defaulting to Gaussian16.","light_red")
             fileExtension = Defaults.gaussianExtension
     return fileExtension
 
@@ -339,19 +430,29 @@ def grabPaths(fileName):
 def genBench(molecule):
     # First, make the original Single Point
     genSinglePoint(molecule)
+    global indexOverride
     # Since methodFile is defined globally, no need to iterate a line to catch-up after genSinglePoint
     startTime = time.time()
-    for index in range(1, len(methodLine)):
+    if indexOverride != 0:
+        indexShift = indexOverride + 1
+    else:
+        indexShift = 1
+    for index in range(indexShift, len(methodLine)):
         molecule.extensionType = extensionGetter(methodLine[index])
-        inputFile = fileCreation(molecule.rootName, molecule.extensionType, f"-{index}-"
-            + methodLine[index].replace("(","").replace(")","") + Defaults.singlePointExtra)
+        isSMD = regex.search("smd", fullMethodLine[index], regex.IGNORECASE)
+        if isSMD:
+            filemaskExtra = (f"-{index}-" + methodLine[index].replace("(", "").replace(")", "")
+                + "SMD" + Defaults.singlePointExtra)
+        else:
+            filemaskExtra = (f"-{index}-" + methodLine[index].replace("(","").replace(")","")
+                + Defaults.singlePointExtra)
+        inputFile = fileCreation(molecule.rootName, molecule.extensionType, filemaskExtra)
         molecule.fullPath = inputFile
-        molecule.baseName = (molecule.rootName + f"-{index}-" + methodLine[index].replace("(","").replace(")","")
-            + Defaults.singlePointExtra)
+        molecule.baseName = (molecule.rootName + filemaskExtra)
         genFile(molecule,index)
         runJob(molecule)
     endTime = time.time()
-    totalTime = round(endTime-startTime,2)
+    totalTime = round(endTime - startTime,2)
     cprint("Total time for non-SP benchmark generation is: " + str(totalTime) + " seconds.", "light_cyan")
 
 def genSinglePoint(molecule):
@@ -362,9 +463,13 @@ def genSinglePoint(molecule):
     inputFile = fileCreation(molecule.baseName, molecule.extensionType, Defaults.singlePointExtra)
     molecule.fullPath = inputFile
     molecule.baseName = molecule.baseName + Defaults.singlePointExtra
+    if indexOverride != 0:
+        index = indexOverride
+    else:
+        index = 0
 
     # Calls the separate file generation method, feeds directly into runJob
-    genFile(molecule, 0)
+    genFile(molecule, index)
     runJob(molecule)
     endTime = time.time()
     totalTime = round(endTime - startTime,2)
@@ -410,7 +515,7 @@ def genFile(molecule, index):
                 jobInput.write("\n\n")
                 # New NBO7 section
                 if isNBO:
-                    jobInput.write(Defaults.nboKeylist + "FILE=" + molecule.baseName + "$END")
+                    jobInput.write(Defaults.nboKeylist + "FILE=" + molecule.baseName + " $END")
 
         case Defaults.orcaExtension:
             # Opens the job file
@@ -434,6 +539,92 @@ def genFile(molecule, index):
         case Defaults.qChemExtension:
             pass
 
+# Reorganized! Now handles SLURM commands independently because of HPC cluster agnosticism
+def slurmHandler(molecule,queueName,outputName,firstFiveLines):
+    coresLine, ramLine, cpus, jobRam = "", "", 0, 0
+    match molecule.extensionType:
+        case Defaults.gaussianExtension:
+            for line in firstFiveLines:
+                if regex.search(Defaults.coreLineVariants[0], line) or regex.search(Defaults.coreLineVariants[1], line):
+                    coresLine = line
+                if regex.search(Defaults.ramLineVariants[0], line):
+                    ramLine = line
+            if len(coresLine) == 0:
+                cpus = Defaults.CPU
+                cprint("Couldn't find CPU count in input file. Submitting instead according to Defaults.", "light_red")
+            else:
+                cpus = coresLine.strip().split("=")[1]
+            if len(ramLine) == 0:
+                ram = cpus * Defaults.memoryRatio
+                jobRam = ram + Defaults.memoryBuffer
+                cprint("Couldn't find RAM count in input file. Submitting instead according to Defaults.", "light_red")
+            else:
+                ram = int(ramLine.strip().split("=")[1].replace("GB", ""))
+                jobRam = ram + Defaults.memoryBuffer
+
+        case Defaults.orcaExtension:
+            for line in firstFiveLines:
+                if regex.search(Defaults.coreLineVariants[2], line):
+                    coresLine = line
+                if regex.search(Defaults.ramLineVariants[1], line):
+                    ramLine = line
+            if len(coresLine) == 0:
+                cpus = Defaults.CPU
+                cprint("Couldn't find CPU count in input file. Submitting instead according to Defaults.",
+                       "light_red")
+            else:
+                cpus = coresLine.strip().split()[2]
+            if len(ramLine) == 0:
+                ram = cpus * Defaults.memoryRatio
+                jobRam = ram + Defaults.memoryBuffer
+                cprint("Couldn't find RAM count in input file. Submitting instead according to Defaults.",
+                       "light_red")
+            else:
+                ram = int(ramLine.strip().split()[1]) / 1000
+                jobRam = int(int(cpus) * ram + Defaults.memoryBuffer)
+
+        case Defaults.qChemExtension:
+            for line in firstFiveLines:
+                if regex.search(Defaults.coreLineVariants[0], line) or regex.search(Defaults.coreLineVariants[1], line):
+                    coresLine = line
+                if regex.search(Defaults.ramLineVariants[0], line):
+                    ramLine = line
+            if len(coresLine) == 0:
+                cpus = Defaults.CPU
+                cprint("Couldn't find CPU count in input file. Submitting instead according to Defaults.", "light_red")
+            else:
+                cpus = coresLine.strip().split("=")[1]
+            if len(ramLine) == 0:
+                ram = cpus * Defaults.memoryRatio
+                jobRam = ram + Defaults.memoryBuffer
+                cprint("Couldn't find RAM count in input file. Submitting instead according to Defaults.", "light_red")
+            else:
+                ram = int(ramLine.strip().split("=")[1].replace("GB", ""))
+                jobRam = ram + Defaults.memoryBuffer
+
+        case _:
+            cpus = Defaults.CPU
+            jobRam = cpus * Defaults.memoryRatio + Defaults.memoryBuffer
+
+    with open(queueName, 'w') as outputFile:
+        for line in Defaults.submissionList:
+            if regex.search("-J", line):
+                outputFile.write(line + str(molecule.baseName) + "\n")
+            elif regex.search("-o", line):
+                outputFile.write(line + outputName + "\n")
+            elif regex.search("--ntasks", line):
+                outputFile.write(line + str(cpus) + "\n")
+            elif regex.search("--mem", line):
+                outputFile.write(line + str(jobRam) + "GB\n")
+            elif regex.search("-t", line):
+                outputFile.write(line + Defaults.wallTime + ":00:00\n")
+            elif regex.search("-p", line):
+                outputFile.write(line + Defaults.partition + "\n")
+            elif regex.search("-M", line):
+                outputFile.write(line + Defaults.cluster + "\n")
+            else:
+                outputFile.write(line + "\n")
+
 # This routine is for job submission to the cluster
 def runJob(molecule):
     global isStalking, stalkingSet
@@ -445,8 +636,6 @@ def runJob(molecule):
     # A potential minor speed uplift would be the closing(mmap()) implementation used basically everywhere else, since
     # I've learned just how fast it is. Probably not necessary, though
     with open(molecule.fullPath, 'r+') as inputFile:
-        coresLine = ""
-        ramLine = ""
         firstFiveLines = []
         # Reads the first line of the file
         currentLine = inputFile.readline().strip()
@@ -461,83 +650,25 @@ def runJob(molecule):
         for index in range(0,4):
             firstFiveLines.append(inputFile.readline().strip())
 
+        slurmHandler(molecule, queueName, outputName, firstFiveLines)
+
         match molecule.extensionType:
             case Defaults.gaussianExtension:
-                # NEW!! Uses regex to search for substrings in any order in the top 5 lines of input. No more stickler formatting!
-                for line in firstFiveLines:
-                    if regex.search(Defaults.coreLineVariants[0],line) or regex.search(Defaults.coreLineVariants[1],line):
-                        coresLine = line
-                    if regex.search(Defaults.ramLineVariants[0],line):
-                        ramLine = line
-                if len(coresLine) == 0:
-                    cpus = Defaults.CPU
-                    cprint("Couldn't find CPU count in input file. Submitting instead according to Defaults.","light_red")
-                else:
-                    cpus = coresLine.strip().split("=")[1]
-                if len(ramLine) == 0:
-                    ram = cpus * Defaults.memoryRatio
-                    jobRam = ram + Defaults.memoryBuffer
-                    cprint("Couldn't find RAM count in input file. Submitting instead according to Defaults.","light_red")
-                else:
-                    ram = int(ramLine.strip().split("=")[1].replace("GB",""))
-                    jobRam = ram + Defaults.memoryBuffer
-
-                with open(queueName, 'w') as outputFile:
-                    # Writes the CMD for submission
-                    outputFile.write("#!/bin/bash -l\n")
-                    outputFile.write("#SBATCH --job-name=" + str(molecule.baseName) + "\n")
-                    outputFile.write("#SBATCH --output=" + outputName + "\n")
-                    outputFile.write("#SBATCH --ntasks-per-node=" + str(cpus) + "\n")
-                    outputFile.write("#SBATCH --mem=" + str(jobRam) + "GB\n")
-                    outputFile.write("#SBATCH --time=" + Defaults.wallTime + ":00:00\n")
-                    outputFile.write("#SBATCH --cluster=" + Defaults.cluster + "\n")
-                    outputFile.write("#SBATCH --partition=" + Defaults.partition + "\n")
+                with open(queueName, 'a') as outputFile:
                     for nonVariantLine in Defaults.gaussianNonVariant:
                         outputFile.write(nonVariantLine)
                     outputFile.write("\ng16 < " + molecule.fullPath + "\n\n")
 
                 os.system("sbatch " + queueName)
-                os.remove(queueName)
+                #os.remove(queueName)
                 cprint(f"Submitted job " + molecule.baseName + " to Gaussian16", "light_green")
                 if isStalking:
                     molecule.fullPath = molecule.baseName + Defaults.outputExtension
                     stalkingSet.add((molecule.baseName,molecule.fullPath))
 
             case Defaults.orcaExtension:
-                # NEW!! Uses regex to search for substrings in any order in the top 5 lines of input. No more stickler formatting!
-                for line in firstFiveLines:
-                    if regex.search(Defaults.coreLineVariants[2], line):
-                        coresLine = line
-                    if regex.search(Defaults.ramLineVariants[1], line):
-                        ramLine = line
-                if len(coresLine) == 0:
-                    cpus = Defaults.CPU
-                    cprint("Couldn't find CPU count in input file. Submitting instead according to Defaults.",
-                           "light_red")
-                else:
-                    cpus = coresLine.strip().split()[2]
-                if len(ramLine) == 0:
-                    ram = cpus * Defaults.memoryRatio
-                    jobRam = ram + Defaults.memoryBuffer
-                    cprint("Couldn't find RAM count in input file. Submitting instead according to Defaults.",
-                           "light_red")
-                else:
-                    ram = int(ramLine.strip().split()[1])/1000
-                    jobRam = int(int(cpus)*ram + Defaults.memoryBuffer)
-
-                with open(queueName, 'w') as outputFile:
-                    # Writes the CMD for job submission
-                    outputFile.write("#!/bin/bash -l\n")
-                    outputFile.write("#SBATCH --job-name=" + str(molecule.baseName) + "\n")
-                    outputFile.write("#SBATCH --output=" + outputName + "\n")
-                    outputFile.write("#SBATCH --nodes=1\n")
-                    outputFile.write("#SBATCH --mem=" + str(jobRam) + "GB\n")
-                    outputFile.write("#SBATCH --ntasks-per-node=" + str(cpus) + "\n")
-                    outputFile.write("#SBATCH --time=" + Defaults.wallTime + ":00:00\n")
-                    outputFile.write("#SBATCH --cluster=" + Defaults.cluster + "\n")
-                    outputFile.write("#SBATCH --partition=" + Defaults.partition + "\n")
-
-                    # Now runs in ORCA 6.0.0 instead of 4.2.0 .
+                with open(queueName, 'a') as outputFile:
+                    # Now runs in ORCA 6.0.1 instead of 4.2.0
                     for index in range(0,3):
                         outputFile.write(Defaults.orcaNonVariant[index])
                     outputFile.write("files=(" + str(molecule.baseName + Defaults.orcaExtension) + ")\n")
@@ -548,7 +679,7 @@ def runJob(molecule):
                         outputFile.write(Defaults.orcaNonVariant[index])
 
                 os.system("sbatch " + queueName)
-                os.remove(queueName)
+                #os.remove(queueName)
                 cprint(f"Submitted job " + molecule.baseName + " to ORCA 6.0.1", "light_green")
                 if isStalking:
                     molecule.fullPath = molecule.baseName + Defaults.outputExtension
@@ -556,37 +687,7 @@ def runJob(molecule):
 
             # This will need updated to the modern architecture at some point
             case Defaults.qChemExtension:
-                subLine = currentLine.split('=')
-                firstSubLine = subLine[0].lower()
-                if firstSubLine == '%mem':
-                    ram = int(subLine[1].replace("GB", ""))
-                    jobRam = ram + 2
-                    print("Successfully read memory and will submit with " + str(ram) + " + 2 GB")
-
-                    currentLine = inputFile.readline().strip()
-                    subLine = currentLine.split('=')
-                    firstSubLine = subLine[0].lower()
-                    if firstSubLine == '%nprocshared' or firstSubLine == '%nproc':
-                        cpus = int(subLine[1])
-                        print("Successfully read " + str(cpus) + " cores from " + molecule.baseName + ".in")
-                else:
-                    cpus = Defaults.CPU
-                    ram = cpus * Defaults.memoryRatio
-                    jobRam = ram + 2
-                    print("Couldn't find RAM amount and will submit with " + str(ram) + " + 2 GB instead")
-
-                with open(queueName, 'w') as outputFile:
-                    # Writes queueFile for submission to the cluster
-                    outputFile.write("#!/bin/bash -l\n")
-                    outputFile.write("#SBATCH --job-name=" + molecule.baseName + "\n")
-                    outputFile.write("#SBATCH --output=" + outputName + "\n")
-                    outputFile.write("#SBATCH --ntasks-per-node=" + str(cpus) + "\n")
-                    outputFile.write("#SBATCH --mem=" + str(jobRam) + "\n")
-                    outputFile.write("#SBATCH --time=" + Defaults.wallTime + ":00:00\n")
-                    outputFile.write("#SBATCH --cluster=" + Defaults.cluster + "\n")
-                    outputFile.write("#SBATCH --partition=" + Defaults.partition + "\n")
-                    outputFile.write("#SBATCH --nodes=1\n\n")
-
+                with open(queueName, 'a') as outputFile:
                     outputFile.write("module purge\nmodule load qchem/6.3.0-pliu\n\n\n")
                     # This crap was in the original and I have no clue if it's still necessary
                     # output.write("export QCSCRATCH=$LOCAL\n")
@@ -602,11 +703,11 @@ def runJob(molecule):
                     # Re-wrote the script in order to make this line *actually* match the Q-Chem documentation
                     # Re-wrote to allow nthreads to match ncpu since each thread only runs on 1 CPU (see Q-Chem manual)
                     # Do NOT specify outfile, it LITERALLY breaks shit for some reason
-                    outputFile.write("qchem -slurm -nt " + str(cpus) + " " + molecule.fullPath + " " + "\n")
+                    #outputFile.write("qchem -slurm -nt " + str(cpus) + " " + molecule.fullPath + " " + "\n")
                     outputFile.write("du -h\n\n")
 
                 os.system("sbatch " + queueName)
-                os.remove(queueName)
+                #os.remove(queueName)
                 cprint(f"Submitted job " + molecule.baseName + " to Q-Chem 6.3", "light_green")
                 if isStalking:
                     molecule.fullPath = molecule.baseName + Defaults.outputExtension
@@ -614,9 +715,7 @@ def runJob(molecule):
 
 # Better, interactive implementation of my own gimmeCubesv3
 def gimmeCubes(molecule, cubeKeyList):
-    keyWord = ""
-    queueName = ""
-    outputName = ""
+    keyWord, queueName, outputName = "", "", ""
     for cubeKey in cubeKeyList:
         match cubeKey:
             case Defaults.spinCube:
@@ -637,16 +736,10 @@ def gimmeCubes(molecule, cubeKeyList):
                 keyWord = "MO=Valence"
             case _:
                 cprint("Error: Unknown keyword found in keylist for " + molecule.baseName + " : " + cubeKey, "light_red")
-        with open(queueName,"w") as queueFile:
-            jobRam = Defaults.CPU * Defaults.memoryRatio
-            queueFile.write("#!/bin/bash -l\n")
-            queueFile.write("#SBATCH --job-name=" + molecule.baseName + "\n")
-            queueFile.write("#SBATCH --output=" + outputName + "\n")
-            queueFile.write("#SBATCH --ntasks-per-node=" + str(Defaults.CPU) + "\n")
-            queueFile.write("#SBATCH --mem=" + str(jobRam) + "GB\n")
-            queueFile.write("#SBATCH --time=" + Defaults.wallTime + ":00:00\n")
-            queueFile.write("#SBATCH --cluster=" + Defaults.cluster + "\n")
-            queueFile.write("#SBATCH --partition=" + Defaults.partition + "\n")
+
+        slurmHandler(molecule,queueName,outputName,[])
+
+        with open(queueName,"a") as queueFile:
             for nonVariantLine in Defaults.gaussianNonVariant:
                 queueFile.write(nonVariantLine)
 
@@ -654,7 +747,7 @@ def gimmeCubes(molecule, cubeKeyList):
             queueFile.write("cubegen 1 " + keyWord + " " + molecule.fullPath + " " + outputName + " 0""\n\n")
 
         os.system("sbatch " + queueName)
-        os.remove(queueName)
+        #os.remove(queueName)
         cprint(f"Submitted cube job " + molecule.baseName + " " + cubeKey + " to the cluster.", "light_green")
 
 # Finally implemented in a way I can be proud of.
@@ -710,12 +803,12 @@ def jobStalking(jobSet, duration, frequency):
                                                     convergeMet.append(convergeLine.split()[4])
                                                     convergeCriteria = convergeMet.count("YES")
                                             cprint("Job " + str(result[index].split()[0]) + " is currently running, and "
-                                                "has converged on " + str(convergeCriteria) + " out of 4 criteria. Current "
+                                                "has converged on " + str(convergeCriteria) + " out of 4 criteria.\n    Current "
                                                 "duration is " + str(result[index].split()[4]), "light_magenta")
                                             stalkStatus.remove(result[index].split()[0])
                                         else:
                                             cprint("Job " + str(result[index].split()[0]) + " is currently running. Convergence "
-                                                "criterion header not found. Current duration is " + str(result[index].split()[4]),
+                                                "criterion header not found.\n    Current duration is " + str(result[index].split()[4]),
                                            "light_magenta")
                                             stalkStatus.remove(result[index].split()[0])
                             break
@@ -833,6 +926,7 @@ def goodVibesProcessor(inputFile):
     writer.close()
 
 commandLineParser()
+#print(sys.orig_argv)
 
 if isStalking:
     jobStalking(stalkingSet, Defaults.stalkDuration, Defaults.stalkFrequency)

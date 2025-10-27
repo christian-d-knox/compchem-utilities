@@ -24,8 +24,11 @@ Current Implementations:
 - genbench
 - Installer file for conda and conda environment
 - Colored terminal text (wow!)
-- gimmeCubes and obsessiveQueue functionality
+- gimmeCubes and obsessiveQueue functionality (includes c and c1 in obsessiveQueue)
 - Interactively run GoodVibes and export data directly to Excel
+- Runs on H2P (Default), Bridges2, Stampede3
+- Checkpoint generation and formatting
+- NBO7 keylist addition
 
 This utility comes pre-packaged with terminal flags that trigger its corresponding
 features. This manual is sorted by these flags, in order of what I anticipate to be
@@ -43,6 +46,25 @@ most commonly used.
 |                                          |___/                      |___/         |
 |                                                                                   |
 +===================================================================================+
+
+--------------------------------CompUtils 2.3 Release--------------------------------
+- Fixed a bug in NBO keylist creation with NBO flag
+- Fixed some spacing issues in jobStalking by splitting up the "currently running"
+ line into multiple lines with indents
+- Added first-time set-up function to determine what HPC cluster CompUtils is being
+ accessed from
+ - Currently supports H2P, Bridges2, Stampede3
+  - H2P Defaults are smp and pliu
+  - Bridges2 Defaults are RM-shared
+  - Stampede3 Defaults are icx
+ - After setting the HPC type on first command-line call, CompUtils will remember
+  the architecture using the hpc.type file it generates in ~/bin
+ - Expanse is not supported because I literally cannot initialize conda on it
+ - First time set-up details now appear at the top of the Flags section
+- SLURM commands for .cmd files are now handled in a separate function in order to
+ accommodate the flexibility of multiple HPC types
+ - This has also led to a slight refactoring of gimmeCubes
+ - QChem submission is still only partially supported, as it requires more testing
 
 --------------------------------CompUtils 2.2 Release--------------------------------
 - Added an entire routing for running GoodVibes interactively through a series of y/n
@@ -130,6 +152,39 @@ instead of if / elif / else chains (speed improvement)
 |                                                                                   |
 +===================================================================================+
 
+----------------------------------FIRST TIME SET-UP----------------------------------
+
+When calling CompUtils for the first time from the command line on any HPC system, it
+will prompt the user for the HPC type it is running on. Below are a list of accepted
+architectures, and the associated Defaults that this will set.
+
+    H2P             cluster = smp
+                    partition = pliu
+                    This is the unchanged default experience
+                    H2P is the only HPC that has the correct QChem version that
+                        CompUtils accesses.
+
+    Bridges2        partition = RM-shared
+                    memoryRatio = 2
+                    memoryBuffer = 0
+                    highMemoryRatio = 2
+                    Bridges2 does NOT allow memory customization. These values merely
+                        reflect how Bridges2 handles its memory:core ratio
+
+    Stampede3       partition = icx
+                    CPUS = 80
+                    memoryRatio = 200/80
+                    memoryBuffer = 0
+                    highMemoryRatio = 200/80
+                    Stampede3 reserves and bills by node-hours, so the defaults are
+                        set to ensure a full icx node is reserved
+                    Stampede3 does NOT have any ORCA versions installed that I can
+                        see via module spider. Be careful.
+
+CompUtils will create a file called hpc.type in your ~/bin folder to store what HPC
+you are using. When accessing it any time after the first, it will read the file and
+automatically adjust its Defaults accordingly.
+
 ---------------------------------------run flag--------------------------------------
 
 The runJob function is accessed through the -r or --run flag, and must receive a file
@@ -145,17 +200,17 @@ they must be formatted in a specific way. The first five lines of the input file
 contain the CPU and RAM information.
 
 For Gaussian16 jobs, two different CPU structures are accepted:
-%nprocshared=12           OR          %nproc=12
-%mem=24GB                 OR          %mem=24GB
+    %nprocshared=12           OR          %nproc=12
+    %mem=24GB                 OR          %mem=24GB
 
 For ORCA submissions, one CPU and RAM input configuration is accepted:
-%pal=12
-end
-%maxcore=6000
+    %pal=12
+    end
+    %maxcore=6000
 
 For QChem submissions, two configurations are accepted:
-%mem=24GB                 OR          %mem=24GB
-%nprocshared=12           OR          %nproc=12
+    %mem=24GB                 OR          %mem=24GB
+    %nprocshared=12           OR          %nproc=12
 
 You may notice that ORCA file input takes its memory in the units of MB instead of GB
 This is an entirely intentional inclusion of historical differences, in order to
@@ -202,7 +257,7 @@ mixedbasis.txt within the working directory of the jobs needing the mixed basis.
 Edit this file to the exact formatting of your mixed basis info, such as in the
 example on GitHub. Activate this functionality by any of the following keywords:
 
-    Gen | GenECP | gen | genecp
+    Gen     OR     GenECP     OR     gen     OR     genecp
 
 Since the mixedbasis.txt file is strictly read from the cwd, this means you can
 easily run different jobs with different mixed bases as long as they're in different
@@ -241,12 +296,37 @@ functionals Triangle, Apple, and Whattaburger, the filenames on some_complex wil
 The above assumes all are G16 methods, but the -index- and Functional are both
 included in the filename to make it much easier to know which is what at a glance.
 
+----------------------------------indexOverride flag---------------------------------
+
+Accessed via the -ovr or --override flag, this accepts an index-based integer
+argument and will skip ahead in the benchmarking.txt file to the index provided. This
+is most useful if the user wants to selectively run a specific method that isn't the
+first line (the genSP default), or wants to begin their benchmark at a later line (in
+which case genBench will continue to count forward from the provided starting index)
+
 -----------------------------------checkpoint flag-----------------------------------
 
 The checkpoint flag is accessed by -ch or --check, and will set an internal flag
 within the program. When CompUtils creates G16 job with this flag enabled, it will
 add in a line for checkpoint file generation, for later processing by the user (such
 as cube file generation).
+
+---------------------------------------nbo flag--------------------------------------
+
+Accessed via the -nbo or --nbo7 flag, this will append the default NBO7 keylist to
+the bottom of the G16 input file that CompUtils generates. For the functional and
+basis set Sugar and Spice, correctly call NBO7 in your method line:
+
+    # Sugar Spice pop=nbo7read
+
+This keyword will activate the passthrough for NBO7 (assuming you have it installed
+and configured). For the job everythingNice , the default NBO7 keylist that CompUtils
+uses is:
+
+    $NBO STERIC ARCHIVE FILE=everythingNice $END
+
+This is because the STERIC keyword automatically activates most of the other NBO7
+keys without needing to specify them.
 
 -----------------------------------jobStalking flag----------------------------------
 
