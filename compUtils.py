@@ -515,7 +515,7 @@ def genFile(molecule, index):
                 jobInput.write("\n\n")
                 # New NBO7 section
                 if isNBO:
-                    jobInput.write(Defaults.nboKeylist + "FILE=" + molecule.baseName + " $END")
+                    jobInput.write(Defaults.nboKeylist + " FILE=" + molecule.baseName + " $END")
 
         case Defaults.orcaExtension:
             # Opens the job file
