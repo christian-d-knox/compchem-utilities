@@ -29,6 +29,7 @@ Current Implementations:
 - Runs on H2P (Default), Bridges2, Stampede3
 - Checkpoint generation and formatting
 - NBO7 keylist addition
+- genreopt via an improved re-run function
 
 This utility comes pre-packaged with terminal flags that trigger its corresponding
 features. This manual is sorted by these flags, in order of what I anticipate to be
@@ -65,6 +66,11 @@ most commonly used.
  accommodate the flexibility of multiple HPC types
  - This has also led to a slight refactoring of gimmeCubes
  - QChem submission is still only partially supported, as it requires more testing
+- Added the re-run flag for running a failed job over again
+ - This will take the EXACT method line, charge, and multiplicity used prior, along
+  with the final coordinate list, from the failed output
+  - This cannot fix fundamental syntax issues, this is meant to re-run jobs that
+   errored out, timed out, etc.
 
 --------------------------------CompUtils 2.2 Release--------------------------------
 - Added an entire routing for running GoodVibes interactively through a series of y/n
@@ -273,7 +279,8 @@ genSP automatically reads the geometry output reference to find the charge and
 multiplicity, so there is never any need to specify that information (a noticeable
 QoL improvement from prior scripts).This function will not only create and
 automatically submit the single point inputs, but it will also generate an XYZ file
-for your own use in programs like CYLView.
+for your own use in programs like CYLView. Filemasks will be generated using a
+pattern to denote them (Default: "_SP").
 
 ------------------------------------genBench flag------------------------------------
 
@@ -295,6 +302,28 @@ functionals Triangle, Apple, and Whattaburger, the filenames on some_complex wil
 
 The above assumes all are G16 methods, but the -index- and Functional are both
 included in the filename to make it much easier to know which is what at a glance.
+If the method line includes the SMD solvation method, "SMD" will be included in the
+filemask to distinguish "Whattaburger" (gas phase) from "WhattaburgerSMD" (solvated).
+
+------------------------------------genReRun flag------------------------------------
+
+Accessed via the -re or --rerun flag, this accepts failed G16 outputs (as of now) to
+generate new G16 inputs. This is primarily intended for optimizations.
+
+CompUtils will prompt you for the syntax of your keylist, with a simple Y/N question:
+
+    opt freq FUNCTIONAL keys        ->          y
+    FUNCTIONAL keys                 ->          n
+
+These are the two common ways an input may be built manually (or automatically), thus
+both are accepted. CompUtils is programmed to use a different internal index with
+each, to properly utilize the input keylist scrapped from the file with CompUtils'
+architecture.
+
+A new job will be built with the final coordinate list of the failed job, the
+original charge, multiplicity, and keylist. Thus, CompUtils cannot fix errors such as
+incorrect electron count, or incorrect keys (typo, etc.). The new job will be created
+and submitted with a filemask pattern to denote it (Default: "_re").
 
 ----------------------------------indexOverride flag---------------------------------
 
@@ -359,10 +388,10 @@ first. Note: this will force a module purge in your terminal.
 gimmeCubes runs interactively with the user, allowing you to select the types of cube
 files to generate based on the defaults specified in the program. It currently
 supports the following cube types:
-	Density 	via 	Den
-	Potential 	via 	Pot
+	Density 	    via 	Den
+	Potential 	    via 	Pot
 	Valence MO's 	via 	Val
-	Spin 		via 	Spin
+	Spin 		    via 	Spin
 
 ------------------------------------goodVibes flag-----------------------------------
 
