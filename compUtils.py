@@ -9,10 +9,9 @@
 import os
 import argparse
 import glob
-#import sys
+#import sys # Only necessary for the occasional troubleshooting
 import time
 import subprocess
-
 from termcolor import cprint
 #import numpy # Will implement this eventually (probably)
 import pandas
@@ -49,7 +48,7 @@ class Defaults:
     methodNames = ["B3LYP","M062X","M06","M06L","B2PLYP","wB97XD","DLPNO-CCSD(T)","BLYP"]
     targetProgram = ["G16","G16","G16","G16","G16","G16","O","G16"]
     # Optional job keylist data
-    nboKeylist = "$NBO STERIC PLOT ARCHIVE"
+    nboKeylist = "$NBO STERIC PLOT"
     mixedBasisVariants = ["Gen", "GenECP", "gen", "genecp"]
     # Cube Keylists
     potCube = "Pot"
@@ -533,7 +532,7 @@ def genFile(molecule, index):
                 jobInput.write("\n\n")
                 # New NBO7 section
                 if isNBO:
-                    jobInput.write(Defaults.nboKeylist + " FILE=" + molecule.baseName + " $END")
+                    jobInput.write(Defaults.nboKeylist + " FILE=" + molecule.baseName + " ARCHIVE $END")
 
         case Defaults.orcaExtension:
             # Opens the job file
