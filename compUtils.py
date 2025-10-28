@@ -2,7 +2,7 @@
 # Welcome to Computational Chemistry Utilities!
 # Now bigger, harder, faster, and stronger than ever before!
 # This package has been hand-crafted lovingly through untold pain and suffering
-# Last major commit to the project was 2025-10-24 (previously 2025-10-23)
+# Last major commit to the project was 2025-10-28 (previously 2025-10-27)
 # Last minor commit to the project was 2025-10-7
 
 # Imports the various libraries needed for all functions()
@@ -12,6 +12,7 @@ import glob
 #import sys
 import time
 import subprocess
+
 from termcolor import cprint
 #import numpy # Will implement this eventually (probably)
 import pandas
@@ -33,6 +34,7 @@ class Defaults:
     partition = "pliu"
     # Filemask and Extension related
     singlePointExtra = "_SP"
+    reRunExtra = "_re"
     coordExtension = ".xyz"
     gaussianExtension = ".gjf"
     orcaExtension = ".inp"
@@ -239,6 +241,8 @@ def commandLineParser():
                                                              "starts from 0, not from 1.")
     parser.add_argument('-gv', '--goodvibes', type=str, help="Activates the CompUtils interactive interface for GoodVibes.")
     parser.add_argument('-nbo','--nbo7',action='store_true',help="Enables NBO7 keylist addition for job creation subroutines.")
+    parser.add_argument('-re','--rerun',type=str,help="Reruns a failed Gaussian16 job using the failed output"
+                                                      " to generate the new input file.")
 
     # Figures out what the hell you told it to do
     args = parser.parse_args()
@@ -308,6 +312,20 @@ def commandLineParser():
         cprint("GoodVibes has terminated. Handing output over to the excel exporter.", "light_cyan")
         goodVibesProcessor("Goodvibes_output.dat")
         cprint("Enjoy your Excel-formatted GoodVibes output!", "light_green")
+
+    if args.rerun:
+        jobList = glob.glob(args.rerun)
+        keylistOrder = str(input("Is your input structured as 'opt freq FUNCTIONAL' (y) or 'FUNCTIONAL other keys' (n)? :"))
+        if keylistOrder == booleanStrings[0]:
+            skipIndex = 2
+        else:
+            skipIndex = 0
+        for job in jobList:
+            baseName, extension = grabPaths(job)
+            charge, multiplicity = gaussianChargeFinder(job)
+            coordList = getCoords(job,baseName + "_failed" + Defaults.coordExtension)
+            newMolecule = Molecule(job, baseName, charge, multiplicity, coordList, extension, baseName)
+            genReRun(newMolecule,skipIndex)
 
 # Finally handle filename creation in one place to stop the infinite copypasta
 def fileCreation(baseName, extensionType, extra):
@@ -749,6 +767,31 @@ def gimmeCubes(molecule, cubeKeyList):
         os.system("sbatch " + queueName)
         #os.remove(queueName)
         cprint(f"Submitted cube job " + molecule.baseName + " " + cubeKey + " to the cluster.", "light_green")
+
+# Because jobs don't always work the first time
+def genReRun(molecule,skipIndex):
+    with open(molecule.fullPath,"r") as inputFile:
+        with closing(mmap(inputFile.fileno(),0,access=ACCESS_READ)) as data:
+            preTable = "Will use up to"
+            preBytes = preTable.encode()
+            originalMethod = regex.search(preBytes,data)
+            pointer = originalMethod.ends()
+            data.seek(pointer[0])
+            data.read(2)
+            for index in range(0,3):
+                data.readline()
+            originalMethod = data.readline().decode()
+
+    fullMethodLine[0] = originalMethod.replace("#","").strip()
+    methodLine[0] = originalMethod.replace("#","").strip().split()[skipIndex]
+    molecule.extensionType = extensionGetter(methodLine[0])
+    inputFile = fileCreation(molecule.baseName, molecule.extensionType, Defaults.reRunExtra)
+    molecule.fullPath = inputFile
+    molecule.baseName = molecule.baseName + Defaults.reRunExtra
+
+    # Calls the separate file generation method, feeds directly into runJob
+    genFile(molecule, 0)
+    runJob(molecule)
 
 # Finally implemented in a way I can be proud of.
 def jobStalking(jobSet, duration, frequency):
