@@ -9,11 +9,11 @@
 import os
 import argparse
 import glob
-#import sys # Only necessary for the occasional troubleshooting
+#import sys         # Only necessary for the occasional troubleshooting
 import time
 import subprocess
 from termcolor import cprint
-#import numpy # Will implement this eventually (probably)
+#import numpy       # Will implement this eventually (probably)
 import pandas
 import regex
 from contextlib import closing
@@ -293,7 +293,7 @@ def commandLineParser():
     if args.cube:
         # Needs to run interactively in order to be useful
         cubeList = str(input("Enter the list of options you want for cube files generated, separated by spaces (e.g. Pot"
-            " Den Val Spin): "))
+            " Den Val Spin or Range): "))
         jobList = glob.glob(args.cube)
         # This splits the entered keylist into separate keys, passed into gimmeCubes as an array which can be iterated through
         cubeOptions = cubeList.split(" ")
@@ -762,6 +762,11 @@ def gimmeCubes(molecule, cubeKeyList):
                 outputName = fileCreation(molecule.baseName, Defaults.cubeExtension, cubeKey)
                 queueName = fileCreation(molecule.baseName, Defaults.queueExtension, cubeKey)
                 keyWord = "MO=Valence"
+            case "Range":
+                orbitalRange = str(input("Enter the range of MOs you want printed (e.g. 10-15) : "))
+                outputName = fileCreation(molecule.baseName, Defaults.cubeExtension, cubeKey + orbitalRange)
+                queueName = fileCreation(molecule.baseName, Defaults.queueExtension, cubeKey + orbitalRange)
+                keyWord = "MO=" + orbitalRange
             case _:
                 cprint("Error: Unknown keyword found in keylist for " + molecule.baseName + " : " + cubeKey, "light_red")
 
