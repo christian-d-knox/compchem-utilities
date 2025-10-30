@@ -70,6 +70,7 @@ features. This manual is sorted by these flags, in a semi-arbitrary ordering.
   with the final coordinate list, from the failed output
   - This cannot fix fundamental syntax issues, this is meant to re-run jobs that
    errored out, timed out, etc.
+- Added independent formchk flag because I'm an idiot
 
 --------------------------------CompUtils 2.2 Release--------------------------------
 - Added an entire routing for running GoodVibes interactively through a series of y/n
@@ -348,6 +349,13 @@ The checkpoint flag is accessed by -ch or --check, and will set an internal flag
 within the program. When CompUtils creates G16 job with this flag enabled, it will
 add in a line for checkpoint file generation, for later processing by the user (such
 as cube file generation).
+
+------------------------------------formcheck flag-----------------------------------
+
+Accessed via the -form or --formcheck flag, this accepts a Gaussian16 checkpoint file
+and formats it into an .fchk file, without doing the full passthrough into
+gimmeCubes. This is particularly useful if you want to load the .fchk into GaussView,
+without making cube files.
 
 ---------------------------------------nbo flag--------------------------------------
 
