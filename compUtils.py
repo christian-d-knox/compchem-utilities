@@ -57,7 +57,7 @@ class Defaults:
     spinCube = "Spin"
     # Job stalking related
     stalkDuration = 120
-    stalkFrequency = 0.25
+    stalkFrequency = 3
     # Job submission related. Edit this across clusters
     gaussianNonVariant = ["\nmodule purge\nmodule load gaussian\n\n",
                           "export GAUSS_SCRDIR=$SLURM_SCRATCH\nulimit -s unlimited\nexport LC_COLLATE=C\n"]
@@ -242,6 +242,8 @@ def commandLineParser():
     parser.add_argument('-nbo','--nbo7',action='store_true',help="Enables NBO7 keylist addition for job creation subroutines.")
     parser.add_argument('-re','--rerun',type=str,help="Reruns a failed Gaussian16 job using the failed output"
                                                       " to generate the new input file.")
+    parser.add_argument('-form','--formcheck',type=str,help="Activates the Gaussian16 formchk utility without"
+                                                            " full passthrough into gimmeCubes.")
 
     # Figures out what the hell you told it to do
     args = parser.parse_args()
@@ -301,6 +303,13 @@ def commandLineParser():
             if extension == ".chk":
                 formCheck(newMolecule)
             gimmeCubes(newMolecule, cubeOptions)
+
+    if args.formcheck:
+        jobList = glob.glob(args.formcheck)
+        for job in jobList:
+            baseName, extension = grabPaths(job)
+            newMolecule = Molecule(job, baseName, 0, 0, 0, extension, baseName)
+            formCheck(newMolecule)
 
     if args.goodvibes:
         jobList = glob.glob(args.goodvibes)
@@ -529,10 +538,12 @@ def genFile(molecule, index):
                 elif mixedBasis and not os.path.isfile("mixedbasis.txt"):
                     cprint("Mixed basis information not found. Aborting.", "light_red")
                     return
-                jobInput.write("\n\n")
+                jobInput.write("\n")
                 # New NBO7 section
                 if isNBO:
                     jobInput.write(Defaults.nboKeylist + " FILE=" + molecule.baseName + " ARCHIVE $END")
+                else:
+                    jobInput.write("\n")
 
         case Defaults.orcaExtension:
             # Opens the job file
