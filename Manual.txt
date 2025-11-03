@@ -71,6 +71,11 @@ features. This manual is sorted by these flags, in a semi-arbitrary ordering.
   - This cannot fix fundamental syntax issues, this is meant to re-run jobs that
    errored out, timed out, etc.
 - Added independent formchk flag because I'm an idiot
+ - (Hopefully) Fixed a bug in formcheck where it would not properly load the gaussian module
+- Re-implemented the "last ping time" part of obsessiveQueue into jobStalking, in a
+ more human-readable format.
+- Implemented jobStalk looping. Now you can keep stalking looping past your
+ pre-defined duration with a simple y/n
 
 --------------------------------CompUtils 2.2 Release--------------------------------
 - Added an entire routing for running GoodVibes interactively through a series of y/n
@@ -392,8 +397,14 @@ It will run this check periodically, based on the time specified by the frequenc
 duration defaults within the defaults section near the top of the program. Change 
 these variables depending on how often you desire updates on your jobs.
 
+When initially called via command line, CompUtils will ask a y/n question about stalk
+looping. This functionality allows for the function to continue beyond the set
+duration in the Defaults. Beware that this will keep the terminal locked for as long
+as jobStalking is running.
+
 jobStalking will automatically terminate when all jobs it identified as tagged have
-terminated, or when its default duration has been exceeded.
+terminated, or when its default duration has been exceeded and looping is not
+enabled.
 
 -----------------------------------gimmeCubes flag-----------------------------------
 
