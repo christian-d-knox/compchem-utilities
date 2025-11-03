@@ -3,7 +3,7 @@
 # Now bigger, harder, faster, and stronger than ever before!
 # This package has been hand-crafted lovingly through untold pain and suffering
 # Last major commit to the project was 2025-10-28 (previously 2025-10-27)
-# Last minor commit to the project was 2025-10-7
+# Last minor commit to the project was 2025-11-3
 
 # Imports the various libraries needed for all functions()
 import os
@@ -98,6 +98,7 @@ fullPaths = []
 totalJobList = []
 totalOutputs = []
 isStalking = False
+isLooping = False
 isCheck = False
 isNBO = False
 isCustomTarget = True
@@ -217,7 +218,7 @@ else:
 
 # Defines all the terminal flags the program can accept
 def commandLineParser():
-    global isStalking, isCheck, isNBO, indexOverride
+    global isStalking, isCheck, isNBO, indexOverride, isLooping
 
     parser = argparse.ArgumentParser(description="The main command line argument parser for flag handling")
 
@@ -251,6 +252,9 @@ def commandLineParser():
     # Flags that set bools come first
     if args.stalk:
         isStalking = True
+        willLoop = str(input("Enable stalk looping (i.e. re-initialize until all jobs terminate)?  (y/n): )"))
+        if willLoop == booleanStrings[0]:
+            isLooping = True
     if args.checkpoint:
         isCheck = True
     if args.nbo7:
@@ -297,6 +301,8 @@ def commandLineParser():
         jobList = glob.glob(args.cube)
         # This splits the entered keylist into separate keys, passed into gimmeCubes as an array which can be iterated through
         cubeOptions = cubeList.split(" ")
+        os.system("module purge")
+        os.system("module load gaussian")
         for job in jobList:
             baseName, extension = grabPaths(job)
             newMolecule = Molecule(job, baseName, 0, 0, 0, extension, baseName)
@@ -306,6 +312,8 @@ def commandLineParser():
 
     if args.formcheck:
         jobList = glob.glob(args.formcheck)
+        os.system("module purge")
+        os.system("module load gaussian")
         for job in jobList:
             baseName, extension = grabPaths(job)
             newMolecule = Molecule(job, baseName, 0, 0, 0, extension, baseName)
@@ -345,8 +353,6 @@ def fileCreation(baseName, extensionType, extra):
 
 # Formats checkpoints automatically
 def formCheck(molecule):
-    os.system("module purge")
-    os.system("module load gaussian")
     os.system("formchk " + molecule.fullPath)
     molecule.extensionType = ".fchk"
     molecule.fullPath = molecule.rootName + molecule.extensionType
@@ -816,7 +822,8 @@ def jobStalking(jobSet, duration, frequency):
     command = ["squeue -h --me --format='%25j %10T %18R %S %20M'"]
     finishedJobs = []
     # Repeats every frequency over duration
-    while (time.time() - startTime) < duration * 60:
+    pingTime = time.time()
+    while (pingTime - startTime) < duration * 60:
         stalkStatus = set()
         # Tells the function that jobs you submitted are the ones to track
         for job in jobSet:
@@ -902,13 +909,20 @@ def jobStalking(jobSet, duration, frequency):
             cprint("All jobs tagged for stalking have finished.","light_cyan")
             break
 
-        cprint("Waiting " + str(frequency*60) + " seconds to ping the queue again.","light_blue")
-        time.sleep(frequency * 60)
 
-    # Timeout warning
-    if (time.time() - startTime) > duration * 60:
-        cprint("Job stalking terminated by timeout. Your jobs are still running.","light_red")
-        cprint("Consider editing the default stalk duration and frequency if your jobs regularly timeout.","light_red")
+        lastPing = time.strftime("%a %I:%M:%S",time.localtime(pingTime))
+        cprint("Waiting " + str(frequency*60) + " seconds to ping the queue again. Last ping at " + lastPing
+               + " local time.","light_blue")
+        time.sleep(frequency * 60)
+        pingTime = time.time()
+
+        # Timeout warning
+        if (pingTime - startTime) > duration * 60:
+            if isLooping:
+                startTime = pingTime
+            else:
+                cprint("Job stalking terminated by timeout. Your jobs are still running.","light_red")
+                cprint("Consider editing the default stalk duration and frequency if your jobs regularly timeout.","light_red")
 
 # Because everyone hates remembering manuals. Walks through the most common use-cases with catch-all final custom keylist
 def goodVibesInteractive():
