@@ -14,5 +14,5 @@ It is STRONGLY recommended you either create your own programs.txt and benchmark
 CompUtils in a more convenient way, or download the templates from the DEPENDENCY FILES/ folder on GitHub and modify them. 
 The same can be said for mixedbasis.txt in your current working directory, if running with a mixed basis in Gaussian16 is desired.
 
-CompUtils is currently configured to write submission scripts according to the SLURM version and quirks of H2P. With some
-elbow grease, it can be re-configured for other HPC clusters.
+CompUtils will work properly on H2P, Bridges2, and Stampede3. Expanse is not supported due to their own architecture jank. Follow
+the instructions of the first-time set-up to correctly identify your HPC type, and CompUtils will remember and handle the rest.
