@@ -378,6 +378,7 @@ these variables depending on how often you desire updates on your jobs.
 jobStalking will automatically terminate when all jobs it identified as tagged have
 terminated, or when its default duration has been exceeded.
 
+
 -----------------------------------gimmeCubes flag-----------------------------------
 
 Accessed via the -cu or --cube flag, gimmeCubes has been entirely improved from its
@@ -412,8 +413,6 @@ like an actual thinking human who cares did it.
 *************************************************************************************
 
 Planned features:
-- re-optimization flag for re-running the exact same job with the final coordinates
-    of the failed job
 
 Desired features (will likely require collaboration with other lab mates):
 - inclusion of PES generation (Thomas Tugwell)
@@ -462,3 +461,16 @@ problem-solving required to achieve my goal of an easy-to-use universal one-stop
 type of tool for the group. Tinkering is a passion of mine, and while it may lead to
 frequent frustration, and I may be seen as reinventing the wheel, my only desire is
 to help myself and everyone else through the fruits of my labor.
+
+Due to floating-point rounding error, jobStalking drifts by ~100 ms between pings
+(1 full second of drift every 10 pings). This means that given a duration of T and a
+frequency of F, rather than the total pings, N, being:
+
+    N = T / F
+
+It is more accurate to represent this as:
+
+    N = (T / F) - 1
+
+This is ultimately a trivial detail, hence why this issue remains a Known Bug, but
+will not be corrected, as the extra layer of precision is not actually worth it.

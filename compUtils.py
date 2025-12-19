@@ -239,7 +239,8 @@ def commandLineParser():
                                                              " for accessing single point methods that are not the first"
                                                              " line in a controlled manner. Keep in mind index counting "
                                                              "starts from 0, not from 1.")
-    parser.add_argument('-gv', '--goodvibes', type=str, help="Activates the CompUtils interactive interface for GoodVibes.")
+    parser.add_argument('-gv', '--goodvibes', action='store_true', help="Activates the CompUtils interactive interface for GoodVibes."
+                                                                        " This acts upon all files in the CWD.")
     parser.add_argument('-nbo','--nbo7',action='store_true',help="Enables NBO7 keylist addition for job creation subroutines.")
     parser.add_argument('-re','--rerun',type=str,help="Reruns a failed Gaussian16 job using the failed output"
                                                       " to generate the new input file.")
@@ -304,11 +305,9 @@ def commandLineParser():
             gimmeCubes(newMolecule, cubeOptions)
 
     if args.goodvibes:
-        jobList = glob.glob(args.goodvibes)
         cprint("Interactive GoodVibes interface activated. Please select your keylist from the common ones.", "light_cyan")
         totalKeyList = goodVibesInteractive()
-        for job in jobList:
-            os.system("goodvibes " + totalKeyList + " " + job)
+        os.system("goodvibes " + totalKeyList + " *.out")
         cprint("GoodVibes has terminated. Handing output over to the excel exporter.", "light_cyan")
         goodVibesProcessor("Goodvibes_output.dat")
         cprint("Enjoy your Excel-formatted GoodVibes output!", "light_green")
@@ -830,10 +829,23 @@ def jobStalking(jobSet, duration, frequency):
                             if os.path.isfile(job[1]) and os.path.getsize(job[1]) > 0:
                                 with open(job[1],'r+') as file:
                                     with closing(mmap(file.fileno(),0,access=ACCESS_READ)) as data:
+                                        hasStability = "Stability analysis"
+                                        hasStabBytes = hasStability.encode()
+                                        isStable = "The wavefunction is already stable."
+                                        isStabBytes = isStable.encode()
+                                        containsStability = regex.search(hasStabBytes, data)
+                                        if containsStability is not None:
+                                            hasStabilized = regex.search(isStabBytes, data, regex.REVERSE)
+                                            if hasStabilized is not None:
+                                                stabilityInsert = "Wavefunction has stabilized."
+                                            else:
+                                                stabilityInsert = "Wavefunction has not stabilized."
+                                        else:
+                                            stabilityInsert = ""
+                                        # Checks for convergence section header, defaults to Unknown or Not Found
                                         tableHeader = "         Item               Value     Threshold  Converged?"
                                         tableBytes = tableHeader.encode()
                                         finalTableHeader = regex.search(tableBytes, data, regex.REVERSE)
-                                        # Checks for convergence section header, defaults to Unknown or Not Found
                                         if finalTableHeader is not None:
                                             if len(finalTableHeader.group().decode()) != 0:
                                                 convergeCriteria = 0
@@ -846,13 +858,14 @@ def jobStalking(jobSet, duration, frequency):
                                                     convergeMet.append(convergeLine.split()[4])
                                                     convergeCriteria = convergeMet.count("YES")
                                             cprint("Job " + str(result[index].split()[0]) + " is currently running, and "
-                                                "has converged on " + str(convergeCriteria) + " out of 4 criteria.\n    Current "
-                                                "duration is " + str(result[index].split()[4]), "light_magenta")
+                                                "has converged on " + str(convergeCriteria) + " out of 4 criteria.\n    "
+                                                   + stabilityInsert + " Current duration is " + str(result[index].split()[4]),
+                                                   "light_magenta")
                                             stalkStatus.remove(result[index].split()[0])
                                         else:
                                             cprint("Job " + str(result[index].split()[0]) + " is currently running. Convergence "
-                                                "criterion header not found.\n    Current duration is " + str(result[index].split()[4]),
-                                           "light_magenta")
+                                                "criterion header not found.\n    " + stabilityInsert + " Current duration is "
+                                                   + str(result[index].split()[4]),"light_magenta")
                                             stalkStatus.remove(result[index].split()[0])
                             break
 
