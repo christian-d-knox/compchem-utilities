@@ -5,17 +5,11 @@
 # Last major commit to the project was 2025-10-28 (previously 2025-10-27)
 # Last minor commit to the project was 2025-11-3
 
-# Imports the various libraries needed for all functions()
-import os
-import argparse
-import glob
+import os, argparse, glob, subprocess, regex, time
 #import sys         # Only necessary for the occasional troubleshooting
-import time
-import subprocess
 from termcolor import cprint
 #import numpy       # Will implement this eventually (probably)
 import pandas
-import regex
 from contextlib import closing
 from mmap import mmap, ACCESS_READ
 
@@ -93,26 +87,13 @@ class Bridges2Submission:
     hpcType = "Bridges2"
 
 # Defines global variables for use in various functions
-fileNames = []
-fullPaths = []
-totalJobList = []
-totalOutputs = []
-isStalking = False
-isLooping = False
-isCheck = False
-isNBO = False
-isCustomTarget = True
-canBench = True
+fileNames, fullPaths, totalJobList, totalOutputs, methodLine, fullMethodLine = [], [], [], [], [], []
+isStalking, isLooping, isCheck, isNBO, isCustomTarget, canBench = False, False, False, False, True, True
 indexOverride = 0
-methodLine = []
-fullMethodLine = []
 fileExtension = ""
-# Paired together for program identification
-methodList = []
-targetProgram = []
+# Paired together for program identification and input processing
+methodList, targetProgram, booleanStrings = [], [], ["y","n"]
 stalkingSet = set()
-# Useful for user input processing
-booleanStrings = ["y","n"]
 
 # NEW!! Attempting to keep track of everything related to a job in one central location
 # This allows for file name, extension, charge, multiplicity, and coordinate list to be edited and stored on a per-complex basis
@@ -163,23 +144,15 @@ def firstTimeSetup():
                 Defaults.submissionList = H2PSubmission.submissionList
             case "Bridges2":
                 hpcFile.write("Bridges2")
-                Defaults.hpcType = "Bridges2"
+                Defaults.hpcType, Defaults.partition = "Bridges2", "RM-shared"
                 Defaults.submissionList = Bridges2Submission.submissionList
-                Defaults.hpcType = "Bridges2"
-                Defaults.partition = "RM-shared"
-                Defaults.memoryRatio = 2
-                Defaults.memoryBuffer = 0
-                Defaults.highMemoryRatio = 2
+                Defaults.memoryRatio, Defaults.memoryBuffer, Defaults.highMemoryRatio = 2, 0, 2
             case "Expanse":
                 print("CompUtils is not supported on the Expanse architecture due to being outdated and messy. Have a good day.")
             case "Stampede3":
                 hpcFile.write("Stampede3")
-                Defaults.hpcType = "Stampede3"
-                Defaults.partition = "icx"
-                Defaults.CPU = 80
-                Defaults.memoryRatio = 200/80
-                Defaults.memoryBuffer = 0
-                Defaults.highMemoryRatio = 200/80
+                Defaults.hpcType, Defaults.partition = "Stampede3", "icx"
+                Defaults.CPU, Defaults.memoryRatio, Defaults.memoryBuffer, Defaults.highMemoryRatio = 80, 200/80, 0, 200/80
                 Defaults.submissionList = Stampede3Submission.submissionList
             case _:
                 cprint("Unknown HPC architecture input. Aborting.", "light_red")
@@ -190,24 +163,15 @@ if os.path.isfile(os.path.join(Defaults.binDirectory, "hpc.type")):
         hpcLine = hpcFile.readline().strip()
         match hpcLine:
             case "H2P":
-                Defaults.hpcType = "H2P"
+                Defaults.hpcType, Defaults.cluster, Defaults.partition = "H2P", "smp", "pliu"
                 Defaults.submissionList = H2PSubmission.submissionList
-                Defaults.cluster = "smp"
-                Defaults.partition = "pliu"
             case "Bridges2":
-                Defaults.hpcType = "Bridges2"
-                Defaults.partition = "RM-shared"
-                Defaults.memoryRatio = 2
-                Defaults.memoryBuffer = 0
-                Defaults.highMemoryRatio = 2
+                Defaults.hpcType, Defaults.partition = "Bridges2", "RM-shared"
+                Defaults.memoryRatio, Defaults.memoryBuffer, Defaults.highMemoryRatio = 2, 0, 2
                 Defaults.submissionList = Bridges2Submission.submissionList
             case "Stampede3":
-                Defaults.hpcType = "Stampede3"
-                Defaults.partition = "icx"
-                Defaults.CPU = 80
-                Defaults.memoryRatio = 200/80
-                Defaults.memoryBuffer = 0
-                Defaults.highMemoryRatio = 200/80
+                Defaults.hpcType, Defaults.partition = "Stampede3", "icx"
+                Defaults.CPU, Defaults.memoryRatio, Defaults.memoryBuffer, Defaults.highMemoryRatio = 80, 200/80, 0, 200/80
                 Defaults.submissionList = Stampede3Submission.submissionList
             case "Expanse":
                 print("CompUtils is NOT supported on Expanse. Have a good day.")
@@ -371,10 +335,7 @@ def getCoords(fileName, outputFileName):
     }
 
     # Initialize local empty lists
-    at = []
-    X = []
-    Y = []
-    Z = []
+    at, X, Y, Z = [], [], [], []
 
     with open(fileName, 'r+') as inFile, open(outputFileName, 'w') as outputFile:
         # Maps the file into memory for reading byte-wise, without any read buffer. AFAIK this is the most memory efficient
