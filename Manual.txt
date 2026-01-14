@@ -71,11 +71,14 @@ features. This manual is sorted by these flags, in a semi-arbitrary ordering.
   - This cannot fix fundamental syntax issues, this is meant to re-run jobs that
    errored out, timed out, etc.
 - Added independent formchk flag because I'm an idiot
- - (Hopefully) Fixed a bug in formcheck where it would not properly load the gaussian module
+ - (Hopefully) Fixed a bug in formcheck where it would not properly load the gaussian
+ module
 - Re-implemented the "last ping time" part of obsessiveQueue into jobStalking, in a
  more human-readable format.
 - Implemented jobStalk looping. Now you can keep stalking looping past your
  pre-defined duration with a simple y/n
+- Added "Range" flag to gimmeCubes to allow generation of exact MOs is the user
+already knows what they want
 
 --------------------------------CompUtils 2.2 Release--------------------------------
 - Added an entire routing for running GoodVibes interactively through a series of y/n
@@ -421,6 +424,10 @@ supports the following cube types:
 	Potential 	    via 	Pot
 	Valence MO's 	via 	Val
 	Spin 		    via 	Spin
+	Range           via     Range
+
+Range is the newest key to gimmeCubes, allowing the user to manually select a range
+of MOs to print (e.g. 10-15) if the user knows exactly what to look for.
 
 ------------------------------------goodVibes flag-----------------------------------
 
