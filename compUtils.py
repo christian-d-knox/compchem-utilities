@@ -898,7 +898,7 @@ def jobStalking(jobSet, duration, frequency):
 
 # Because everyone hates remembering manuals. Walks through the most common use-cases with catch-all final custom keylist
 def goodVibesInteractive():
-    keyList = []
+    keyList = ["-v 1.0"]
     isQuasiHarmonic = str(input("Utilize quasiharmonic S and H correction (Grimme)? (y/n)"))
     if isQuasiHarmonic == booleanStrings[0]:
         keyList.append("-q")
@@ -914,7 +914,7 @@ def goodVibesInteractive():
     if isConcCorrection == booleanStrings[0]:
         concCorrection = float(input("Enter concentration (mol/l): "))
         keyList.append("-c " + str(concCorrection))
-    isVibeScale = str(input("Utilize a vibrational scale factor? (y/n)"))
+    isVibeScale = str(input("Utilize a non-default (i.e. not 1.0) vibrational scale factor? (y/n)"))
     if isVibeScale == booleanStrings[0]:
         vibeScale = float(input("Enter vibrational scale factor: "))
         keyList.append("-v " + str(vibeScale))
