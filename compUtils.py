@@ -10,6 +10,7 @@ from termcolor import cprint
 import pandas#, numpy   # Will implement eventually (probably)
 from contextlib import closing
 from mmap import mmap, ACCESS_READ
+import tomllib as tom
 
 # Set your defaults HERE
 class Defaults:
