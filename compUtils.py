@@ -2,15 +2,106 @@
 # Welcome to Computational Chemistry Utilities!
 # Now bigger, harder, faster, and stronger than ever before!
 # This package has been hand-crafted lovingly through untold pain and suffering
-# Last major commit to the project was 2025-10-28 (previously 2025-10-27)
+# Last major commit to the project was 2026-05-13 (previously 2025-10-27)
 # Last minor commit to the project was 2025-12-29
 
-import os, argparse, glob, subprocess, regex, time#, sys    # Only necessary for occasional troubleshooting
+import os, argparse, glob, subprocess, regex, time, json#, sys    # Only necessary for occasional troubleshooting
 from termcolor import cprint
 import pandas#, numpy   # Will implement eventually (probably)
 from contextlib import closing
 from mmap import mmap, ACCESS_READ
 import tomllib as tom
+from pathlib import Path
+from typing import Any
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
+
+### Begin TOML file stuff (assisted via Claude)
+_warningBox = """\
+# +-----------------------------------------------------------------------------+
+# |  POWER USER SECTION — NonVariant job script blocks                          |
+# |  These strings are written verbatim into generated SLURM job files.         |
+# |  Incorrect edits WILL break job submission. Only modify if you know exactly |
+# |  what you are doing and have verified the output manually.                  |
+# +-----------------------------------------------------------------------------+"""
+
+def tomlValue(value: Any) -> str:
+    """
+    Serialize a single Python value to its TOML literal string.
+
+    Handles the types actually used in Defaults: str, int, bool, and list.
+    Strings are escaped for newlines, tabs, backslashes, and quotes so that
+    the NonVariant shell-script fragments round-trip correctly through TOML.
+    Lists are written inline if short, or multiline if long.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        escaped = (
+            value
+            .replace("\\", "\\\\")
+            .replace('"',  '\\"')
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+            .replace("\t", "\\t")
+        )
+        return f'"{escaped}"'
+    if isinstance(value, list):
+        if not value:
+            return "[]"
+        formattedItems = [tomlValue(v) for v in value]
+        inlineFmt = f"[{', '.join(formattedItems)}]"
+        # Use multiline array format if inline would be too wide
+        if len(inlineFmt) <= 88:
+            return inlineFmt
+        innerFmt = ",\n    ".join(formattedItems)
+        return f"[\n    {innerFmt},\n]"
+    return str(value)
+
+def loadToml(configDir: Path, filename: str) -> dict:
+    """
+    Open and parse a TOML file from configDir. Returns the parsed dict.
+
+    Returns an empty dict (with a warning) if the file is malformed,
+    so that the rest of the load process can continue using hardcoded
+    defaults rather than crashing the program at startup.
+    """
+    filePath = configDir / filename
+    try:
+        with open(filePath, "rb") as f:
+            return tom.load(f)
+    except tom.TOMLDecodeError as e:
+        cprint(f"[config] Failed to parse {filename}: {e}\n"
+            "         All hardcoded defaults will be used for this section.", "light_red")
+        return {}
+
+def writeToml(configDir: Path, filename: str, content: str) -> None:
+    """
+    Write a TOML content string to a file in configDir.
+
+    Called either when generating a file for the first time or when
+    firstTimeSetup() persists interactive HPC configuration. Warns
+    (rather than crashing) on filesystem errors.
+    """
+    filePath = configDir / filename
+    try:
+        with open(filePath, "w", encoding="utf-8") as f:
+            f.write(content)
+        cprint(f"[config] Wrote config file: {filePath}", "light_cyan")
+    except OSError as e:
+        cprint(f"[config] Could not write {filePath}: {e}\n"
+            "         Hardcoded defaults will be used for this section.", "light_red")
+
+def warnMissing(key: str, filename: str, fallback: Any) -> None:
+    """
+    Issue a UserWarning when a key expected in a TOML file is absent.
+
+    This is the "warn and fall back" behavior: the program continues
+    using the hardcoded default value, but the user is told what was
+    missing and what value was substituted.
+    """
+    cprint(f"[config] Key '{key}' not found in {filename}. "
+        f"Falling back to hardcoded default: {fallback!r}", "light_red")
 
 # Set your defaults HERE
 class Defaults:
@@ -22,8 +113,8 @@ class Defaults:
     highMemoryRatio = 6
     memoryBuffer = 2
     wallTime = "24"
-    cluster = "smp"
-    partition = "pliu"
+    cluster = ""
+    partition = ""
     # Filemask and Extension related
     singlePointExtra = "_SP"
     reRunExtra = "_re"
@@ -65,7 +156,277 @@ class Defaults:
     ramLineVariants = ["%mem","%maxcore"]
     terminationVariants = ["normal termination","terminated normally","error termination"]
     submissionList = []
-    hpcType = "H2P"
+    hpcType = ""
+    isNotifications = False
+    botToken = ""
+    chatID = ""
+    broadcastGroupChatID = "-1003992367027"
+    broadcastThreshold = 30
+
+    # ── TOML config file mappings ──────────────────────────────────────────────
+    #
+    # _FILE_GROUPS maps each TOML filename to the ordered list of attribute
+    # names it owns. This is the single source of truth for which attributes
+    # belong in which file — Load(), _SaveSection(), and _ApplySection() all
+    # derive their behavior from this dict.
+    #
+    # "paths.toml" is listed first intentionally: binDirectory is loaded before
+    # any other file, so that if the user has changed their bin location, all
+    # subsequent reads happen from the correct directory.
+    #
+    # To add a new config key:
+    #   1. Add the attribute with its hardcoded default above.
+    #   2. Add its name to the correct list here.
+    #   3. Add a comment string to _COMMENTS.
+    #   That's all — Load(), _SaveSection(), and _ApplySection() handle the rest.
+    #
+    # To add a new config file:
+    #   1. Add a new entry here with the filename and its attribute list.
+    #   2. Add a header string to _HEADERS.
+    #   3. Add comments to _COMMENTS for the new keys.
+    _FILE_GROUPS: dict[str, list[str]] = {
+        "paths.toml": [
+            "binDirectory",
+        ],
+        "slurm.toml": [
+            "CPU", "memoryRatio", "highMemoryRatio", "memoryBuffer",
+            "wallTime", "cluster", "partition", "hpcType",
+            "stalkDuration", "stalkFrequency", "submissionList",
+        ],
+        "programs.toml": [
+            "method", "methodLine", "methodNames", "targetProgram",
+            "nboKeylist", "mixedBasisVariants",
+            "potCube", "denCube", "valenceCube", "spinCube",
+            "coreLineVariants", "ramLineVariants", "terminationVariants",
+            "gaussianNonVariant", "orcaNonVariant", "qChemNonVariant",
+        ],
+        "extensions.toml": [
+            "singlePointExtra", "reRunExtra",
+            "coordExtension", "gaussianExtension", "orcaExtension",
+            "qChemExtension", "cubeExtension", "queueExtension", "outputExtension",
+        ],
+        "notifications.toml": [
+            "isNotifications",
+            "botToken",
+            "chatID",
+            "broadcastGroupChatID",
+            "broadcastThreshold",
+        ],
+    }
+
+    # Header comment block written at the top of each generated TOML file.
+    _HEADERS: dict[str, str] = {
+        "paths.toml": "# paths.toml -- Filesystem path defaults\n# Auto-generated by CompUtils. Edit to change your bin "
+            "directory.",
+        "slurm.toml": "# slurm.toml -- SLURM-related defaults\n# Auto-generated by CompUtils. Edit at your own risk."
+            "\n# cluster, partition, and hpcType MUST be set correctly before use.",
+        "programs.toml": "# programs.toml -- Job-related defaults\n# Auto-generated by CompUtils.",
+        "extensions.toml": "# extensions.toml -- Filemask defaults\n# Auto-generated by CompUtils.",
+        "notifications.toml": (
+            "# notifications.toml -- Telegram notification settings\n"
+            "# Auto-generated by CompUtils.\n"
+            "#\n"
+            "# *** This file contains secrets (botToken). Do NOT edit under ANY circumstances. ***\n"
+        ),
+    }
+
+    # Per-key documentation written as a comment above each key in the
+    # generated TOML files. Keys without an entry here get no comment.
+    _COMMENTS: dict[str, str] = {
+        "binDirectory": "Directory containing CompUtils executables and config files.",
+        "CPU": "Number of CPU cores to request per job.",
+        "memoryRatio": "Memory-to-CPU ratio for standard jobs (GB per core).",
+        "highMemoryRatio": "Memory-to-CPU ratio for high-memory jobs, e.g. DLPNO (GB per core).",
+        "memoryBuffer": "Additional memory headroom added on top of the computed request (GB).",
+        "wallTime": "Default wall time (hours).",
+        "cluster": "Default cluster for job submission. REQUIRED — program will error at startup if unset.",
+        "partition": "Default partition for job submission. REQUIRED — program will error at startup if unset.",
+        "hpcType": "HPC identity (H2P, Stampede3, Bridges2). REQUIRED.",
+        "stalkDuration": "How long (minutes) before job stalking times out without looping.",
+        "stalkFrequency": "How often (minutes) to ping the queue while stalking.",
+        "submissionList": "SLURM header lines for job submission. Set automatically by hpcType.",
+        "method": "Default DFT method for single-point calculations.",
+        "methodLine": "Full method/basis string written into input files.",
+        "methodNames": "Ordered list of known method names. Index must match targetProgram.",
+        "targetProgram": "Program that runs methodNames[i]. Must be the same length as methodNames.",
+        "nboKeylist": "NBO keylist string appended to relevant Gaussian16 jobs.",
+        "mixedBasisVariants": "Basis set keylist indicating a mixed/custom basis is in use.",
+        "potCube": "Cube file label for electrostatic potential.",
+        "denCube": "Cube file label for electron density.",
+        "valenceCube": "Cube file label for valence density.",
+        "spinCube": "Cube file label for spin density.",
+        "coreLineVariants": "Input file keylist identifying the processor count line, by program.",
+        "ramLineVariants": "Input file keylist identifying the memory line, by program.",
+        "terminationVariants": "Output file strings indicating normal or error job termination.",
+        "gaussianNonVariant": "Gaussian16 SLURM script boilerplate written verbatim into job files.",
+        "orcaNonVariant": "ORCA 6.X SLURM script boilerplate written verbatim into job files.",
+        "qChemNonVariant": "Q-Chem SLURM script boilerplate written verbatim into job files.",
+        "singlePointExtra": "Filename suffix appended to single-point calculation jobs.",
+        "reRunExtra": "Filename suffix appended to re-run jobs.",
+        "coordExtension": "Coordinate file extension.",
+        "gaussianExtension": "Gaussian16 input file extension.",
+        "orcaExtension": "ORCA 6.X input file extension.",
+        "qChemExtension": "Q-Chem input file extension.",
+        "cubeExtension": "Cube file extension.",
+        "queueExtension": "Job queue/submission script extension.",
+        "outputExtension": "Program output file extension.",
+        "isNotifications": "Master switch: set to true to enable Telegram notifications.",
+        "botToken": "Telegram bot API token (from @BotFather). Treat as a secret.",
+        "chatID": "Your personal Telegram chat ID (auto-detected during setup).",
+        "broadcastGroupChatID": "Telegram group chat ID for broadcast queue alerts.",
+        "broadcastThreshold": "Minimum jobs in a single submission to trigger a broadcast alert.",
+    }
+
+    # Keys listed here get the _warningBox comment block inserted immediately
+    # above them in the generated TOML, alerting users not to edit carelessly.
+    _WARNINGS: dict[str, str] = {
+        "gaussianNonVariant": _warningBox,
+        "orcaNonVariant": _warningBox,
+        "qChemNonVariant": _warningBox,
+    }
+
+    # ── Class methods ──────────────────────────────────────────────────────────
+
+    @classmethod
+    def Load(cls) -> None:
+        """
+        Load all TOML config files and apply their values to this class.
+
+        1. Use the current cls.binDirectory (hardcoded default on first run)
+             as the config directory. paths.toml is loaded first, so if the
+             user has changed binDirectory, all subsequent files are read from
+             the correct location.
+
+        2. For each file in _FILE_GROUPS:
+               - If the file is absent: generate it from current defaults and
+                 write it to disk. Skip loading (values are already correct).
+               - If the file exists: parse it with tomllib and call
+                 _ApplySection(), which walks the key list and applies each
+                 value via setattr(). Missing keys trigger a warning and the
+                 hardcoded default is kept.
+
+        3. Call _Validate() to check required fields. Add your
+             cluster / partition / hpcType checks there.
+        """
+        for filename in cls._FILE_GROUPS:
+            # Re-evaluate configDir on each iteration: if paths.toml just
+            # updated binDirectory, subsequent files use the new location.
+            configDir = Path(cls.binDirectory)
+            filePath = configDir / filename
+
+            if not filePath.exists():
+                cprint(
+                    f"[config] {filename} not found — generating from hardcoded defaults.",
+                    "light_yellow"
+                )
+                cls._SaveSection(filename)
+                # File was just written with current defaults; nothing to load.
+                continue
+
+            data = loadToml(configDir, filename)
+            if data:
+                missingKeys = cls._ApplySection(data, filename)
+                if missingKeys:
+                    cls._AppendMissing(filename, missingKeys)
+
+        cls._Validate()
+
+    @classmethod
+    def _SaveSection(cls, filename: str) -> None:
+        """
+        Build and write a single TOML config file from current class attributes.
+
+        Called automatically by Load() when a file is missing (first run), and
+        also called by firstTimeSetup() after it sets the HPC-specific defaults,
+        so that the user's selection is persisted to slurm.toml.
+
+        Uses _BuildContent() to serialize the relevant attributes, then hands
+        the string to _WriteToml() for the actual file write.
+        """
+        configDir = Path(cls.binDirectory)
+        content = cls._BuildContent(filename)
+        writeToml(configDir, filename, content)
+
+    @classmethod
+    def _BuildContent(cls, filename: str) -> str:
+        """
+        Serialize one config section to a TOML-formatted string.
+
+        Iterates the attribute names listed in _FILE_GROUPS[filename] in order.
+        For each key:
+          - If it appears in _WARNINGS, the warning box is inserted first.
+          - If it appears in _COMMENTS, a '#'-prefixed comment line is added.
+          - The key = value line is written using _TomlValue() for correct
+            TOML syntax (escaping shell-script strings, formatting lists, etc.)
+        """
+        header = cls._HEADERS[filename]
+        keys = cls._FILE_GROUPS[filename]
+        lines = [header, ""]
+
+        for key in keys:
+            value = getattr(cls, key)
+            # Insert power-user warning block before flagged keys
+            if key in cls._WARNINGS:
+                lines.append(cls._WARNINGS[key])
+                lines.append("")
+            # Insert per-key documentation comment
+            commentText = cls._COMMENTS.get(key, "")
+            if commentText:
+                lines.append(f"# {commentText}")
+            lines.append(f"{key} = {tomlValue(value)}")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    @classmethod
+    def _ApplySection(cls, data: dict, filename: str) -> list[str]:
+        """
+        Apply a parsed TOML dict to this class's attributes.
+
+        Iterates _FILE_GROUPS[filename] and for each key:
+          - If the key is present in data: setattr() updates the class attribute
+            in place. Because these are class-level attributes (not instance
+            attributes), the change is immediately visible everywhere in the
+            program that reads Defaults.something.
+          - If the key is absent: _WarnMissing() issues a UserWarning and the
+            hardcoded default is left untouched.
+        """
+        missing = []
+        for key in cls._FILE_GROUPS[filename]:
+            if key in data:
+                setattr(cls, key, data[key])
+            else:
+                # Collect for append rather than just warning
+                missing.append(key)
+                cprint(f"[config] Key '{key}' not found in {filename}. "
+                       f"Falling back to hardcoded default: {getattr(cls, key)!r}", "light_yellow")
+        return missing
+
+    @classmethod
+    def _AppendMissing(cls, filename: str, missingKeys: list[str]) -> None:
+        # Opens the existing file in append mode and writes only the keys
+        # that were absent, each with its documentation comment. The rest
+        # of the file is untouched, so user customization is preserved.
+        configDir = Path(cls.binDirectory)
+        filePath = configDir / filename
+        try:
+            with open(filePath, "a", encoding="utf-8") as f:
+                for key in missingKeys:
+                    if key in cls._WARNINGS:
+                        f.write(f"\n{cls._WARNINGS[key]}\n")
+                    commentText = cls._COMMENTS.get(key, "")
+                    if commentText:
+                        f.write(f"\n# {commentText}\n")
+                    f.write(f"{key} = {tomlValue(getattr(cls, key))}\n")
+            cprint(f"[config] Appended {len(missingKeys)} missing key(s) to {filename}.", "light_yellow")
+        except OSError as e:
+            cprint(f"[config] Could not append missing keys to {filePath}: {e}", "light_red")
+
+    @classmethod
+    def _Validate(cls) -> None:
+        if len(cls.hpcType) == 0:
+            firstTimeSetup()
+        pass
 
 class Stampede3Submission:
     # JobName OutputName Error Nodes Partition Time
@@ -133,51 +494,331 @@ else:
     cprint("Notice: Could not find programs.txt in ~/bin/.", "light_red")
     cprint("Defaulting to hardcoded method targets.", "light_red")
 
+# Load all TOML config files from ~/bin/ and apply them to the Defaults class.
+#
+# On first run: each missing TOML file is generated from the hardcoded defaults
+# above and written to disk. The user should then edit them to match their HPC
+# environment. If hpcType / cluster / partition are empty after loading,
+# _Validate() will detect that and can call firstTimeSetup() (defined just above).
+#
+# On subsequent runs: each file is parsed and its values are applied to Defaults
+# via setattr(), so the rest of the program sees the user's configured values.
+# Any key absent from a file triggers a warning and the hardcoded default is kept.
+#
+# This call replaces the old hpc.type file check. hpc.type is no longer used.
+Defaults.Load()
+
+
+def _SendTelegram(botToken: str, chatID: str, message: str) -> bool:
+    """Send a message via the Telegram Bot API.
+
+    Uses only urllib (stdlib) — no pip dependencies. Supports HTML
+    formatting (<b>bold</b>, <i>italic</i>, <code>monospace</code>)
+    via parse_mode="HTML".
+
+    Returns True on success, False on failure. Never raises — prints
+    a warning on error so the caller doesn't need its own try/except.
+    """
+    url = f"https://api.telegram.org/bot{botToken}/sendMessage"
+    payload = json.dumps({
+        "chat_id": chatID,
+        "text": message,
+        "parse_mode": "HTML"
+    }).encode("utf-8")
+
+    request = Request(
+        url, data=payload,
+        headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urlopen(request, timeout=10) as response:
+            return response.status == 200
+    except (URLError, HTTPError, TimeoutError) as e:
+        cprint(f"  [Notification] Telegram send failed: {e}", "light_red")
+        return False
+
+
+def _DetectTelegramChatID(botToken: str, timeoutSeconds: int = 60) -> str | None:
+    """Auto-detect the user's Telegram chat ID.
+
+    How it works:
+      1. Clears stale updates — messages the bot received before this
+         function was called. Without this, the bot might pick up an old
+         message and return the wrong chat ID.
+      2. Polls the getUpdates endpoint in a loop. Telegram supports
+         long-polling: the server holds the connection open and responds
+         instantly when a new message arrives, so this doesn't spam the API.
+      3. Returns the chat ID from the first new message it sees.
+
+    Returns None if no message is received within timeoutSeconds.
+    """
+    baseURL = f"https://api.telegram.org/bot{botToken}"
+
+    # ── Step 1: Flush stale updates ────────────────────────────────
+    # Request the most recent update (offset=-1), then acknowledge it
+    # by requesting offset = update_id + 1. This tells Telegram to
+    # discard everything up to that point.
+    try:
+        clearURL = f"{baseURL}/getUpdates?offset=-1"
+        with urlopen(clearURL, timeout=10) as response:
+            data = json.loads(response.read())
+            if data.get("result"):
+                lastUpdateID = data["result"][-1]["update_id"]
+                ackURL = (
+                    f"{baseURL}/getUpdates"
+                    f"?offset={lastUpdateID + 1}"
+                )
+                urlopen(ackURL, timeout=10)
+    except Exception:
+        pass  # Best-effort; detection may still work without flushing
+
+    # ── Step 2: Poll for the user's new message ───────────────────
+    print("\n  Waiting for your message (60 seconds)...")
+    startTime = time.time()
+
+    while time.time() - startTime < timeoutSeconds:
+        try:
+            # Long-poll with 5-second timeout: Telegram holds the
+            # connection open and responds immediately when a message
+            # arrives, so we're not hammering the API.
+            pollURL = f"{baseURL}/getUpdates?timeout=5"
+            with urlopen(pollURL, timeout=15) as response:
+                data = json.loads(response.read())
+                for update in data.get("result", []):
+                    chatID = (
+                        update
+                        .get("message", {})
+                        .get("chat", {})
+                        .get("id")
+                    )
+                    if chatID:
+                        return str(chatID)
+        except Exception:
+            time.sleep(2)
+
+    return None
+
+
+def NotifyPersonal(message: str) -> None:
+    """Send a personal DM to the current user via Telegram.
+
+    Reads Defaults.botToken and Defaults.chatID directly — no separate
+    config file to load. Exits silently if notifications are disabled
+    or credentials are missing.
+
+    Example usage in stalk loop or job completion handler:
+        NotifyPersonal(f"Job {jobName} finished successfully.")
+        NotifyPersonal(f"Job {jobName} FAILED — check the log.")
+    """
+    if not Defaults.isNotifications:
+        return
+    if Defaults.botToken and Defaults.chatID:
+        _SendTelegram(Defaults.botToken, Defaults.chatID, message)
+
+
+def NotifyBroadcast(message: str) -> None:
+    """Post a broadcast message to the shared Telegram group.
+
+    Used for queue-wide alerts (e.g., someone submitted 100 jobs).
+    Reads Defaults.botToken and Defaults.broadcastGroupChatID.
+    Exits silently if notifications are disabled or the group ID
+    isn't configured.
+    """
+    if not Defaults.isNotifications:
+        return
+    if Defaults.botToken and Defaults.broadcastGroupChatID:
+        _SendTelegram(
+            Defaults.botToken,
+            Defaults.broadcastGroupChatID,
+            f"\U0001F4E2 Queue Alert\n{message}"
+        )
+
+
+def CheckAndBroadcast(jobCount: int) -> None:
+    """Broadcast a queue alert if jobCount >= Defaults.broadcastThreshold.
+
+    Call this from RunJob (or equivalent) after submitting jobs:
+
+        CheckAndBroadcast(len(submittedJobs))
+
+    Does nothing if notifications are disabled, credentials are missing,
+    or the count is below the threshold. Fails silently.
+    """
+    if not Defaults.isNotifications:
+        return
+    if jobCount >= Defaults.broadcastThreshold:
+        NotifyBroadcast(
+            f"{jobCount} jobs were just submitted to the queue. "
+            f"Expect slower turnaround for a while."
+        )
+
+
+# ── Setup Wizard ───────────────────────────────────────────────────────────
+def NotificationSetup() -> None:
+    """Interactive setup wizard for Telegram notifications.
+
+    Walks the user through:
+      1. Opting in or out (sets Defaults.isNotifications)
+      2. Entering the shared bot token (from lab admin)
+      3. Auto-detecting their personal chat ID
+      4. Sending a test notification to confirm it works
+      5. Persisting everything to notifications.toml via _SaveSection
+
+    Uses only input() and print(), so it works in any terminal
+    (SSH sessions, SLURM interactive shells, etc.).
+
+    Call from firstTimeSetup(). The wizard handles the yes/no prompt
+    internally, so it won't force notifications on users who say no —
+    it just leaves isNotifications = False and saves the file.
+    """
+    print("\n" + "=" * 55)
+    print("  Notification Setup (Telegram)")
+    print("=" * 55)
+
+    print("\n  CompUtils can send you Telegram notifications when")
+    print("  your jobs finish, and alert the group when someone submits a large batch to the queue.")
+
+    # ── Opt in / out ───────────────────────────────────────────────
+    while True:
+        choice = input(
+            "\n  Enable notifications? [Y/n]: "
+        ).strip().lower()
+        if choice in ("", "y", "n"):
+            break
+        print("  Please enter Y or N.")
+
+    if choice == "n":
+        # isNotifications stays False (the hardcoded default).
+        # Save the file so Load() doesn't re-prompt on next run.
+        Defaults._SaveSection("notifications.toml")
+        print("\n  Notifications disabled.")
+        print("  Re-run setup or edit notifications.toml to enable later.")
+        print("=" * 55)
+        return
+
+    Defaults.isNotifications = True
+
+    # ── Bot token ──────────────────────────────────────────────────
+    print("\n  You'll need the bot token from your lab admin.")
+    print("  (Enter 'q' to quit and come back later.)")
+
+    botToken = input("\n  Bot token: ").strip()
+
+    if botToken.lower() == "q":
+        # Save with isNotifications = True but empty token so the user
+        # doesn't get re-prompted by Load(), just needs to fill in the
+        # token manually or re-run setup.
+        Defaults._SaveSection("notifications.toml")
+        print("\n  Setup paused. Run again when you have the token.")
+        print("=" * 55)
+        return
+
+    # Basic format check: Telegram tokens always contain a colon
+    # separating the bot ID from the secret portion.
+    if ":" not in botToken:
+        cprint(
+            "\n  Warning: that doesn't look like a valid bot token",
+            "light_yellow"
+        )
+        print("  (expected format: 123456789:ABCdef...).")
+
+        while True:
+            proceed = input(
+                "  Continue anyway? [y/N]: "
+            ).strip().lower()
+            if proceed in ("", "n"):
+                Defaults._SaveSection("notifications.toml")
+                print("  Setup cancelled.")
+                print("=" * 55)
+                return
+            if proceed == "y":
+                break
+            print("  Please enter Y or N.")
+
+    Defaults.botToken = botToken
+
+    # ── Auto-detect chat ID ────────────────────────────────────────
+    print("\n  Now open Telegram and send any message to the bot.")
+
+    chatID = _DetectTelegramChatID(botToken, timeoutSeconds=60)
+
+    if chatID:
+        Defaults.chatID = chatID
+        cprint(f"\n  \u2713 Chat ID detected: {chatID}", "light_green")
+
+        # ── Test message ───────────────────────────────────────────
+        testChoice = input(
+            "\n  Send a test message? [Y/n]: "
+        ).strip().lower()
+        if testChoice != "n":
+            success = _SendTelegram(
+                botToken, chatID,
+                "\u2713 Welcome to remote queue notifications with CompUtils!"
+            )
+            if success:
+                cprint(
+                    "  \u2713 Test sent! Check Telegram.", "light_green"
+                )
+            else:
+                cprint(
+                    "  \u2717 Test failed. Double-check the bot token.",
+                    "light_red"
+                )
+    else:
+        cprint("\n  \u2717 Detection timed out.", "light_red")
+        print("  This usually means the bot token is wrong, or")
+        print("  Telegram couldn't be reached from this machine.")
+
+        manualID = input(
+            "\n  Enter your chat ID manually"
+            " (or press Enter to skip): "
+        ).strip()
+        if manualID:
+            Defaults.chatID = manualID
+        else:
+            print("  Personal notifications won't work, but")
+            print("  broadcast alerts will still go to the group.")
+            print("  Re-run setup or edit notifications.toml later.")
+
+    # ── Persist to notifications.toml ──────────────────────────────
+    # This is the same pattern as firstTimeSetup() calling
+    # Defaults._SaveSection("slurm.toml") — set the attributes,
+    # then save the whole section to disk.
+    Defaults._SaveSection("notifications.toml")
+
+    cprint(
+        f"\n  \u2713 Saved to {Defaults.binDirectory}/notifications.toml",
+        "light_green"
+    )
+    print("\n  Reminders:")
+    print("    \u2022 notifications.toml contains your bot token —")
+    print("      DO NOT EDIT THIS FOR ANY REASON.")
+    print("    \u2022 Join the lab's broadcast group for queue alerts!")
+    print("\n" + "=" * 55)
+
 def firstTimeSetup():
     systemType = str(input("Enter the name of the HPC cluster you are using (H2P, Expanse, Bridges2, Stampede3) :"))
-    with open(os.path.join(Defaults.binDirectory, "hpc.type"), "w") as hpcFile:
-        match systemType:
-            case "H2P":
-                hpcFile.write("H2P")
-                Defaults.hpcType = "H2P"
-                Defaults.submissionList = H2PSubmission.submissionList
-            case "Bridges2":
-                hpcFile.write("Bridges2")
-                Defaults.hpcType, Defaults.partition = "Bridges2", "RM-shared"
-                Defaults.submissionList = Bridges2Submission.submissionList
-                Defaults.memoryRatio, Defaults.memoryBuffer, Defaults.highMemoryRatio = 2, 0, 2
-            case "Expanse":
-                print("CompUtils is not supported on the Expanse architecture due to being outdated and messy. Have a good day.")
-            case "Stampede3":
-                hpcFile.write("Stampede3")
-                Defaults.hpcType, Defaults.partition = "Stampede3", "icx"
-                Defaults.CPU, Defaults.memoryRatio, Defaults.memoryBuffer, Defaults.highMemoryRatio = 80, 200/80, 0, 200/80
-                Defaults.submissionList = Stampede3Submission.submissionList
-            case _:
-                cprint("Unknown HPC architecture input. Aborting.", "light_red")
-                return
-
-if os.path.isfile(os.path.join(Defaults.binDirectory, "hpc.type")):
-    with open(os.path.join(Defaults.binDirectory, "hpc.type"), "r") as hpcFile:
-        hpcLine = hpcFile.readline().strip()
-        match hpcLine:
-            case "H2P":
-                Defaults.hpcType, Defaults.cluster, Defaults.partition = "H2P", "smp", "pliu"
-                Defaults.submissionList = H2PSubmission.submissionList
-            case "Bridges2":
-                Defaults.hpcType, Defaults.partition = "Bridges2", "RM-shared"
-                Defaults.memoryRatio, Defaults.memoryBuffer, Defaults.highMemoryRatio = 2, 0, 2
-                Defaults.submissionList = Bridges2Submission.submissionList
-            case "Stampede3":
-                Defaults.hpcType, Defaults.partition = "Stampede3", "icx"
-                Defaults.CPU, Defaults.memoryRatio, Defaults.memoryBuffer, Defaults.highMemoryRatio = 80, 200/80, 0, 200/80
-                Defaults.submissionList = Stampede3Submission.submissionList
-            case "Expanse":
-                print("CompUtils is NOT supported on Expanse. Have a good day.")
-            case _:
-                cprint("Unknown HPC architecture input. Aborting.", "light_red")
-else:
-    firstTimeSetup()
+    match systemType:
+        case "H2P":
+            Defaults.hpcType, Defaults.partition, Defaults.cluster = "H2P", "pliu", "smp"
+            Defaults.submissionList = H2PSubmission.submissionList
+        case "Bridges2":
+            Defaults.hpcType, Defaults.partition = "Bridges2", "RM-shared"
+            Defaults.submissionList = Bridges2Submission.submissionList
+            Defaults.memoryRatio, Defaults.memoryBuffer, Defaults.highMemoryRatio = 2, 0, 2
+        case "Expanse":
+            cprint("CompUtils is not supported on the Expanse architecture due to being outdated and messy. Have a good day.", "light_red")
+        case "Stampede3":
+            Defaults.hpcType, Defaults.partition = "Stampede3", "icx"
+            Defaults.CPU, Defaults.memoryRatio, Defaults.memoryBuffer, Defaults.highMemoryRatio = 80, 200/80, 0, 200/80
+            Defaults.submissionList = Stampede3Submission.submissionList
+        case _:
+            cprint("Unknown HPC architecture input. Aborting.", "light_red")
+            return
+    # Persist the just-configured SLURM defaults to slurm.toml so that
+    # Load() reads the correct values on all future runs.
+    Defaults._SaveSection("slurm.toml")
+    NotificationSetup()
 
 # Defines all the terminal flags the program can accept
 def commandLineParser():
@@ -209,6 +850,7 @@ def commandLineParser():
                                                       " to generate the new input file.")
     parser.add_argument('-form','--formcheck',type=str,help="Activates the Gaussian16 formchk utility without"
                                                             " full passthrough into gimmeCubes.")
+    parser.add_argument('-first','--first',action='store_true',help="Activates first-time set-up again.")
 
     # Figures out what the hell you told it to do
     args = parser.parse_args()
@@ -226,6 +868,8 @@ def commandLineParser():
     if args.override:
         indexOverride = args.override
         cprint("Registered " + str(indexOverride) + " as the index override.", "light_cyan")
+    if args.first:
+        firstTimeSetup()
 
     if args.run:
         # Compiles the entire list of files to run (built-in 'runall' capabilities)
@@ -865,6 +1509,7 @@ def jobStalking(jobSet, duration, frequency):
                             termLine = regex.search(termBytes, data, regex.IGNORECASE)
                             if termLine is not None:
                                 finishedJobs.append((job[0], termination))
+                                NotifyPersonal(f"Job {job} has finished!")
                                 break
                 jobSet.remove(job)
             elif job[0] in stalkStatus and os.path.isfile(job[1]) and os.path.getsize(job[1]) == 0:
