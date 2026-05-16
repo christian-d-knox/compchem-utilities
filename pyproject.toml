@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name        = "compchem-utilities"
-version     = "pre3.0.0"
+version     = "3.0.0"
 description = "Your one-stop-shop for Computational Chemistry"
 readme      = "README.md"
 requires-python = ">=3.11"
@@ -18,7 +18,6 @@ dependencies = [
     "regex",
     "xlsxwriter",
     "goodvibes",
-    "jupyter",
 ]
 
 [project.scripts]
