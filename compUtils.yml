@@ -151,7 +151,6 @@ dependencies:
   - zstd=1.5.7=hb78ec9c_6
   - rich>=13.7
   - textual>=0.50
-  - jupyter>=4.0.0
   - pip
   - pip:
       - git+https://github.com/christian-d-knox/compchem-utilities.git@dev
