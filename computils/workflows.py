@@ -1,0 +1,124 @@
+import os, time, regex
+from contextlib import closing
+from mmap import mmap, ACCESS_READ
+
+from .console  import console
+from .defaults import Defaults
+from .catalog  import Catalog
+from .coords   import fileCreation, extensionGetter, grabPaths, formCheck
+from .jobs     import genFile, runJob, slurmHandler
+from .molecule import Molecule
+
+def genBench(molecule: object) -> None:
+    # First, make the original Single Point
+    genSinglePoint(molecule)
+    # Since methodFile is defined globally, no need to iterate a line to catch-up after genSinglePoint
+    startTime = time.time()
+    if Catalog.indexOverride != 0:
+        indexShift = Catalog.indexOverride + 1
+    else:
+        indexShift = 1
+    for index in range(indexShift, len(Catalog.methodLine)):
+        molecule.extensionType = extensionGetter(Catalog.methodLine[index])
+        isSMD = regex.search("smd", Catalog.fullMethodLine[index], regex.IGNORECASE)
+        if isSMD:
+            filemaskExtra = (f"-{index}-" + Catalog.methodLine[index].replace("(", "").replace(")", "")
+                + "SMD" + Defaults.singlePointExtra)
+        else:
+            filemaskExtra = (f"-{index}-" + Catalog.methodLine[index].replace("(","").replace(")","")
+                + Defaults.singlePointExtra)
+        inputFile = fileCreation(molecule.rootName, molecule.extensionType, filemaskExtra)
+        molecule.fullPath = inputFile
+        molecule.baseName = (molecule.rootName + filemaskExtra)
+        genFile(molecule,index)
+        runJob(molecule)
+    endTime = time.time()
+    totalTime = round(endTime - startTime,2)
+    console.print("Total time for non-SP benchmark generation is: " + str(totalTime) + " seconds.") #light_cyan operation
+
+def genSinglePoint(molecule: object) -> None:
+    startTime = time.time()
+
+    # Update molecule properties
+    molecule.extensionType = extensionGetter(Catalog.methodLine[0])
+    inputFile = fileCreation(molecule.baseName, molecule.extensionType, Defaults.singlePointExtra)
+    molecule.fullPath = inputFile
+    molecule.baseName = molecule.baseName + Defaults.singlePointExtra
+    if Catalog.indexOverride != 0:
+        index = Catalog.indexOverride
+    else:
+        index = 0
+
+    # Calls the separate file generation method, feeds directly into runJob
+    genFile(molecule, index)
+    runJob(molecule)
+    endTime = time.time()
+    totalTime = round(endTime - startTime,2)
+    console.print("Total single point time is " + str(totalTime) + " seconds.") #light_cyan operation
+
+# Better, interactive implementation of my own gimmeCubesv3
+def gimmeCubes(molecule: object, cubeKeyList: list[str]) -> None:
+    keyWord, queueName, outputName = "", "", ""
+    for cubeKey in cubeKeyList:
+        match cubeKey:
+            case Defaults.spinCube:
+                outputName = fileCreation(molecule.baseName, Defaults.cubeExtension, cubeKey)
+                queueName = fileCreation(molecule.baseName, Defaults.queueExtension, cubeKey)
+                keyWord = "Spin=SCF"
+            case Defaults.denCube:
+                outputName = fileCreation(molecule.baseName, Defaults.cubeExtension, cubeKey)
+                queueName = fileCreation(molecule.baseName, Defaults.queueExtension, cubeKey)
+                keyWord = "Density=SCF"
+            case Defaults.potCube:
+                outputName = fileCreation(molecule.baseName, Defaults.cubeExtension, cubeKey)
+                queueName = fileCreation(molecule.baseName, Defaults.queueExtension, cubeKey)
+                keyWord = "Potential=SCF"
+            case Defaults.valenceCube:
+                outputName = fileCreation(molecule.baseName, Defaults.cubeExtension, cubeKey)
+                queueName = fileCreation(molecule.baseName, Defaults.queueExtension, cubeKey)
+                keyWord = "MO=Valence"
+            case "Range":
+                orbitalRange = str(input("Enter the range of MOs you want printed (e.g. 10-15) : "))
+                outputName = fileCreation(molecule.baseName, Defaults.cubeExtension, cubeKey + orbitalRange)
+                queueName = fileCreation(molecule.baseName, Defaults.queueExtension, cubeKey + orbitalRange)
+                keyWord = "MO=" + orbitalRange
+            case _:
+                console.print("Error: Unknown keyword found in keylist for " + molecule.baseName + " : " + cubeKey) #light_red error
+
+        slurmHandler(molecule,queueName,outputName,[])
+
+        with open(queueName,"a") as queueFile:
+            for nonVariantLine in Defaults.gaussianNonVariant:
+                queueFile.write(nonVariantLine)
+
+            # Writes the specifics for running the Density Cube
+            queueFile.write("cubegen 1 " + keyWord + " " + molecule.fullPath + " " + outputName + " 0""\n\n")
+
+        os.system("sbatch " + queueName)
+        #os.remove(queueName)
+        console.print(f"Submitted cube job " + molecule.baseName + " " + cubeKey + " to the cluster.") #light_green good
+
+# Because jobs don't always work the first time
+def genReRun(molecule,skipIndex):
+    with open(molecule.fullPath,"r") as inputFile:
+        with closing(mmap(inputFile.fileno(),0,access=ACCESS_READ)) as data:
+            preTable = "Will use up to"
+            preBytes = preTable.encode()
+            originalMethod = regex.search(preBytes,data)
+            pointer = originalMethod.ends()
+            data.seek(pointer[0])
+            data.read(2)
+            for index in range(0,3):
+                data.readline()
+            originalMethod = data.readline().decode()
+
+    Catalog.fullMethodLine[0] = originalMethod.replace("#","").strip()
+    Catalog.methodLine[0] = originalMethod.replace("#","").strip().split()[skipIndex]
+    molecule.extensionType = extensionGetter(Catalog.methodLine[0])
+    inputFile = fileCreation(molecule.baseName, molecule.extensionType, Defaults.reRunExtra)
+    molecule.fullPath = inputFile
+    molecule.baseName = molecule.baseName + Defaults.reRunExtra
+
+    # Calls the separate file generation method, feeds directly into runJob
+    genFile(molecule, 0)
+    runJob(molecule)

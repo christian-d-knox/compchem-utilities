@@ -1,8 +1,0 @@
-#!/usr/bin/perl
-
-
-foreach $file (@ARGV)
-{
-        system("chklog1 $file");
-}
-

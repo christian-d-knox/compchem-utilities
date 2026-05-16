@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name        = "compchem-utilities"
+version     = "pre3.0.0"
+description = "Your one-stop-shop for Computational Chemistry"
+readme      = "README.md"
+requires-python = ">=3.11"
+authors     = [{name = "Christian Drew Knox"}]
+license     = {text = "MIT"}
+dependencies = [
+    "rich>=13.7",
+    "textual>=0.50",
+    "termcolor",
+    "pandas",
+    "regex",
+    "xlsxwriter",
+    "goodvibes",
+    "jupyter",
+]
+
+[project.scripts]
+cu = "computils.__main__:Main"
+
+[tool.setuptools.packages.find]
+include = ["computils*"]
