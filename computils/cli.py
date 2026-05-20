@@ -5,6 +5,7 @@ from .catalog   import Catalog
 from .molecule  import Molecule
 from .coords    import grabPaths, gaussianChargeFinder, formCheck, getCoords
 from .jobs      import runJob
+from .notify import CheckAndBroadcast
 from .workflows import genBench, genSinglePoint, genReRun, gimmeCubes
 from .analysis  import goodVibesInteractive, goodVibesProcessor
 from .wizards   import firstTimeSetup
@@ -45,7 +46,7 @@ def commandLineParser():
     # Flags that set bools come first
     if args.stalk:
         Catalog.isStalking = True
-        willLoop = str(input("Enable stalk looping (i.e. re-initialize until all jobs terminate)?  (y/n): )"))
+        willLoop = str(input("Enable stalk looping (i.e. re-initialize until all jobs terminate)?  (y/n): "))
         if willLoop.lower() == "y":
             Catalog.isLooping = True
     if args.checkpoint:
@@ -61,6 +62,7 @@ def commandLineParser():
     if args.run:
         # Compiles the entire list of files to run (built-in 'runall' capabilities)
         jobList = glob.glob(args.run)
+        CheckAndBroadcast(len(jobList))
         # Builds the molecule object per complex in input
         for job in jobList:
             baseName, extension = grabPaths(job)
@@ -112,8 +114,8 @@ def commandLineParser():
 
     if args.goodvibes:
         console.print("Interactive GoodVibes interface activated. Please select your keylist from the common ones.") #light_cyan operation
-        totalKeyList = goodVibesInteractive()
-        subprocess.run(["goodvibes", totalKeyList, "*.out"], check=True)
+        totalKeyList = " ".join(goodVibesInteractive())
+        subprocess.run(f"goodvibes {totalKeyList} *.out", shell=True, check=True)
         console.print("GoodVibes has terminated. Handing output over to the excel exporter.") #light_cyan operation
         goodVibesProcessor("Goodvibes_output.dat")
         console.print("Enjoy your Excel-formatted GoodVibes output!") #light_green

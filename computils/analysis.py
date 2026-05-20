@@ -7,43 +7,40 @@ from .console  import console
 from .catalog  import Catalog
 
 # Because everyone hates remembering manuals. Walks through the most common use-cases with catch-all final custom keylist
-def goodVibesInteractive() -> str:
-    keyList = ["-v 1.0"]
+def goodVibesInteractive() -> list[str]:
+    keyList = ["-v", "1.0"]
     isQuasiHarmonic = str(input("Utilize quasiharmonic S and H correction (Grimme)? (y/n)"))
     if isQuasiHarmonic.lower() == "y":
         keyList.append("-q")
     isFreqCut = str(input("Utilize a frequency cutoff? (y/n)"))
     if isFreqCut.lower() == "y":
         freqCutoff = float(input("Enter the frequency cutoff (wavenumbers): "))
-        keyList.append("-f " + str(freqCutoff))
+        keyList.extend(["-f", str(freqCutoff)])
     isTempCorrection = str(input("Utilize a temperature correction? (y/n)"))
     if isTempCorrection.lower() == "y":
         tempCorrection = float(input("Enter temperature (K): "))
-        keyList.append("-t " + str(tempCorrection))
+        keyList.extend(["-t", str(tempCorrection)])
     isConcCorrection = str(input("Utilize a concentration correction? (y/n)"))
     if isConcCorrection.lower() == "y":
         concCorrection = float(input("Enter concentration (mol/l): "))
-        keyList.append("-c " + str(concCorrection))
+        keyList.extend(["-c", str(concCorrection)])
     isVibeScale = str(input("Utilize a non-default (i.e. not 1.0) vibrational scale factor? (y/n)"))
     if isVibeScale.lower() == "y":
         vibeScale = float(input("Enter vibrational scale factor: "))
-        keyList.append("-v " + str(vibeScale))
+        keyList.extend(["-v", str(vibeScale)])
     isSinglePoint = str(input("Run program with single point corrections? (y/n)"))
     if isSinglePoint.lower() == "y":
         isNonDefault = str(input("Is your filemask pattern different than the CompUtils default (_SP)? (y/n)"))
         if isNonDefault.lower() == "y":
             singlePoint = str(input("Enter your filemask pattern without the underscore:"))
-            keyList.append("--spc " + str(singlePoint))
+            keyList.extend(["--spc", str(singlePoint)])
         else:
-            keyList.append("--spc SP")
+            keyList.extend(["--spc", "SP"])
     isNonCommonKeys = str(input("Do you want to run with additional, less common keys? (y/n)"))
     if isNonCommonKeys.lower() == "y":
-        nonCommonKeys = str(input("Enter all of your non-common keys exactly as GoodVibes must receive them, separated by spaces."))
-        keyList.append(nonCommonKeys)
-    finalKeyList = ""
-    for key in range(len(keyList)):
-        finalKeyList = finalKeyList + " " + keyList[key]
-    return finalKeyList
+        nonCommonKeys = input("Enter all of your non-common keys exactly as GoodVibes must receive them, separated by spaces.")
+        keyList.extend(nonCommonKeys.split())
+    return keyList
 
 # An improved version of goodVibesToExcelv3 that now properly formats the numbers in Excel as numbers
 def goodVibesProcessor(inputFile) -> None:

@@ -99,7 +99,7 @@ def jobStalking(jobSet: set, duration: int, frequency: int) -> None:
                             termLine = regex.search(termBytes, data, regex.IGNORECASE)
                             if termLine is not None:
                                 finishedJobs.append((job[0], termination))
-                                NotifyPersonal(f"Job {job} has finished!")
+                                NotifyPersonal(f"Job {job[0]} has finished!")
                                 break
                 jobSet.remove(job)
             elif job[0] in stalkStatus and Path(job[1]).is_file() and Path(job[1]).stat().st_size == 0:
