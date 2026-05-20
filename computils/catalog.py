@@ -40,7 +40,7 @@ class Catalog:
         """Read benchmarking.txt and programs.txt from Defaults.binDirectory."""
         # benchmarking.txt
         benchPath = Defaults.binDirectory / "benchmarking.txt"
-        if Path(benchPath).is_file():
+        if benchPath.is_file():
             with open(benchPath, "r") as methodFile:
                 for line in methodFile:
                     cls.fullMethodLine.append(line)
@@ -61,7 +61,7 @@ class Catalog:
 
         # programs.txt
         progPath = Defaults.binDirectory / "programs.txt"
-        if Path(progPath).is_file():
+        if progPath.is_file():
             with open(progPath, "r") as programFile:
                 for targetLine in programFile:
                     parts = targetLine.strip().split(" ")

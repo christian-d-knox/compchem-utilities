@@ -62,11 +62,6 @@ def writeToml(configDir: Path, filename: str, content: str) -> None:
             "         Hardcoded defaults will be used for this section.") #light_red error
 
 
-def warnMissing(key: str, filename: str, fallback: Any) -> None:
-    console.print(f"[config] Key '{key}' not found in {filename}. "
-        f"Falling back to hardcoded default: {fallback!r}", "light_red") #light_red error
-
-
 class Defaults:
     binDirectory = Path("~/bin").expanduser()
     # Ordinary job defaults
