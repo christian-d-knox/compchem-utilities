@@ -1,4 +1,4 @@
-import os, regex
+import os, regex, subprocess
 from contextlib import closing
 from mmap import mmap, ACCESS_READ
 from pathlib import Path
@@ -17,7 +17,7 @@ def fileCreation(baseName, extensionType, extra) -> Path:
 
 # Formats checkpoints automatically
 def formCheck(molecule: object) -> None:
-    os.system("formchk " + molecule.fullPath)
+    subprocess.run(["formchk", molecule.fullPath], check=True)
     molecule.extensionType = ".fchk"
     molecule.fullPath = molecule.rootName + molecule.extensionType
 
@@ -109,10 +109,10 @@ def gaussianChargeFinder(geometryFile: Path) -> tuple[str,str]:
     return charge, multiplicity
 
 # This subroutine returns file name and extension for ease-of-use
-def grabPaths(fileName: Path) -> tuple[str,str] | tuple[None,None]:
-    if os.path.exists(fileName):
-        baseName, extension = os.path.basename(fileName).split(".")
-        extension = "." + extension
+def grabPaths(fileName: str) -> tuple[str,str] | tuple[None,None]:
+    filePath = Path(fileName)
+    if filePath.exists():
+        baseName, extension = filePath.stem, filePath.suffix
         return baseName, extension
     else:
         console.print("Could not locate: " + fileName) #light_red error

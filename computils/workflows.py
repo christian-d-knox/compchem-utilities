@@ -1,4 +1,4 @@
-import os, time, regex
+import os, time, regex, subprocess
 from contextlib import closing
 from mmap import mmap, ACCESS_READ
 
@@ -13,7 +13,7 @@ def genBench(molecule: object) -> None:
     # First, make the original Single Point
     genSinglePoint(molecule)
     # Since methodFile is defined globally, no need to iterate a line to catch-up after genSinglePoint
-    startTime = time.time()
+    startTime = time.monotonic()
     if Catalog.indexOverride != 0:
         indexShift = Catalog.indexOverride + 1
     else:
@@ -32,12 +32,12 @@ def genBench(molecule: object) -> None:
         molecule.baseName = (molecule.rootName + filemaskExtra)
         genFile(molecule,index)
         runJob(molecule)
-    endTime = time.time()
+    endTime = time.monotonic()
     totalTime = round(endTime - startTime,2)
     console.print("Total time for non-SP benchmark generation is: " + str(totalTime) + " seconds.") #light_cyan operation
 
 def genSinglePoint(molecule: object) -> None:
-    startTime = time.time()
+    startTime = time.monotonic()
 
     # Update molecule properties
     molecule.extensionType = extensionGetter(Catalog.methodLine[0])
@@ -52,7 +52,7 @@ def genSinglePoint(molecule: object) -> None:
     # Calls the separate file generation method, feeds directly into runJob
     genFile(molecule, index)
     runJob(molecule)
-    endTime = time.time()
+    endTime = time.monotonic()
     totalTime = round(endTime - startTime,2)
     console.print("Total single point time is " + str(totalTime) + " seconds.") #light_cyan operation
 
@@ -94,7 +94,7 @@ def gimmeCubes(molecule: object, cubeKeyList: list[str]) -> None:
             # Writes the specifics for running the Density Cube
             queueFile.write("cubegen 1 " + keyWord + " " + molecule.fullPath + " " + outputName + " 0""\n\n")
 
-        os.system("sbatch " + queueName)
+        subprocess.run(["sbatch", queueName], check=True)
         #os.remove(queueName)
         console.print(f"Submitted cube job " + molecule.baseName + " " + cubeKey + " to the cluster.") #light_green good
 
