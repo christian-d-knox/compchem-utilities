@@ -10,34 +10,34 @@ from .catalog  import Catalog
 def goodVibesInteractive() -> str:
     keyList = ["-v 1.0"]
     isQuasiHarmonic = str(input("Utilize quasiharmonic S and H correction (Grimme)? (y/n)"))
-    if isQuasiHarmonic == Catalog.booleanStrings[0]:
+    if isQuasiHarmonic.lower() == "y":
         keyList.append("-q")
     isFreqCut = str(input("Utilize a frequency cutoff? (y/n)"))
-    if isFreqCut == Catalog.booleanStrings[0]:
+    if isFreqCut.lower() == "y":
         freqCutoff = float(input("Enter the frequency cutoff (wavenumbers): "))
         keyList.append("-f " + str(freqCutoff))
     isTempCorrection = str(input("Utilize a temperature correction? (y/n)"))
-    if isTempCorrection == Catalog.booleanStrings[0]:
+    if isTempCorrection.lower() == "y":
         tempCorrection = float(input("Enter temperature (K): "))
         keyList.append("-t " + str(tempCorrection))
     isConcCorrection = str(input("Utilize a concentration correction? (y/n)"))
-    if isConcCorrection == Catalog.booleanStrings[0]:
+    if isConcCorrection.lower() == "y":
         concCorrection = float(input("Enter concentration (mol/l): "))
         keyList.append("-c " + str(concCorrection))
     isVibeScale = str(input("Utilize a non-default (i.e. not 1.0) vibrational scale factor? (y/n)"))
-    if isVibeScale == Catalog.booleanStrings[0]:
+    if isVibeScale.lower() == "y":
         vibeScale = float(input("Enter vibrational scale factor: "))
         keyList.append("-v " + str(vibeScale))
     isSinglePoint = str(input("Run program with single point corrections? (y/n)"))
-    if isSinglePoint == Catalog.booleanStrings[0]:
+    if isSinglePoint.lower() == "y":
         isNonDefault = str(input("Is your filemask pattern different than the CompUtils default (_SP)? (y/n)"))
-        if isNonDefault == Catalog.booleanStrings[0]:
+        if isNonDefault.lower() == "y":
             singlePoint = str(input("Enter your filemask pattern without the underscore:"))
             keyList.append("--spc " + str(singlePoint))
         else:
             keyList.append("--spc SP")
     isNonCommonKeys = str(input("Do you want to run with additional, less common keys? (y/n)"))
-    if isNonCommonKeys == Catalog.booleanStrings[0]:
+    if isNonCommonKeys.lower() == "y":
         nonCommonKeys = str(input("Enter all of your non-common keys exactly as GoodVibes must receive them, separated by spaces."))
         keyList.append(nonCommonKeys)
     finalKeyList = ""

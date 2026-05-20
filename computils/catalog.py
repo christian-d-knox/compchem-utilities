@@ -7,7 +7,7 @@ indexOverride, isLooping, fileExtension) move into Intent fields; only
 the loaded-data attributes (methodLine, methodList, etc.) stay here.
 """
 import os
-from typing import ClassVar
+from pathlib import Path
 from .console  import console
 from .defaults import Defaults
 
@@ -35,15 +35,12 @@ class Catalog:
     # ── Runtime tracking ────────────────────────────────────────────────────
     stalkingSet = set()
 
-    # ── Constants ───────────────────────────────────────────────────────────
-    booleanStrings = ["y", "n"]
-
     @classmethod
     def Load(cls) -> None:
         """Read benchmarking.txt and programs.txt from Defaults.binDirectory."""
         # benchmarking.txt
-        benchPath = os.path.join(Defaults.binDirectory, "benchmarking.txt")
-        if os.path.isfile(benchPath):
+        benchPath = Defaults.binDirectory / "benchmarking.txt"
+        if Path(benchPath).is_file():
             with open(benchPath, "r") as methodFile:
                 for line in methodFile:
                     cls.fullMethodLine.append(line)
@@ -63,8 +60,8 @@ class Catalog:
             )
 
         # programs.txt
-        progPath = os.path.join(Defaults.binDirectory, "programs.txt")
-        if os.path.isfile(progPath):
+        progPath = Defaults.binDirectory / "programs.txt"
+        if Path(progPath).is_file():
             with open(progPath, "r") as programFile:
                 for targetLine in programFile:
                     parts = targetLine.strip().split(" ")
