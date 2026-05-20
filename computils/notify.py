@@ -42,9 +42,9 @@ def _DetectTelegramChatID(botToken: str, timeoutSeconds: int = 60) -> str | None
         pass
 
     print("\n  Waiting for your message (60 seconds)...")
-    startTime = time.time()
+    startTime = time.monotonic()
 
-    while time.time() - startTime < timeoutSeconds:
+    while time.monotonic() - startTime < timeoutSeconds:
         try:
             pollURL = f"{baseURL}/getUpdates?timeout=5"
             with urlopen(pollURL, timeout=15) as response:

@@ -1,6 +1,7 @@
 import os, subprocess, time, regex
 from contextlib import closing
 from mmap import mmap, ACCESS_READ
+from pathlib import Path
 
 from .console  import console
 from .defaults import Defaults
@@ -9,13 +10,13 @@ from .notify   import NotifyPersonal
 
 # Finally implemented in a way I can be proud of.
 def jobStalking(jobSet: set, duration: int, frequency: int) -> None:
-    startTime = time.time()
+    startTime = time.monotonic()
     # Prints queue in format of JOBNAME STATUS NODE/REASON START_TIME CURRENT_DURATION courtesy of my own improved
     # obsessiveQueuev2
     command = ["squeue -h --me --format='%25j %10T %18R %S %20M'"]
     finishedJobs = []
     # Repeats every frequency over duration
-    pingTime = time.time()
+    pingTime = time.monotonic()
     while (pingTime - startTime) < duration * 60:
         stalkStatus = set()
         # Tells the function that jobs you submitted are the ones to track
@@ -42,7 +43,7 @@ def jobStalking(jobSet: set, duration: int, frequency: int) -> None:
                     for job in jobSet:
                         convergeCriteria = "Unknown"
                         if job[0] == result[index].split()[0]:
-                            if os.path.isfile(job[1]) and os.path.getsize(job[1]) > 0:
+                            if Path(job[1]).is_file() and Path(job[1]).stat().st_size > 0:
                                 with open(job[1],'r+') as file:
                                     with closing(mmap(file.fileno(),0,access=ACCESS_READ)) as data:
                                         hasStability = "Stability analysis"
@@ -90,7 +91,7 @@ def jobStalking(jobSet: set, duration: int, frequency: int) -> None:
         for job in jobCopy:
             # If the output is created during the execution of the subroutine, it won't be detected in the prior
             # block and it will be size 0
-            if job[0] in stalkStatus and os.path.isfile(job[1]) and os.path.getsize(job[1]) > 0:
+            if job[0] in stalkStatus and Path(job[1]).is_file() and Path(job[1]).stat().st_size > 0:
                 with open(job[1], "r+") as file:
                     with closing(mmap(file.fileno(), 0, access=ACCESS_READ)) as data:
                         for termination in Defaults.terminationVariants:
@@ -101,7 +102,7 @@ def jobStalking(jobSet: set, duration: int, frequency: int) -> None:
                                 NotifyPersonal(f"Job {job} has finished!")
                                 break
                 jobSet.remove(job)
-            elif job[0] in stalkStatus and os.path.isfile(job[1]) and os.path.getsize(job[1]) == 0:
+            elif job[0] in stalkStatus and Path(job[1]).is_file() and Path(job[1]).stat().st_size == 0:
                 console.print("Job " + job[0] + " started running during stalk subroutine execution.") #light_magenta info
 
         # Reports job termination data
@@ -113,15 +114,15 @@ def jobStalking(jobSet: set, duration: int, frequency: int) -> None:
 
         # If all jobs for stalking are done, finish execution and release the terminal
         if len(jobSet) == 0:
-            console.parint("All jobs tagged for stalking have finished.") #light_cyan operation
+            console.print("All jobs tagged for stalking have finished.") #light_cyan operation
             break
 
 
-        lastPing = time.strftime("%a %I:%M:%S",time.localtime(pingTime))
+        lastPing = time.strftime("%a %I:%M:%S",time.localtime())
         console.print("Waiting " + str(frequency*60) + " seconds to ping the queue again. Last ping at " + lastPing
                + " local time.") #light_blue operation
         time.sleep(frequency * 60)
-        pingTime = time.time()
+        pingTime = time.monotonic()
 
         # Timeout warning
         if (pingTime - startTime) > duration * 60:

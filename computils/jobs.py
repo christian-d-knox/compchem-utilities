@@ -1,4 +1,4 @@
-import os, regex
+import os, regex, subprocess
 from pathlib import Path
 from .console  import console
 from .defaults import Defaults
@@ -34,12 +34,12 @@ def genFile(molecule: object, index: int) -> None:
                 for line in molecule.coordinateList:
                     jobInput.write(line)
                 # Adds in mixed basis info from local file
-                if os.path.isfile("mixedbasis.txt") and mixedBasis:
+                if Path("mixedbasis.txt").is_file() and mixedBasis:
                     jobInput.write("\n")
                     with open("mixedbasis.txt") as mixedBasisFile:
                         for line in mixedBasisFile:
                             jobInput.write(line)
-                elif mixedBasis and not os.path.isfile("mixedbasis.txt"):
+                elif mixedBasis and not Path("mixedbasis.txt").is_file():
                     console.print("Mixed basis information not found. Aborting.") #light_red error
                     return
                 jobInput.write("\n")
@@ -54,7 +54,7 @@ def genFile(molecule: object, index: int) -> None:
             with open(inputFile, 'w') as jobInput:
                 # Sets the job's CPU and RAM
                 jobCPU = str(Defaults.CPU)
-                if Catalog.methodLine == "DLPNO-CCSD(T)":
+                if "DLPNO" in Catalog.fullMethodLine[index]:
                     jobMem = str(Defaults.highMemoryRatio * 1000)
                 else:
                     jobMem = str(Defaults.memoryRatio * 1000)
@@ -187,9 +187,9 @@ def runJob(molecule: object):
                         outputFile.write(nonVariantLine)
                     outputFile.write("\ng16 < " + molecule.fullPath + "\n\n")
 
-                os.system("sbatch " + queueName)
+                subprocess.run(["sbatch", queueName], check=True)
                 #os.remove(queueName)
-                console.print(f"Submitted job " + molecule.baseName + " to Gaussian16", "light_green") #light_green good
+                console.print(f"Submitted job " + molecule.baseName + " to Gaussian16") #light_green good
                 if Catalog.isStalking:
                     molecule.fullPath = molecule.baseName + Defaults.outputExtension
                     Catalog.stalkingSet.add((molecule.baseName,molecule.fullPath))
@@ -206,7 +206,7 @@ def runJob(molecule: object):
                     for index in range(8,10):
                         outputFile.write(Defaults.orcaNonVariant[index])
 
-                os.system("sbatch " + queueName)
+                subprocess.run(["sbatch", queueName], check=True)
                 #os.remove(queueName)
                 console.print(f"Submitted job " + molecule.baseName + " to ORCA 6.0.1") #light_green good
                 if Catalog.isStalking:
@@ -234,7 +234,7 @@ def runJob(molecule: object):
                     #outputFile.write("qchem -slurm -nt " + str(cpus) + " " + molecule.fullPath + " " + "\n")
                     outputFile.write("du -h\n\n")
 
-                os.system("sbatch " + queueName)
+                subprocess.run(["sbatch", queueName], check=True)
                 #os.remove(queueName)
                 console.print(f"Submitted job " + molecule.baseName + " to Q-Chem 6.3") #light_green good
                 if Catalog.isStalking:

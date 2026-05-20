@@ -232,7 +232,7 @@ class Defaults:
     @classmethod
     def Load(cls) -> None:
         for filename in cls._FILE_GROUPS:
-            configDir = Path(cls.binDirectory)
+            configDir = cls.binDirectory
             filePath = configDir / filename
 
             if not filePath.exists():
@@ -251,7 +251,7 @@ class Defaults:
 
     @classmethod
     def _SaveSection(cls, filename: str) -> None:
-        configDir = Path(cls.binDirectory)
+        configDir = cls.binDirectory
         content = cls._BuildContent(filename)
         writeToml(configDir, filename, content)
 
@@ -292,7 +292,7 @@ class Defaults:
 
     @classmethod
     def _AppendMissing(cls, filename: str, missingKeys: list[str]) -> None:
-        configDir = Path(cls.binDirectory)
+        configDir = cls.binDirectory
         filePath = configDir / filename
         try:
             with open(filePath, "a", encoding="utf-8") as file:

@@ -1,4 +1,4 @@
-import argparse, glob, os, time
+import argparse, glob, os, time, subprocess
 from .console   import console
 from .defaults  import Defaults
 from .catalog   import Catalog
@@ -46,7 +46,7 @@ def commandLineParser():
     if args.stalk:
         Catalog.isStalking = True
         willLoop = str(input("Enable stalk looping (i.e. re-initialize until all jobs terminate)?  (y/n): )"))
-        if willLoop == Catalog.booleanStrings[0]:
+        if willLoop.lower() == "y":
             Catalog.isLooping = True
     if args.checkpoint:
         Catalog.isCheck = True
@@ -96,8 +96,6 @@ def commandLineParser():
         jobList = glob.glob(args.cube)
         # This splits the entered keylist into separate keys, passed into gimmeCubes as an array which can be iterated through
         cubeOptions = cubeList.split(" ")
-        os.system("module purge")
-        os.system("module load gaussian")
         for job in jobList:
             baseName, extension = grabPaths(job)
             newMolecule = Molecule(job, baseName, 0, 0, 0, extension, baseName)
@@ -107,8 +105,6 @@ def commandLineParser():
 
     if args.formcheck:
         jobList = glob.glob(args.formcheck)
-        os.system("module purge")
-        os.system("module load gaussian")
         for job in jobList:
             baseName, extension = grabPaths(job)
             newMolecule = Molecule(job, baseName, 0, 0, 0, extension, baseName)
@@ -117,7 +113,7 @@ def commandLineParser():
     if args.goodvibes:
         console.print("Interactive GoodVibes interface activated. Please select your keylist from the common ones.") #light_cyan operation
         totalKeyList = goodVibesInteractive()
-        os.system("goodvibes " + totalKeyList + " *.out")
+        subprocess.run(["goodvibes", totalKeyList, "*.out"], check=True)
         console.print("GoodVibes has terminated. Handing output over to the excel exporter.") #light_cyan operation
         goodVibesProcessor("Goodvibes_output.dat")
         console.print("Enjoy your Excel-formatted GoodVibes output!") #light_green
@@ -125,7 +121,7 @@ def commandLineParser():
     if args.rerun:
         jobList = glob.glob(args.rerun)
         keylistOrder = str(input("Is your input structured as 'opt freq FUNCTIONAL' (y) or 'FUNCTIONAL other keys' (n)? :"))
-        if keylistOrder == Catalog.booleanStrings[0]:
+        if keylistOrder.lower() == "y":
             skipIndex = 2
         else:
             skipIndex = 0
