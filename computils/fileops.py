@@ -65,7 +65,7 @@ def getCoords(fileName: Path, outputFileName: Path) -> list:
             # Ensures the list elements are integers for dictionary pairing
             at[k] = int(at[k])
             # Translates from Atomic Number to Atomic Symbol and builds the entire line to be written with proper formatting
-            coordLine = str(atSymbol[at[k]]) + "   " + str(X[k]) + "   " + str(Y[k]) + "   " + str(Z[k]) + "\n"
+            coordLine = f"{atSymbol[at[k]]}   {X[k]}   {Y[k]}   {Z[k]}\n"
             coordLine = coordLine.replace(' ', ' ')
             outputFile.write(coordLine)
             coordinateList.append(coordLine)
@@ -85,8 +85,8 @@ def extensionGetter(method: str) -> str:
         case "Q":
             fileExtension = Defaults.qChemExtension
         case _:
-            console.print("Notice: One or more of your intended methods is not specified in programs file nor hardcoded."
-                   " Defaulting to Gaussian16.") #light_red error
+            console.print("[error]Notice: One or more of your intended methods is not specified in programs file nor hardcoded."
+                   " Defaulting to Gaussian16.[/error]")
             fileExtension = Defaults.gaussianExtension
     return fileExtension
 
@@ -115,5 +115,5 @@ def grabPaths(fileName: str) -> tuple[str,str] | tuple[None,None]:
         baseName, extension = filePath.stem, filePath.suffix
         return baseName, extension
     else:
-        console.print("Could not locate: " + fileName) #light_red error
+        console.print(f"[error]Could not locate: {fileName} [/error]")
         return None, None

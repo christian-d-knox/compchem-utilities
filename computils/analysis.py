@@ -5,40 +5,41 @@ import pandas, regex
 
 from .console  import console
 from .catalog  import Catalog
+from .prompts import *
 
 # Because everyone hates remembering manuals. Walks through the most common use-cases with catch-all final custom keylist
 def goodVibesInteractive() -> list[str]:
     keyList = ["-v", "1.0"]
-    isQuasiHarmonic = str(input("Utilize quasiharmonic S and H correction (Grimme)? (y/n)"))
-    if isQuasiHarmonic.lower() == "y":
+    isQuasiHarmonic = AskBool("Utilize quasiharmonic S and H correction (Grimme)?", "Y")
+    if isQuasiHarmonic:
         keyList.append("-q")
-    isFreqCut = str(input("Utilize a frequency cutoff? (y/n)"))
-    if isFreqCut.lower() == "y":
-        freqCutoff = float(input("Enter the frequency cutoff (wavenumbers): "))
+    isFreqCut = AskBool("Utilize a frequency cutoff?", "Y")
+    if isFreqCut:
+        freqCutoff = AskFloat("Enter the frequency cutoff (wavenumbers)")
         keyList.extend(["-f", str(freqCutoff)])
-    isTempCorrection = str(input("Utilize a temperature correction? (y/n)"))
-    if isTempCorrection.lower() == "y":
-        tempCorrection = float(input("Enter temperature (K): "))
+    isTempCorrection = AskBool("Utilize a temperature correction?", "N")
+    if isTempCorrection:
+        tempCorrection = AskFloat("Enter temperature (K)")
         keyList.extend(["-t", str(tempCorrection)])
-    isConcCorrection = str(input("Utilize a concentration correction? (y/n)"))
-    if isConcCorrection.lower() == "y":
-        concCorrection = float(input("Enter concentration (mol/l): "))
+    isConcCorrection = AskBool("Utilize a concentration correction?", "N")
+    if isConcCorrection:
+        concCorrection = AskFloat("Enter concentration (mol/l)")
         keyList.extend(["-c", str(concCorrection)])
-    isVibeScale = str(input("Utilize a non-default (i.e. not 1.0) vibrational scale factor? (y/n)"))
-    if isVibeScale.lower() == "y":
-        vibeScale = float(input("Enter vibrational scale factor: "))
+    isVibeScale = AskBool("Utilize a non-default (i.e. not 1.0) vibrational scale factor?", "N")
+    if isVibeScale:
+        vibeScale = AskFloat("Enter vibrational scale factor")
         keyList.extend(["-v", str(vibeScale)])
-    isSinglePoint = str(input("Run program with single point corrections? (y/n)"))
-    if isSinglePoint.lower() == "y":
-        isNonDefault = str(input("Is your filemask pattern different than the CompUtils default (_SP)? (y/n)"))
-        if isNonDefault.lower() == "y":
-            singlePoint = str(input("Enter your filemask pattern without the underscore:"))
+    isSinglePoint = AskBool("Run program with single point corrections?", "Y")
+    if isSinglePoint:
+        isNonDefault = AskBool("Is your filemask pattern different than the CompUtils default (_SP)?", "N")
+        if isNonDefault:
+            singlePoint = AskStr("Enter your filemask pattern without the underscore")
             keyList.extend(["--spc", str(singlePoint)])
         else:
             keyList.extend(["--spc", "SP"])
-    isNonCommonKeys = str(input("Do you want to run with additional, less common keys? (y/n)"))
-    if isNonCommonKeys.lower() == "y":
-        nonCommonKeys = input("Enter all of your non-common keys exactly as GoodVibes must receive them, separated by spaces.")
+    isNonCommonKeys = AskBool("Do you want to run with additional, less common keys?", "N")
+    if isNonCommonKeys:
+        nonCommonKeys = AskStr("Enter all of your non-common keys exactly as GoodVibes must receive them, separated by spaces.")
         keyList.extend(nonCommonKeys.split())
     return keyList
 
