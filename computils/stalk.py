@@ -36,8 +36,8 @@ def jobStalking(jobSet: set, duration: int, frequency: int) -> None:
         for index in range(len(result)):
             match result[index].split()[1]:
                 case "PENDING":
-                    console.print("Job " + str(result[index].split()[0]) + " is currently pending. Expected start time is "
-                       + str(result[index].split()[3])) #light_yellow warning
+                    console.print(f"[warning]Job {result[index].split()[0]} is currently pending. Expected start time is "
+                       f" {result[index].split()[3]}[/warning]")
                     stalkStatus.remove(result[index].split()[0])
                 case "RUNNING":
                     for job in jobSet:
@@ -74,14 +74,14 @@ def jobStalking(jobSet: set, duration: int, frequency: int) -> None:
                                                     convergeLine = data.readline().decode()
                                                     convergeMet.append(convergeLine.split()[4])
                                                     convergeCriteria = convergeMet.count("YES")
-                                            console.print("Job " + str(result[index].split()[0]) + " is currently running, and "
-                                                "has converged on " + str(convergeCriteria) + " out of 4 criteria.\n    "
-                                                   + stabilityInsert + " Current duration is " + str(result[index].split()[4])) #light_magenta info
+                                            console.print(f"[info]Job {result[index].split()[0]} is currently running, and "
+                                                f"has converged on {convergeCriteria} out of 4 criteria.\n    "
+                                                f"{stabilityInsert} Current duration is {result[index].split()[4]}[/info]")
                                             stalkStatus.remove(result[index].split()[0])
                                         else:
-                                            console.print("Job " + str(result[index].split()[0]) + " is currently running. Convergence "
-                                                "criterion header not found.\n    " + stabilityInsert + " Current duration is "
-                                                   + str(result[index].split()[4])) #light_magenta info
+                                            console.print(f"[info]Job {result[index].split()[0]} is currently running. Convergence "
+                                                f"criterion header not found.\n    {stabilityInsert} Current duration is "
+                                                f"{result[index].split()[4]}[/info]")
                                             stalkStatus.remove(result[index].split()[0])
                             break
 
@@ -103,24 +103,24 @@ def jobStalking(jobSet: set, duration: int, frequency: int) -> None:
                                 break
                 jobSet.remove(job)
             elif job[0] in stalkStatus and Path(job[1]).is_file() and Path(job[1]).stat().st_size == 0:
-                console.print("Job " + job[0] + " started running during stalk subroutine execution.") #light_magenta info
+                console.print(f"[info]Job {job[0]} started running during stalk subroutine execution.[/info]")
 
         # Reports job termination data
         for job in finishedJobs:
             if job[1] == Defaults.terminationVariants[0] or job[1] == Defaults.terminationVariants[1]:
-                console.print("Job " + str(job[0]) + " has encountered " + Defaults.terminationVariants[0]) #light_green good
+                console.print(f"[good]Job {job[0]} has encountered {Defaults.terminationVariants[0]}[/good]")
             if job[1] == Defaults.terminationVariants[2]:
-                console.print("Job " + str(job[0]) + " has encountered " + Defaults.terminationVariants[2]) #light_red error
+                console.print(f"[error]Job {job[0]} has encountered {Defaults.terminationVariants[2]}[/error]")
 
         # If all jobs for stalking are done, finish execution and release the terminal
         if len(jobSet) == 0:
-            console.print("All jobs tagged for stalking have finished.") #light_cyan operation
+            console.print("[operation]All jobs tagged for stalking have finished.[/operation]") #light_cyan operation
             break
 
 
         lastPing = time.strftime("%a %I:%M:%S",time.localtime())
-        console.print("Waiting " + str(frequency*60) + " seconds to ping the queue again. Last ping at " + lastPing
-               + " local time.") #light_blue operation
+        console.print(f"[operation]Waiting {frequency * 60} seconds to ping the queue again. Last ping at {lastPing}"
+            " local time.[/operation]")
         time.sleep(frequency * 60)
         pingTime = time.monotonic()
 
@@ -129,5 +129,5 @@ def jobStalking(jobSet: set, duration: int, frequency: int) -> None:
             if Catalog.isLooping:
                 startTime = pingTime
             else:
-                console.print("Job stalking terminated by timeout. Your jobs are still running.") #light_red error
-                console.print("Consider editing the default stalk duration and frequency if your jobs regularly timeout.") #light_red error
+                console.print("[warning]Job stalking terminated by timeout. Your jobs are still running.[/warning]")
+                console.print("[info]Consider editing the default stalk duration and frequency if your jobs regularly timeout.[/info]")

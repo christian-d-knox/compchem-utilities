@@ -46,8 +46,8 @@ def loadToml(configDir: Path, filename: str) -> dict:
         with open(filePath, "rb") as file:
             return tom.load(file)
     except tom.TOMLDecodeError as error:
-        console.print(f"[config] Failed to parse {filename}: {error}\n"
-            "         All hardcoded defaults will be used for this section.") #light_red error
+        console.print(f"[error]\\[config] Failed to parse {filename}: {error}\n"
+            "         All hardcoded defaults will be used for this section.[/error]")
         return {}
 
 
@@ -56,10 +56,10 @@ def writeToml(configDir: Path, filename: str, content: str) -> None:
     try:
         with open(filePath, "w", encoding="utf-8") as file:
             file.write(content)
-        console.print(f"[config] Wrote config file: {filePath}") #light_cyan operation
+        console.print(f"[operation]\\[config] Wrote config file: {filePath}[/operation]")
     except OSError as error:
-        console.print(f"[config] Could not write {filePath}: {error}\n"
-            "         Hardcoded defaults will be used for this section.") #light_red error
+        console.print(f"[error]\\[config] Could not write {filePath}: {error}\n"
+            "         Hardcoded defaults will be used for this section.[/error]")
 
 
 class Defaults:
@@ -231,7 +231,7 @@ class Defaults:
             filePath = configDir / filename
 
             if not filePath.exists():
-                console.print(f"[config] {filename} not found — generating from hardcoded defaults.") #light_yellow warning
+                console.print(f"[warning]\\[config] {filename} not found — generating from hardcoded defaults.[/warning]")
                 cls._SaveSection(filename)
                 continue
 
@@ -280,8 +280,8 @@ class Defaults:
                 setattr(cls, key, data[key])
             else:
                 missing.append(key)
-                console.print(f"[config] Key '{key}' not found in {filename}. "
-                       f"Falling back to hardcoded default: {getattr(cls, key)!r}") #light_yellow warning
+                console.print(f"[warning]\\[config] Key '{key}' not found in {filename}. "
+                       f"Falling back to hardcoded default: {getattr(cls, key)!r}[/warning]")
         return missing
 
 
@@ -298,9 +298,9 @@ class Defaults:
                     if commentText:
                         file.write(f"\n# {commentText}\n")
                     file.write(f"{key} = {tomlValue(getattr(cls, key))}\n")
-            console.print(f"[config] Appended {len(missingKeys)} missing key(s) to {filename}.") #light_yellow warning
+            console.print(f"[warning]\\[config] Appended {len(missingKeys)} missing key(s) to {filename}.[/warning]")
         except OSError as error:
-            console.print(f"[config] Could not append missing keys to {filePath}: {error}") #light_red error
+            console.print(f"[error]\\[config] Could not append missing keys to {filePath}: {error}[/error]")
 
 
     @classmethod

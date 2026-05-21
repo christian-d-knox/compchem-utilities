@@ -21,7 +21,7 @@ def _SendTelegram(botToken: str, chatID: str, message: str) -> bool:
         with urlopen(request, timeout=10) as response:
             return response.status == 200
     except (URLError, HTTPError, TimeoutError) as error:
-        console.print(f"  [Notification] Telegram send failed: {error}") #light_red error
+        console.print(f"[error]  \\[Notification] Telegram send failed: {error}[error]")
         return False
 
 
@@ -41,7 +41,7 @@ def _DetectTelegramChatID(botToken: str, timeoutSeconds: int = 60) -> str | None
     except Exception:
         pass
 
-    print("\n  Waiting for your message (60 seconds)...")
+    console.print("[info]\n  Waiting for your message (60 seconds)...[/info]")
     startTime = time.monotonic()
 
     while time.monotonic() - startTime < timeoutSeconds:
