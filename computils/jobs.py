@@ -3,7 +3,7 @@ from pathlib import Path
 from .console  import console
 from .defaults import Defaults
 from .catalog  import Catalog
-from .coords   import fileCreation, extensionGetter, grabPaths
+from .fileops   import fileCreation, extensionGetter, grabPaths
 from .molecule import Molecule
 
 # Separate method for input file generation to improve code efficiency. No longer returns anything as path to input is
@@ -21,10 +21,10 @@ def genFile(molecule: object, index: int) -> None:
                 # Writes the standard Gaussian16 formatted opening
                 jobInput.write("%nprocshared=" + jobCPU + "\n%mem=" + jobMem + "GB")
                 if Catalog.isCheck:
-                    jobInput.write("\n%chk=" + molecule.baseName + ".chk")
+                    jobInput.write(f"\n%chk={molecule.baseName}.chk")
                 # If the methodLine from benchmarking.txt is garbage, the calculation will fail. Not my fault.
                 jobInput.write("\n# " + Catalog.fullMethodLine[index].replace("\n","") + "\n\nUseless Comment line\n\n")
-                jobInput.write(molecule.charge + " " + molecule.multiplicity + "\n")
+                jobInput.write(f"{molecule.charge} {molecule.multiplicity}\n")
                 # New mixed basis checking
                 for keyWord in Catalog.fullMethodLine[index].split():
                     if keyWord in Defaults.mixedBasisVariants:
@@ -40,12 +40,12 @@ def genFile(molecule: object, index: int) -> None:
                         for line in mixedBasisFile:
                             jobInput.write(line)
                 elif mixedBasis and not Path("mixedbasis.txt").is_file():
-                    console.print("Mixed basis information not found. Aborting.") #light_red error
+                    console.print("[error]Mixed basis detected but requirements not found. Aborting.[/error]")
                     return
                 jobInput.write("\n")
                 # New NBO7 section
                 if Catalog.isNBO:
-                    jobInput.write(Defaults.nboKeylist + " FILE=" + molecule.baseName + " ARCHIVE $END")
+                    jobInput.write(f"{Defaults.nboKeylist} FILE={molecule.baseName} ARCHIVE $END")
                 else:
                     jobInput.write("\n")
 
@@ -59,7 +59,7 @@ def genFile(molecule: object, index: int) -> None:
                 else:
                     jobMem = str(Defaults.memoryRatio * 1000)
                 # Writes the standard ORCA formatted opening
-                jobInput.write("%pal nprocs " + jobCPU + "\nend" + "\n%maxcore " + jobMem)
+                jobInput.write(f"%pal nprocs {jobCPU}\nend\n%maxcore {jobMem}")
                 # If the methodLine from benchmarking.txt is garbage, the calculation will fail. Not my fault.
                 jobInput.write("\n! " + Catalog.fullMethodLine[index].replace("\n","") + "\n\n")
                 # ORCA is smart enough to read from an XYZ directly
@@ -83,13 +83,13 @@ def slurmHandler(molecule: object, queueName: Path, outputName: Path, firstFiveL
                     ramLine = line
             if len(coresLine) == 0:
                 cpus = Defaults.CPU
-                console.print("Couldn't find CPU count in input file. Submitting instead according to Defaults.") #light_red error
+                console.print("[error]Couldn't find CPU count in input file. Submitting instead according to Defaults.[/error]")
             else:
                 cpus = coresLine.strip().split("=")[1]
             if len(ramLine) == 0:
                 ram = cpus * Defaults.memoryRatio
                 jobRam = ram + Defaults.memoryBuffer
-                console.print("Couldn't find RAM count in input file. Submitting instead according to Defaults.") #light_red error
+                console.print("[error]Couldn't find RAM count in input file. Submitting instead according to Defaults.[/error]")
             else:
                 ram = int(ramLine.strip().split("=")[1].replace("GB", ""))
                 jobRam = ram + Defaults.memoryBuffer
@@ -102,13 +102,13 @@ def slurmHandler(molecule: object, queueName: Path, outputName: Path, firstFiveL
                     ramLine = line
             if len(coresLine) == 0:
                 cpus = Defaults.CPU
-                console.print("Couldn't find CPU count in input file. Submitting instead according to Defaults.") #light_red error
+                console.print("[error]Couldn't find CPU count in input file. Submitting instead according to Defaults.[/error]")
             else:
                 cpus = coresLine.strip().split()[2]
             if len(ramLine) == 0:
                 ram = cpus * Defaults.memoryRatio
                 jobRam = ram + Defaults.memoryBuffer
-                console.print("Couldn't find RAM count in input file. Submitting instead according to Defaults.") #light_red error
+                console.print("[error]Couldn't find RAM count in input file. Submitting instead according to Defaults.[/error]")
             else:
                 ram = int(ramLine.strip().split()[1]) / 1000
                 jobRam = int(int(cpus) * ram + Defaults.memoryBuffer)
@@ -121,13 +121,13 @@ def slurmHandler(molecule: object, queueName: Path, outputName: Path, firstFiveL
                     ramLine = line
             if len(coresLine) == 0:
                 cpus = Defaults.CPU
-                console.print("Couldn't find CPU count in input file. Submitting instead according to Defaults.", "light_red") #light_red error
+                console.print("[error]Couldn't find CPU count in input file. Submitting instead according to Defaults.[/error]")
             else:
                 cpus = coresLine.strip().split("=")[1]
             if len(ramLine) == 0:
                 ram = cpus * Defaults.memoryRatio
                 jobRam = ram + Defaults.memoryBuffer
-                console.print("Couldn't find RAM count in input file. Submitting instead according to Defaults.") #light_red error
+                console.print("[error]Couldn't find RAM count in input file. Submitting instead according to Defaults.[/error]")
             else:
                 ram = int(ramLine.strip().split("=")[1].replace("GB", ""))
                 jobRam = ram + Defaults.memoryBuffer
@@ -139,21 +139,21 @@ def slurmHandler(molecule: object, queueName: Path, outputName: Path, firstFiveL
     with open(queueName, 'w') as outputFile:
         for line in Defaults.submissionList:
             if regex.search("-J", line):
-                outputFile.write(line + str(molecule.baseName) + "\n")
+                outputFile.write(f"{line} {molecule.baseName}\n")
             elif regex.search("-o", line):
-                outputFile.write(line + outputName + "\n")
+                outputFile.write(f"{line} {outputName}\n")
             elif regex.search("--ntasks", line):
-                outputFile.write(line + str(cpus) + "\n")
+                outputFile.write(f"{line} {cpus}\n")
             elif regex.search("--mem", line):
-                outputFile.write(line + str(jobRam) + "GB\n")
+                outputFile.write(f"{line} {jobRam}GB\n")
             elif regex.search("-t", line):
-                outputFile.write(line + Defaults.wallTime + ":00:00\n")
+                outputFile.write(f"{line} {Defaults.wallTime}:00:00\n")
             elif regex.search("-p", line):
-                outputFile.write(line + Defaults.partition + "\n")
+                outputFile.write(f"{line} {Defaults.partition}\n")
             elif regex.search("-M", line):
-                outputFile.write(line + Defaults.cluster + "\n")
+                outputFile.write(f"{line} {Defaults.cluster}\n")
             else:
-                outputFile.write(line + "\n")
+                outputFile.write(f"{line}\n")
 
 # This routine is for job submission to the cluster
 def runJob(molecule: object):
@@ -171,9 +171,9 @@ def runJob(molecule: object):
 
         # Craps out if the first line doesn't exist, or is entirely blank
         if not currentLine:
-            console.print(f"Job file " + molecule.baseName + " is empty. Terminating submission attempt.") #light_red error
+            console.print(f"[error]Job file {molecule.baseName} is empty. Terminating submission attempt.[/error]")
         if len(currentLine) == 0:
-            console.print(f"First line of job file " + molecule.baseName + " is blank. Terminating submission attempt.", "light_red") #light_red error
+            console.print(f"[error]First line of job file {molecule.baseName} is blank. Terminating submission attempt.[/error]")
 
         for index in range(0,4):
             firstFiveLines.append(inputFile.readline().strip())
@@ -185,11 +185,11 @@ def runJob(molecule: object):
                 with open(queueName, 'a') as outputFile:
                     for nonVariantLine in Defaults.gaussianNonVariant:
                         outputFile.write(nonVariantLine)
-                    outputFile.write("\ng16 < " + molecule.fullPath + "\n\n")
+                    outputFile.write(f"\ng16 < {molecule.fullPath}\n\n")
 
                 subprocess.run(["sbatch", queueName], check=True)
                 #os.remove(queueName)
-                console.print(f"Submitted job " + molecule.baseName + " to Gaussian16") #light_green good
+                console.print(f"[good]Submitted job {molecule.baseName} to Gaussian16[/good]")
                 if Catalog.isStalking:
                     molecule.fullPath = molecule.baseName + Defaults.outputExtension
                     Catalog.stalkingSet.add((molecule.baseName,molecule.fullPath))
@@ -199,16 +199,16 @@ def runJob(molecule: object):
                     # Now runs in ORCA 6.0.1 instead of 4.2.0
                     for index in range(0,3):
                         outputFile.write(Defaults.orcaNonVariant[index])
-                    outputFile.write("files=(" + str(molecule.baseName + Defaults.orcaExtension) + ")\n")
+                    outputFile.write(f"files=({molecule.baseName + Defaults.orcaExtension})\n")
                     for index in range(3,8):
                         outputFile.write(Defaults.orcaNonVariant[index])
-                    outputFile.write("$(which orca) " + str(molecule.baseName + Defaults.orcaExtension) + "\n\n")
+                    outputFile.write(f"$(which orca) {molecule.baseName + Defaults.orcaExtension}\n\n")
                     for index in range(8,10):
                         outputFile.write(Defaults.orcaNonVariant[index])
 
                 subprocess.run(["sbatch", queueName], check=True)
                 #os.remove(queueName)
-                console.print(f"Submitted job " + molecule.baseName + " to ORCA 6.0.1") #light_green good
+                console.print(f"[good]Submitted job {molecule.baseName} to ORCA 6.0.1[/good]")
                 if Catalog.isStalking:
                     molecule.fullPath = molecule.baseName + Defaults.outputExtension
                     Catalog.stalkingSet.add((molecule.baseName,molecule.fullPath))
@@ -223,7 +223,7 @@ def runJob(molecule: object):
                     # output.write("export PATH=$PATH:$QC/bin\n")
                     # output.write("export QCAUX=/ihome/pliu/xiq23/qchem/qcaux4\n")
                     outputFile.write("# Change to working directory\n")
-                    outputFile.write("cp $SLURM_SUBMIT_DIR/" + molecule.fullPath + " $SLURM_SCRATCH\n")
+                    outputFile.write(f"cp $SLURM_SUBMIT_DIR/{molecule.fullPath} $SLURM_SCRATCH\n")
                     outputFile.write("cd $SLURM_SCRATCH\n\n")
                     # No clue what this line is and if it's needed, it's not in the Q-Chem documentation
                     outputFile.write("df -h\n")
@@ -236,7 +236,7 @@ def runJob(molecule: object):
 
                 subprocess.run(["sbatch", queueName], check=True)
                 #os.remove(queueName)
-                console.print(f"Submitted job " + molecule.baseName + " to Q-Chem 6.3") #light_green good
+                console.print(f"[good]Submitted job {molecule.baseName} to Q-Chem 6.3[/good]")
                 if Catalog.isStalking:
                     molecule.fullPath = molecule.baseName + Defaults.outputExtension
                     Catalog.stalkingSet.add((molecule.baseName,molecule.fullPath))

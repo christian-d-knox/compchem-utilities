@@ -3,9 +3,10 @@ from .console   import console
 from .defaults  import Defaults
 from .catalog   import Catalog
 from .molecule  import Molecule
-from .coords    import grabPaths, gaussianChargeFinder, formCheck, getCoords
+from .fileops    import grabPaths, gaussianChargeFinder, formCheck, getCoords
 from .jobs      import runJob
 from .notify import CheckAndBroadcast
+from .prompts import *
 from .workflows import genBench, genSinglePoint, genReRun, gimmeCubes
 from .analysis  import goodVibesInteractive, goodVibesProcessor
 from .wizards   import firstTimeSetup
@@ -46,8 +47,8 @@ def commandLineParser():
     # Flags that set bools come first
     if args.stalk:
         Catalog.isStalking = True
-        willLoop = str(input("Enable stalk looping (i.e. re-initialize until all jobs terminate)?  (y/n): "))
-        if willLoop.lower() == "y":
+        willLoop = AskBool("Enable stalk looping (i.e. re-initialize until all jobs terminate)?", "Y")
+        if willLoop:
             Catalog.isLooping = True
     if args.checkpoint:
         Catalog.isCheck = True
@@ -55,7 +56,7 @@ def commandLineParser():
         Catalog.isNBO = True
     if args.override:
         Catalog.indexOverride = args.override
-        console.print("Registered " + str(Catalog.indexOverride) + " as the index override.") #light_cyan operation
+        console.print(f"[operation]Registered {Catalog.indexOverride} as the index override.[/operation]")
     if args.first:
         firstTimeSetup()
 
@@ -88,13 +89,13 @@ def commandLineParser():
                 newMolecule = Molecule(job, baseName, charge, multiplicity, coordList, extension, baseName)
                 genBench(newMolecule)
         else:
-            console.print("Notice: Benchmarking is unavailable without requisite file. Please create your own or download "
-                "the template from GitHub.") #light_red error
+            console.print("[error]Notice: Benchmarking is unavailable without requisite file. Please create your own or download "
+                "the template from GitHub.[/error]")
 
     if args.cube:
         # Needs to run interactively in order to be useful
-        cubeList = str(input("Enter the list of options you want for cube files generated, separated by spaces (e.g. Pot"
-            " Den Val Spin or Range): "))
+        cubeList = AskStr("Enter the list of options you want for cube files generated, separated by spaces (e.g. Pot"
+            " Den Val Spin or Range)")
         jobList = glob.glob(args.cube)
         # This splits the entered keylist into separate keys, passed into gimmeCubes as an array which can be iterated through
         cubeOptions = cubeList.split(" ")
@@ -113,17 +114,17 @@ def commandLineParser():
             formCheck(newMolecule)
 
     if args.goodvibes:
-        console.print("Interactive GoodVibes interface activated. Please select your keylist from the common ones.") #light_cyan operation
+        console.print("[operation]Interactive GoodVibes interface activated. Please select your keylist from the common ones.[/operation]")
         totalKeyList = " ".join(goodVibesInteractive())
         subprocess.run(f"goodvibes {totalKeyList} *.out", shell=True, check=True)
-        console.print("GoodVibes has terminated. Handing output over to the excel exporter.") #light_cyan operation
+        console.print("[operation]GoodVibes has terminated. Handing output over to the excel exporter.[/operation]")
         goodVibesProcessor("Goodvibes_output.dat")
-        console.print("Enjoy your Excel-formatted GoodVibes output!") #light_green
+        console.print("[good]Enjoy your Excel-formatted GoodVibes output![/good]")
 
     if args.rerun:
         jobList = glob.glob(args.rerun)
-        keylistOrder = str(input("Is your input structured as 'opt freq FUNCTIONAL' (y) or 'FUNCTIONAL other keys' (n)? :"))
-        if keylistOrder.lower() == "y":
+        keylistOrder = AskBool("Is your input structured as 'opt freq FUNCTIONAL' (Y) or 'FUNCTIONAL other keys' (n)? :", "Y")
+        if keylistOrder:
             skipIndex = 2
         else:
             skipIndex = 0

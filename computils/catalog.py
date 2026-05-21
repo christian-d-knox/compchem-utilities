@@ -51,12 +51,12 @@ class Catalog:
             cls.fullMethodLine = [Defaults.methodLine]
             cls.methodLine     = [Defaults.method]
             console.print(
-                "[red]Notice: Could not find benchmarking.txt in ~/bin/.[/red]"
+                f"[error]Notice: Could not find benchmarking.txt in {Defaults.binDirectory}.[/error]"
             )
             console.print(
-                "[red]Benchmarking functionality is unavailable without "
+                "[error]Benchmarking functionality is unavailable without "
                 "requisite file. Please create your own or download the "
-                "template from GitHub.[/red]"
+                "template from GitHub.[/error]"
             )
 
         # programs.txt
@@ -72,8 +72,8 @@ class Catalog:
             cls.methodList     = list(Defaults.methodNames)
             cls.targetProgram  = list(Defaults.targetProgram)
             console.print(
-                "[red]Notice: Could not find programs.txt in ~/bin/.[/red]"
+                f"[error]Notice: Could not find programs.txt in {Defaults.binDirectory}.[/error]"
             )
             console.print(
-                "[red]Defaulting to hardcoded method targets.[/red]"
+                "[error]Defaulting to hardcoded method targets.[/error]"
             )
