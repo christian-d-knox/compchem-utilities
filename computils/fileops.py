@@ -126,7 +126,7 @@ def ExtractStalking(data, extractType: str) -> Any:
                 termLine = FindInMap(data, termination)
                 if termLine is not None:
                     return True, termination
-            return False
+            return False, ""
 
 # Finally handle filename creation in one place to stop the infinite copypasta
 def fileCreation(baseName, extensionType, extra) -> Path:
