@@ -62,6 +62,24 @@ def ExtractGaussianCharge(data) -> tuple[str, str]:
     multiplicity = chargeSub[5]
     return charge, multiplicity
 
+def ExtractGoodVibes(data) -> list:
+    headerLocation = FindInMap(data, "Structure", ignoreCase=True)
+    if headerLocation is None:
+        return []
+    outputData = []
+    data.seek(headerLocation.start())
+    line = data.readline()
+    tempSubs = line.decode().strip().split()
+    outputData.append(tempSubs)
+    data.readline()
+    line = data.readline().decode().strip()
+    while '*' not in line:
+        subLines = line.split()
+        subLines.pop(0)
+        outputData.append(subLines)
+        line = data.readline().decode().strip()
+    return outputData
+
 # Finally handle filename creation in one place to stop the infinite copypasta
 def fileCreation(baseName, extensionType, extra) -> Path:
     if not len(extra) == 0:
@@ -127,20 +145,6 @@ def extensionGetter(method: str) -> str:
 
 # Gaussian16 Charge Finder in its own method
 def gaussianChargeFinder(geometryFile: Path) -> tuple[str,str]:
-    #chargeLine = "Charge"
-    #chargeLineBytes = chargeLine.encode()
-    #with open(geometryFile, 'r') as geomFile:
-    #    with closing(mmap(geomFile.fileno(), 0, access=ACCESS_READ)) as data:
-    #        chargeLineLocation = regex.search(chargeLineBytes, data)
-    #        pointer = chargeLineLocation.starts()
-    #        data.seek(pointer[0])
-    #        targetLine = data.readline().decode()
-    #        chargeSub = targetLine.strip().split()
-    #        # This chunk handles the special case where a stupid non-breaking space is used for neutral charges?
-    #        if chargeSub[2] == '':
-    #            del chargeSub[2]
-    #        charge = chargeSub[2]
-    #        multiplicity = chargeSub[5]
     with MapFile(geometryFile) as inFile:
         charge, multiplicity = ExtractGaussianCharge(inFile)
     return charge, multiplicity
