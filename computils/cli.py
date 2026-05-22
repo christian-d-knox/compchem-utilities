@@ -40,6 +40,7 @@ def commandLineParser():
     parser.add_argument('-form','--formcheck',type=str,help="Activates the Gaussian16 formchk utility without"
                                                             " full passthrough into gimmeCubes.")
     parser.add_argument('-first','--first',action='store_true',help="Activates first-time set-up again.")
+    parser.add_argument('-up','--update', action='store_true',help="Prompts a CompUtils update")
 
     # Figures out what the hell you told it to do
     args = parser.parse_args()
@@ -134,3 +135,19 @@ def commandLineParser():
             coordList = getCoords(job,baseName + "_failed" + Defaults.coordExtension)
             newMolecule = Molecule(job, baseName, charge, multiplicity, coordList, extension, baseName)
             genReRun(newMolecule,skipIndex)
+
+    if args.update:
+        branch = AskStr("Which branch from the GitHub do you want to update with?", "main")
+        repoUrl = (
+            f"git+https://github.com/christian-d-knox/"
+            f"compchem-utilities.git@{branch}"
+        )
+        console.print(f"[operation]Updating from branch '{branch}'...[/operation]")
+        result = subprocess.run(
+            ["pip", "install", "--upgrade", "--force-reinstall", "--no-cache-dir", repoUrl], capture_output=False)
+        if result.returncode == 0:
+            console.print(
+                "[good]Update complete! Nex launch of cu will use the new version.[/good]"
+            )
+        else:
+            console.print("[error]Update failed. See pip output.[/error]")
