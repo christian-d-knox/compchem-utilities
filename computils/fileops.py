@@ -109,7 +109,6 @@ def ExtractStalking(data, extractType: str) -> Any:
             finalTableHeader = FindInMap(data, "Item               Value     Threshold  Converged?", True)
             if finalTableHeader is not None:
                 if len(finalTableHeader.group().decode()) != 0:
-                    convergenceCriteria = 0
                     SkipInMap(data, finalTableHeader, 0)
                     # Telling what converged is currently a stub
                     convergeMet = []
