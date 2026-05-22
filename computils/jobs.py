@@ -143,9 +143,9 @@ def slurmHandler(molecule: object, queueName: Path, outputName: Path, firstFiveL
             elif regex.search("-o", line):
                 outputFile.write(f"{line} {outputName}\n")
             elif regex.search("--ntasks", line):
-                outputFile.write(f"{line} {cpus}\n")
+                outputFile.write(f"{line}{cpus}\n")
             elif regex.search("--mem", line):
-                outputFile.write(f"{line} {jobRam}GB\n")
+                outputFile.write(f"{line}{jobRam}GB\n")
             elif regex.search("-t", line):
                 outputFile.write(f"{line} {Defaults.wallTime}:00:00\n")
             elif regex.search("-p", line):
