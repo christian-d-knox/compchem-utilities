@@ -100,17 +100,6 @@ def gimmeCubes(molecule: object, cubeKeyList: list[str]) -> None:
 
 # Because jobs don't always work the first time
 def genReRun(molecule, skipIndex: int) -> None:
-    #with open(molecule.fullPath,"r") as inputFile:
-    #    with closing(mmap(inputFile.fileno(),0,access=ACCESS_READ)) as data:
-    #        preTable = "Will use up to"
-    #        preBytes = preTable.encode()
-    #        originalMethod = regex.search(preBytes,data)
-    #        pointer = originalMethod.ends()
-    #        data.seek(pointer[0])
-    #        data.read(2)
-    #        for index in range(3):
-    #            data.readline()
-    #        originalMethod = data.readline().decode()
     with MapFile(molecule.fullPath) as inFile:
         originalMethod = ExtractPriorMethod(inFile)
 
