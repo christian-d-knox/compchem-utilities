@@ -1,11 +1,53 @@
 import os, regex, subprocess
-from contextlib import closing
+from contextlib import closing, contextmanager
 from mmap import mmap, ACCESS_READ
 from pathlib import Path
 
 from .console  import console
 from .defaults import Defaults
 from .catalog  import Catalog
+
+# A new, working RegEx Refactor
+@contextmanager
+def MapFile(filePath: Path):
+    # Handles the generator method for mmap-ing files. Call with a with(), and will return data (yield)
+    with open(filePath, 'rb') as file:
+        with closing(mmap(file.fileno(), 0, access=ACCESS_READ)) as data:
+            yield data
+
+# Helper method for performing the searches themselves
+def FindInMap(data, pattern: str, reverse: bool = False, ignoreCase: bool = False) -> regex.Match | None:
+    flags = 0
+    if reverse:
+        flags |= regex.REVERSE
+    if ignoreCase:
+        flags |= regex.IGNORECASE
+    return regex.search(pattern.encode(), data, flags)
+
+# Properly handle line-skipping in extractions
+def SkipInMap(data, match, skipLines: int = 0) -> None:
+    data.seek(match.end())
+    for index in range(skipLines + 1):
+        data.readline()
+
+# Begin individual return methods for mmap extraction
+def ExtractCoords(data) -> tuple[list[int], list[str], list[str], list[str]]:
+    tableLocation = FindInMap(data, "Standard orientation:", True)
+    if tableLocation is None:
+        return [], [], [], []
+
+    SkipInMap(data, tableLocation, 4)
+
+    at, X, Y, Z = [], [], [], []
+    line = data.readline().decode().strip()
+    while len(line.split()) > 2:
+        # Extracts the Atomic Number, and X Y Z coordinates into their respective lists
+        at.append(str(line.split()[1]))
+        X.append(str(line.split()[3]))
+        Y.append(str(line.split()[4]))
+        Z.append(str(line.split()[5]))
+        line = data.readline().decode().strip()
+    return at, X, Y, Z
 
 # Finally handle filename creation in one place to stop the infinite copypasta
 def fileCreation(baseName, extensionType, extra) -> Path:
@@ -36,30 +78,32 @@ def getCoords(fileName: Path, outputFileName: Path) -> list:
     }
 
     # Initialize local empty lists
-    at, X, Y, Z = [], [], [], []
+    with MapFile(fileName) as inFile:
+        at, X, Y, Z = ExtractCoords(inFile)
 
-    with open(fileName, 'r+') as inFile, open(outputFileName, 'w') as outputFile:
+
+    #with open(fileName, 'r+') as inFile, open(outputFileName, 'w') as outputFile:
         # Maps the file into memory for reading byte-wise, without any read buffer. AFAIK this is the most memory efficient
         # way to be able to read files of any size
-        with closing(mmap(inFile.fileno(), 0, access=ACCESS_READ)) as data:
-            tableHeader = "                         Standard orientation:                         "
-            tableBytes = tableHeader.encode()
-            finalTableHeader = regex.search(tableBytes, data, regex.REVERSE)
+        #with closing(mmap(inFile.fileno(), 0, access=ACCESS_READ)) as data:
+        #    tableHeader = "                         Standard orientation:                         "
+        #    tableBytes = tableHeader.encode()
+        #    finalTableHeader = regex.search(tableBytes, data, regex.REVERSE)
             # Finds where the header ends, sets that as the pointer, and reads ahead two bytes to skip over the newline character
-            pointer = finalTableHeader.ends()
-            data.seek(pointer[0])
-            data.read(2)
-            for index in range(4):
-                data.readline()
-            line = data.readline().decode().strip()
-            while len(line.split()) > 2:
-                # Extracts the Atomic Number, and X Y Z coordinates into their respective lists
-                at.append(str(line.split()[1]))
-                X.append(str(line.split()[3]))
-                Y.append(str(line.split()[4]))
-                Z.append(str(line.split()[5]))
-                line = data.readline().decode().strip()
-
+        #    pointer = finalTableHeader.ends()
+        #    data.seek(pointer[0])
+        #    data.read(2)
+        #    for index in range(4):
+        #        data.readline()
+        #    line = data.readline().decode().strip()
+        #    while len(line.split()) > 2:
+        #        # Extracts the Atomic Number, and X Y Z coordinates into their respective lists
+        #        at.append(str(line.split()[1]))
+        #        X.append(str(line.split()[3]))
+        #        Y.append(str(line.split()[4]))
+        #        Z.append(str(line.split()[5]))
+        #        line = data.readline().decode().strip()
+    with open(outputFileName, 'w') as outputFile:
         outputFile.write(str(len(at))+"\nPointless Comment Line\n")
         for k in range(len(at)):
             # Ensures the list elements are integers for dictionary pairing
