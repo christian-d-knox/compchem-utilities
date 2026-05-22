@@ -313,18 +313,18 @@ class Defaults:
 
 class Stampede3Submission:
     # JobName OutputName Error Nodes Partition Time
-    submissionList = ["#!/usr/bin/env bash","#SBATCH -J ","#SBATCH -o ","#SBATCH -e error.%j","#SBATCH -N 1 -n 1",
-                      "#SBATCH -p ","#SBATCH -t "]
+    submissionList = ["#!/usr/bin/env bash","#SBATCH -J","#SBATCH -o","#SBATCH -e error.%j","#SBATCH -N 1 -n 1",
+                      "#SBATCH -p","#SBATCH -t"]
     hpcType = "Stampede3"
 
 class H2PSubmission:
     # JobName OutputName Nodes CPUs Mem Time Cluster Partition
-    submissionList = ["#!/bin/bash -l","#SBATCH -J ","#SBATCH -o ","#SBATCH -N 1",
-                      "#SBATCH --ntasks-per-node=","#SBATCH --mem=","#SBATCH -t ","#SBATCH -M ","#SBATCH -p "]
+    submissionList = ["#!/bin/bash -l","#SBATCH -J","#SBATCH -o","#SBATCH -N 1",
+                      "#SBATCH --ntasks-per-node=","#SBATCH --mem=","#SBATCH -t","#SBATCH -M","#SBATCH -p"]
     hpcType = "H2P"
 
 class Bridges2Submission:
     # JobName Nodes Partition NTasks Time
-    submissionList = ["#!/bin/csh","#SBATCH -J ","#SBATCH -N 1","#SBATCH -p ",
-                      "#SBATCH --ntasks-per-node=","#SBATCH -t "]
+    submissionList = ["#!/bin/csh","#SBATCH -J","#SBATCH -N 1","#SBATCH -p",
+                      "#SBATCH --ntasks-per-node=","#SBATCH -t"]
     hpcType = "Bridges2"
