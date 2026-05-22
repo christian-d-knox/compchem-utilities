@@ -123,7 +123,7 @@ def ExtractStalking(data, extractType: str) -> Any:
                 return convergeCriteria
         case "termination":
             for termination in Defaults.terminationVariants:
-                termLine = FindInMap(data, termination)
+                termLine = FindInMap(data, termination, True, True)
                 if termLine is not None:
                     return True, termination
             return False, ""
