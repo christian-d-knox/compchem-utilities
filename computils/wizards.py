@@ -1,12 +1,12 @@
+from rich.panel import Panel
+
 from .console  import console
 from .defaults import Defaults, H2PSubmission, Bridges2Submission, Stampede3Submission
 from .notify   import _SendTelegram, _DetectTelegramChatID
 from .prompts import *
 
 def NotificationSetup() -> None:
-    print("=" * 55)
-    print("  Notification Setup (Telegram)")
-    print("=" * 55)
+    console.print(Panel("Notification Setup (Telegram)", style="operation"))
     print("\n  CompUtils can send you Telegram notifications when")
     print("  your jobs finish, and alert the group when someone submits a large batch to the queue.")
 
