@@ -3,7 +3,8 @@ from .console import console
 
 def AskBool(prompt: str, default: str = "y", style: str = "prompt") -> bool:
     """Ask a y/n question with a default. Returns True for yes."""
-    if default.lower() not in ("y", "n"):
+    default = default.lower()
+    if default not in ("y", "n"):
         raise ValueError(f"default must be 'y' or 'n', got {default!r}")
 
     # Format the prompt with the default capitalized: (Y/n) or (y/N)
@@ -20,7 +21,7 @@ def AskBool(prompt: str, default: str = "y", style: str = "prompt") -> bool:
             return response == "y"
         console.print("[warning]Please enter Y or N.[/warning]")
 
-def AskFloat(prompt: str, default: float = 0, style: str = "prompt") -> float:
+def AskFloat(prompt: str, default = None, style: str = "prompt") -> float:
     """Ask for an integer input, and returns it"""
     if default is not None:
         suffix = f" ({default}): "
@@ -40,7 +41,7 @@ def AskFloat(prompt: str, default: float = 0, style: str = "prompt") -> float:
             continue
         return value
 
-def AskStr(prompt: str, default: str = "", style: str = "prompt") -> str:
+def AskStr(prompt: str, default = None, style: str = "prompt") -> str:
     """Ask for an integer input, and returns it"""
     if default is not None:
         suffix = f" ({default}): "
