@@ -15,7 +15,7 @@ def goodVibesInteractive() -> list[str]:
         keyList.append("-q")
     isFreqCut = AskBool("Utilize a frequency cutoff?", "Y")
     if isFreqCut:
-        freqCutoff = AskFloat("Enter the frequency cutoff (wavenumbers)")
+        freqCutoff = int(AskFloat("Enter the frequency cutoff (wavenumbers)"))
         keyList.extend(["-f", str(freqCutoff)])
     isTempCorrection = AskBool("Utilize a temperature correction?", "N")
     if isTempCorrection:
