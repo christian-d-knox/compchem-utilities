@@ -52,7 +52,7 @@ def commandLineParser():
         jobs = glob.glob(args.test)
         for job in jobs:
             job = Path(job)
-            outfile = job.stem / Path(Defaults.coordExtension)
+            outfile = Path(job.stem + Defaults.coordExtension)
             getCoords(job, outfile)
 
     # Flags that set bools come first
