@@ -113,8 +113,9 @@ def genReRun(molecule,skipIndex):
     #        originalMethod = data.readline().decode()
     with MapFile(molecule.fullPath) as inFile:
         originalMethod = ExtractPriorMethod(inFile)
-
+    print(originalMethod)
     Catalog.fullMethodLine[0] = originalMethod.replace("#","").strip()
+    print(Catalog.fullMethodLine[0])
     Catalog.methodLine[0] = originalMethod.replace("#","").strip().split()[skipIndex]
     molecule.extensionType = extensionGetter(Catalog.methodLine[0])
     inputFile = fileCreation(molecule.baseName, molecule.extensionType, Defaults.reRunExtra)
