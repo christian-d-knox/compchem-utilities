@@ -41,7 +41,7 @@ def tomlValue(value: Any) -> str:
 
 
 def loadToml(configDir: Path, filename: str) -> dict:
-    filePath = configDir / filename
+    filePath = configDir / Path(filename)
     try:
         with open(filePath, "rb") as file:
             return tom.load(file)
@@ -52,7 +52,7 @@ def loadToml(configDir: Path, filename: str) -> dict:
 
 
 def writeToml(configDir: Path, filename: str, content: str) -> None:
-    filePath = configDir / filename
+    filePath = configDir / Path(filename)
     try:
         with open(filePath, "w", encoding="utf-8") as file:
             file.write(content)
