@@ -1,4 +1,6 @@
 import argparse, glob, os, time, subprocess
+from pathlib import Path
+
 from .console   import console
 from .defaults  import Defaults
 from .catalog   import Catalog
@@ -41,9 +43,17 @@ def commandLineParser():
                                                             " full passthrough into gimmeCubes.")
     parser.add_argument('-first','--first',action='store_true',help="Activates first-time set-up again.")
     parser.add_argument('-up','--update', action='store_true',help="Prompts a CompUtils update")
+    parser.add_argument('-test',"--test",type=str,help="Tests whatever the fuck I need it to.")
 
     # Figures out what the hell you told it to do
     args = parser.parse_args()
+
+    if args.test:
+        jobs = glob.glob(args.test)
+        for job in jobs:
+            job = Path(job)
+            outfile = job.stem / Path(Defaults.coordExtension)
+            getCoords(job, outfile)
 
     # Flags that set bools come first
     if args.stalk:
