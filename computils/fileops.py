@@ -25,8 +25,11 @@ def FindInMap(data, pattern: str, reverse: bool = False, ignoreCase: bool = Fals
     return regex.search(pattern.encode(), data, flags)
 
 # Properly handle line-skipping in extractions
-def SkipInMap(data, match, skipLines: int = 0) -> None:
-    data.seek(match.end())
+def SkipInMap(data, match, skipLines: int = 0, fromStart: bool = False) -> None:
+    if not fromStart:
+        data.seek(match.end())
+    else:
+        data.seek(match.start())
     for index in range(skipLines + 1):
         data.readline()
 
@@ -79,6 +82,16 @@ def ExtractGoodVibes(data) -> list:
         outputData.append(subLines)
         line = data.readline().decode().strip()
     return outputData
+
+def ExtractPriorMethod(data) -> str:
+    methodLocation = FindInMap(data, "Will use up to")
+    if methodLocation is None:
+        return ""
+    SkipInMap(data, methodLocation, 3, True)
+    originalMethod = data.readline().decode()
+    return originalMethod
+
+
 
 # Finally handle filename creation in one place to stop the infinite copypasta
 def fileCreation(baseName, extensionType, extra) -> Path:

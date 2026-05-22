@@ -5,7 +5,7 @@ from mmap import mmap, ACCESS_READ
 from .console  import console
 from .defaults import Defaults
 from .catalog  import Catalog
-from .fileops   import fileCreation, extensionGetter, grabPaths, formCheck
+from .fileops   import *
 from .jobs     import genFile, runJob, slurmHandler
 from .molecule import Molecule
 from .prompts import AskStr
@@ -100,17 +100,19 @@ def gimmeCubes(molecule: object, cubeKeyList: list[str]) -> None:
 
 # Because jobs don't always work the first time
 def genReRun(molecule,skipIndex):
-    with open(molecule.fullPath,"r") as inputFile:
-        with closing(mmap(inputFile.fileno(),0,access=ACCESS_READ)) as data:
-            preTable = "Will use up to"
-            preBytes = preTable.encode()
-            originalMethod = regex.search(preBytes,data)
-            pointer = originalMethod.ends()
-            data.seek(pointer[0])
-            data.read(2)
-            for index in range(0,3):
-                data.readline()
-            originalMethod = data.readline().decode()
+    #with open(molecule.fullPath,"r") as inputFile:
+    #    with closing(mmap(inputFile.fileno(),0,access=ACCESS_READ)) as data:
+    #        preTable = "Will use up to"
+    #        preBytes = preTable.encode()
+    #        originalMethod = regex.search(preBytes,data)
+    #        pointer = originalMethod.ends()
+    #        data.seek(pointer[0])
+    #        data.read(2)
+    #        for index in range(3):
+    #            data.readline()
+    #        originalMethod = data.readline().decode()
+    with MapFile(molecule.fullPath) as inFile:
+        originalMethod = ExtractPriorMethod(inFile)
 
     Catalog.fullMethodLine[0] = originalMethod.replace("#","").strip()
     Catalog.methodLine[0] = originalMethod.replace("#","").strip().split()[skipIndex]

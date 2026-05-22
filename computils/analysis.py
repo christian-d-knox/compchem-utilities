@@ -1,7 +1,5 @@
 import os
-from contextlib import closing
-from mmap import mmap, ACCESS_READ
-import pandas, regex
+import pandas
 
 from .console  import console
 from .catalog  import Catalog
@@ -46,24 +44,6 @@ def goodVibesInteractive() -> list[str]:
 
 # An improved version of goodVibesToExcelv3 that now properly formats the numbers in Excel as numbers
 def goodVibesProcessor(inputFile) -> None:
-    #outputData = []
-    #header = "Structure"
-    #headerBytes = header.encode()
-    #with open(inputFile, 'r') as inFile:
-    #    with closing(mmap(inFile.fileno(), 0, access=ACCESS_READ)) as data:
-    #        headerLocation = regex.search(headerBytes, data, regex.IGNORECASE)
-    #        pointer = headerLocation.starts()
-    #        data.seek(pointer[0])
-    #        line = data.readline()
-    #        tempSubs = line.decode().strip().split()
-    #        outputData.append(tempSubs)
-    #        data.readline()
-    #        line = data.readline().decode().strip()
-    #        while '*' not in line:
-    #            subLines = line.split()
-    #            subLines.pop(0)
-    #            outputData.append(subLines)
-    #            line = data.readline().decode().strip()
     with MapFile(inputFile) as inFile:
         outputData = ExtractGoodVibes(inFile)
     dataFrame = pandas.DataFrame(outputData)
