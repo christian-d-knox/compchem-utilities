@@ -2,6 +2,7 @@ import os, regex, subprocess
 from contextlib import closing, contextmanager
 from mmap import mmap, ACCESS_READ
 from pathlib import Path
+from typing import Any
 
 from .console  import console
 from .defaults import Defaults
@@ -91,7 +92,41 @@ def ExtractPriorMethod(data) -> str:
     originalMethod = data.readline().decode()
     return originalMethod
 
-
+def ExtractStalking(data, extractType: str) -> Any:
+    match extractType:
+        case "stability":
+            containsStability = FindInMap(data, "Stability analysis")
+            if containsStability is not None:
+                hasStabilized = FindInMap(data, "The wavefunction is already stable.", True)
+                if hasStabilized is not None:
+                    stabilityInsert = "Wavefunction has stabilized."
+                else:
+                    stabilityInsert = "Wavefunction has not stabilized."
+            else:
+                stabilityInsert = ""
+            return stabilityInsert
+        case "convergence":
+            finalTableHeader = FindInMap(data, "Item               Value     Threshold  Converged?", True)
+            if finalTableHeader is not None:
+                if len(finalTableHeader.group().decode()) != 0:
+                    convergenceCriteria = 0
+                    SkipInMap(data, finalTableHeader, 2)
+                    # Telling what converged is currently a stub
+                    convergeMet = []
+                    for index in range(4):
+                        convergeLine = data.readline().decode()
+                        convergeMet.append(convergeLine.split()[4])
+                        convergeCriteria = convergeMet.count("YES")
+                    return convergeCriteria
+            else:
+                convergeCriteria = 0
+                return convergeCriteria
+        case "termination":
+            for termination in Defaults.terminationVariants:
+                termLine = FindInMap(data, termination)
+                if termLine is not None:
+                    return True, termination
+            return False
 
 # Finally handle filename creation in one place to stop the infinite copypasta
 def fileCreation(baseName, extensionType, extra) -> Path:
