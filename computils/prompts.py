@@ -3,7 +3,7 @@ from .console import console
 
 def AskBool(prompt: str, default: str = "y", style: str = "prompt") -> bool:
     """Ask a y/n question with a default. Returns True for yes."""
-    if default not in ("y", "n"):
+    if default.lower() not in ("y", "n"):
         raise ValueError(f"default must be 'y' or 'n', got {default!r}")
 
     # Format the prompt with the default capitalized: (Y/n) or (y/N)
