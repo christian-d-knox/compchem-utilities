@@ -228,7 +228,7 @@ class Defaults:
     def Load(cls) -> None:
         for filename in cls._FILE_GROUPS:
             configDir = cls.binDirectory
-            filePath = configDir / filename
+            filePath = configDir / Path(filename)
 
             if not filePath.exists():
                 console.print(f"[warning]\\[config] {filename} not found — generating from hardcoded defaults.[/warning]")
