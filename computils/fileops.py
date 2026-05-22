@@ -110,7 +110,7 @@ def ExtractStalking(data, extractType: str) -> Any:
             if finalTableHeader is not None:
                 if len(finalTableHeader.group().decode()) != 0:
                     convergenceCriteria = 0
-                    SkipInMap(data, finalTableHeader, 2)
+                    SkipInMap(data, finalTableHeader, 0)
                     # Telling what converged is currently a stub
                     convergeMet = []
                     for index in range(4):
