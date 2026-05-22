@@ -52,8 +52,8 @@ def commandLineParser():
         jobs = glob.glob(args.test)
         for job in jobs:
             job = Path(job)
-            outfile = Path(job.stem + Defaults.coordExtension)
-            getCoords(job, outfile)
+            charge, multiplicity = gaussianChargeFinder(job)
+            console.print(f"[info]{job.stem} charge is {charge} and multiplicity is {multiplicity}[/info]")
 
     # Flags that set bools come first
     if args.stalk:
