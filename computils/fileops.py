@@ -87,7 +87,7 @@ def ExtractPriorMethod(data) -> str:
     methodLocation = FindInMap(data, "Will use up to")
     if methodLocation is None:
         return ""
-    SkipInMap(data, methodLocation, 3, True)
+    SkipInMap(data, methodLocation, 2, True)
     originalMethod = data.readline().decode()
     return originalMethod
 
