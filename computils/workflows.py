@@ -113,15 +113,14 @@ def genReRun(molecule, skipIndex: int) -> None:
     #        originalMethod = data.readline().decode()
     with MapFile(molecule.fullPath) as inFile:
         originalMethod = ExtractPriorMethod(inFile)
-    print(originalMethod)
+
     Catalog.fullMethodLine[0] = originalMethod.replace("#","").strip()
-    print(Catalog.fullMethodLine[0])
-    #Catalog.methodLine[0] = originalMethod.replace("#","").strip().split()[skipIndex]
-    #molecule.extensionType = extensionGetter(Catalog.methodLine[0])
-    #inputFile = fileCreation(molecule.baseName, molecule.extensionType, Defaults.reRunExtra)
-    #molecule.fullPath = inputFile
-    #molecule.baseName = molecule.baseName + Defaults.reRunExtra
+    Catalog.methodLine[0] = originalMethod.replace("#","").strip().split()[skipIndex]
+    molecule.extensionType = extensionGetter(Catalog.methodLine[0])
+    inputFile = fileCreation(molecule.baseName, molecule.extensionType, Defaults.reRunExtra)
+    molecule.fullPath = inputFile
+    molecule.baseName = molecule.baseName + Defaults.reRunExtra
 
     # Calls the separate file generation method, feeds directly into runJob
-    #genFile(molecule, 0)
-    #runJob(molecule)
+    genFile(molecule, 0)
+    runJob(molecule)
