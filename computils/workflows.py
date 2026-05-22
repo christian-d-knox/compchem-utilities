@@ -99,7 +99,7 @@ def gimmeCubes(molecule: object, cubeKeyList: list[str]) -> None:
         console.print(f"[good]Submitted cube job {molecule.baseName} {cubeKey} to the cluster.[/good]")
 
 # Because jobs don't always work the first time
-def genReRun(molecule,skipIndex):
+def genReRun(molecule, skipIndex: int) -> None:
     #with open(molecule.fullPath,"r") as inputFile:
     #    with closing(mmap(inputFile.fileno(),0,access=ACCESS_READ)) as data:
     #        preTable = "Will use up to"
@@ -116,12 +116,12 @@ def genReRun(molecule,skipIndex):
     print(originalMethod)
     Catalog.fullMethodLine[0] = originalMethod.replace("#","").strip()
     print(Catalog.fullMethodLine[0])
-    Catalog.methodLine[0] = originalMethod.replace("#","").strip().split()[skipIndex]
-    molecule.extensionType = extensionGetter(Catalog.methodLine[0])
-    inputFile = fileCreation(molecule.baseName, molecule.extensionType, Defaults.reRunExtra)
-    molecule.fullPath = inputFile
-    molecule.baseName = molecule.baseName + Defaults.reRunExtra
+    #Catalog.methodLine[0] = originalMethod.replace("#","").strip().split()[skipIndex]
+    #molecule.extensionType = extensionGetter(Catalog.methodLine[0])
+    #inputFile = fileCreation(molecule.baseName, molecule.extensionType, Defaults.reRunExtra)
+    #molecule.fullPath = inputFile
+    #molecule.baseName = molecule.baseName + Defaults.reRunExtra
 
     # Calls the separate file generation method, feeds directly into runJob
-    genFile(molecule, 0)
-    runJob(molecule)
+    #genFile(molecule, 0)
+    #runJob(molecule)
