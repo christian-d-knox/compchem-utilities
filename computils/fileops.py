@@ -49,6 +49,19 @@ def ExtractCoords(data) -> tuple[list[int], list[str], list[str], list[str]]:
         line = data.readline().decode().strip()
     return at, X, Y, Z
 
+def ExtractGaussianCharge(data) -> tuple[str, str]:
+    chargeLocation = FindInMap(data, "Charge")
+    if chargeLocation is None:
+        return "", ""
+    data.seek(chargeLocation.start())
+    chargeSub = data.readline().decode().strip().split()
+    # This chunk handles the special case where a stupid non-breaking space is used for neutral charges?
+    if chargeSub[2] == '':
+        del chargeSub[2]
+    charge = chargeSub[2]
+    multiplicity = chargeSub[5]
+    return charge, multiplicity
+
 # Finally handle filename creation in one place to stop the infinite copypasta
 def fileCreation(baseName, extensionType, extra) -> Path:
     if not len(extra) == 0:
@@ -81,28 +94,6 @@ def getCoords(fileName: Path, outputFileName: Path) -> list:
     with MapFile(fileName) as inFile:
         at, X, Y, Z = ExtractCoords(inFile)
 
-
-    #with open(fileName, 'r+') as inFile, open(outputFileName, 'w') as outputFile:
-        # Maps the file into memory for reading byte-wise, without any read buffer. AFAIK this is the most memory efficient
-        # way to be able to read files of any size
-        #with closing(mmap(inFile.fileno(), 0, access=ACCESS_READ)) as data:
-        #    tableHeader = "                         Standard orientation:                         "
-        #    tableBytes = tableHeader.encode()
-        #    finalTableHeader = regex.search(tableBytes, data, regex.REVERSE)
-            # Finds where the header ends, sets that as the pointer, and reads ahead two bytes to skip over the newline character
-        #    pointer = finalTableHeader.ends()
-        #    data.seek(pointer[0])
-        #    data.read(2)
-        #    for index in range(4):
-        #        data.readline()
-        #    line = data.readline().decode().strip()
-        #    while len(line.split()) > 2:
-        #        # Extracts the Atomic Number, and X Y Z coordinates into their respective lists
-        #        at.append(str(line.split()[1]))
-        #        X.append(str(line.split()[3]))
-        #        Y.append(str(line.split()[4]))
-        #        Z.append(str(line.split()[5]))
-        #        line = data.readline().decode().strip()
     with open(outputFileName, 'w') as outputFile:
         outputFile.write(str(len(at))+"\nPointless Comment Line\n")
         for k in range(len(at)):
@@ -136,20 +127,22 @@ def extensionGetter(method: str) -> str:
 
 # Gaussian16 Charge Finder in its own method
 def gaussianChargeFinder(geometryFile: Path) -> tuple[str,str]:
-    chargeLine = "Charge"
-    chargeLineBytes = chargeLine.encode()
-    with open(geometryFile, 'r') as geomFile:
-        with closing(mmap(geomFile.fileno(), 0, access=ACCESS_READ)) as data:
-            chargeLineLocation = regex.search(chargeLineBytes, data)
-            pointer = chargeLineLocation.starts()
-            data.seek(pointer[0])
-            targetLine = data.readline().decode()
-            chargeSub = targetLine.strip().split()
-            # This chunk handles the special case where a stupid non-breaking space is used for neutral charges?
-            if chargeSub[2] == '':
-                del chargeSub[2]
-            charge = chargeSub[2]
-            multiplicity = chargeSub[5]
+    #chargeLine = "Charge"
+    #chargeLineBytes = chargeLine.encode()
+    #with open(geometryFile, 'r') as geomFile:
+    #    with closing(mmap(geomFile.fileno(), 0, access=ACCESS_READ)) as data:
+    #        chargeLineLocation = regex.search(chargeLineBytes, data)
+    #        pointer = chargeLineLocation.starts()
+    #        data.seek(pointer[0])
+    #        targetLine = data.readline().decode()
+    #        chargeSub = targetLine.strip().split()
+    #        # This chunk handles the special case where a stupid non-breaking space is used for neutral charges?
+    #        if chargeSub[2] == '':
+    #            del chargeSub[2]
+    #        charge = chargeSub[2]
+    #        multiplicity = chargeSub[5]
+    with MapFile(geometryFile) as inFile:
+        charge, multiplicity = ExtractGaussianCharge(inFile)
     return charge, multiplicity
 
 # This subroutine returns file name and extension for ease-of-use
