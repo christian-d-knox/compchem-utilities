@@ -115,6 +115,7 @@ def ExtractStalking(data, extractType: str) -> Any:
                     convergeMet = []
                     for index in range(4):
                         convergeLine = data.readline().decode()
+                        print(convergeLine)
                         convergeMet.append(convergeLine.split()[4])
                         convergeCriteria = convergeMet.count("YES")
                     return convergeCriteria
