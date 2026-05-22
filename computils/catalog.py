@@ -39,7 +39,7 @@ class Catalog:
     def Load(cls) -> None:
         """Read benchmarking.txt and programs.txt from Defaults.binDirectory."""
         # benchmarking.txt
-        benchPath = Defaults.binDirectory / "benchmarking.txt"
+        benchPath = Defaults.binDirectory / Path("benchmarking.txt")
         if benchPath.is_file():
             with open(benchPath, "r") as methodFile:
                 for line in methodFile:
@@ -60,7 +60,7 @@ class Catalog:
             )
 
         # programs.txt
-        progPath = Defaults.binDirectory / "programs.txt"
+        progPath = Defaults.binDirectory / Path("programs.txt")
         if progPath.is_file():
             with open(progPath, "r") as programFile:
                 for targetLine in programFile:
