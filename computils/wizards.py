@@ -123,4 +123,3 @@ def firstTimeSetup() -> None:
             return
     Defaults._SaveSection("slurm.toml")
     NotificationSetup()
-    ColorSetup()
