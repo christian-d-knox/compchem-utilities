@@ -2,6 +2,7 @@
 import sys
 from .defaults import Defaults
 from .catalog  import Catalog
+from .console  import ApplyTheme
 
 
 def Main() -> None:
@@ -14,7 +15,11 @@ def Main() -> None:
     if getattr(Defaults, "needsFirstTimeSetup", False):
         from .wizards import firstTimeSetup
         firstTimeSetup()
+    elif Defaults.colorMode not in ("lowColor", "highColor"):
+        from .wizards import ColorSetup
+        ColorSetup()
 
+    ApplyTheme(Defaults.colorMode)
     # In Step 4 this entire block becomes:
     #     from .cli      import ParseCLI
     #     from .dispatch import Dispatch

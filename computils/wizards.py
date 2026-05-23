@@ -86,6 +86,7 @@ def ColorSetup() -> None:
     if  not hexColor:
         Defaults.colorMode = "lowColor"
         Defaults._SaveSection("qol.toml")
+        return
 
     Defaults.colorMode = "hexCode"
     Defaults._SaveSection("qol.toml")
