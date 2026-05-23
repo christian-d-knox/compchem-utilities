@@ -120,7 +120,7 @@ class Defaults:
     broadcastGroupChatID = "-1003992367027"
     broadcastThreshold = 30
     needsFirstTimeSetup = False
-    colorMode = "lowColor"
+    colorMode = ""
 
     # What files contain what keys
     _FILE_GROUPS: dict[str, list[str]] = {
