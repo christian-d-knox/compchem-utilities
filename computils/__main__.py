@@ -12,7 +12,7 @@ def Main() -> None:
 
     # If Defaults._Validate determined that first-time setup is needed,
     # run it here rather than from inside Defaults.
-    if Defaults.colorMode not in ("lowColor", "highColor"):
+    if Defaults.colorMode not in ("lowColor", "hexCode"):
         from .wizards import ColorSetup
         ColorSetup()
     if Defaults.needsFirstTimeSetup:
