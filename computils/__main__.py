@@ -12,12 +12,12 @@ def Main() -> None:
 
     # If Defaults._Validate determined that first-time setup is needed,
     # run it here rather than from inside Defaults.
-    if getattr(Defaults, "needsFirstTimeSetup", False):
-        from .wizards import firstTimeSetup
-        firstTimeSetup()
-    elif Defaults.colorMode not in ("lowColor", "highColor"):
+    if Defaults.colorMode not in ("lowColor", "highColor"):
         from .wizards import ColorSetup
         ColorSetup()
+    if Defaults.needsFirstTimeSetup:
+        from .wizards import firstTimeSetup
+        firstTimeSetup()
 
     ApplyTheme(Defaults.colorMode)
     # In Step 4 this entire block becomes:
