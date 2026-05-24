@@ -30,6 +30,7 @@ def Main() -> None:
             Catalog.stalkingSet,
             Defaults.stalkDuration,
             Defaults.stalkFrequency,
+            Catalog.isLooping,
         )
 
 
