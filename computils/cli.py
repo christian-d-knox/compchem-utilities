@@ -12,6 +12,9 @@ from .prompts import AskBool, AskStr
 from .workflows import genBench, genSinglePoint, genReRun, gimmeCubes
 from .analysis  import goodVibesInteractive, goodVibesProcessor
 from .wizards   import firstTimeSetup
+from .intent import RunIntent, SinglePointIntent, BenchmarkIntent, ReRunIntent, CubeIntent
+from .actions import CubeOption
+
 
 # Defines all the terminal flags the program can accept
 def commandLineParser():
@@ -67,30 +70,42 @@ def commandLineParser():
         # Compiles the entire list of files to run (built-in 'runall' capabilities)
         jobList = glob.glob(args.run)
         CheckAndBroadcast(len(jobList))
+        tempIntent = RunIntent(files=[Path(p) for p in jobList], stalk=Catalog.isStalking, stalkLoop=Catalog.isLooping,
+                               checkpoint=Catalog.isCheck, nbo7=Catalog.isNBO, indexOverride=Catalog.indexOverride)
+        localStalkingSet: set = set()
         # Builds the molecule object per complex in input
         for job in jobList:
             baseName, extension = grabPaths(job)
             newMolecule = Molecule(job, baseName, 0, 0, 0, extension, baseName)
-            runJob(newMolecule)
+            runJob(newMolecule, tempIntent, localStalkingSet)
+        Catalog.stalkingSet.update(localStalkingSet)
 
     if args.singlePoint:
         jobList = glob.glob(args.singlePoint)
+        tempIntent = SinglePointIntent(files=[Path(p) for p in jobList], stalk=Catalog.isStalking, stalkLoop=Catalog.isLooping,
+                                       checkpoint=Catalog.isCheck, nbo7=Catalog.isNBO, indexOverride=Catalog.indexOverride)
+        localStalkingSet: set = set()
         for job in jobList:
             baseName, extension = grabPaths(job)
             charge, multiplicity = gaussianChargeFinder(job)
             coordList = getCoords(job,baseName + Defaults.coordExtension)
             newMolecule = Molecule(job, baseName, charge, multiplicity, coordList, extension, baseName)
-            genSinglePoint(newMolecule)
+            genSinglePoint(newMolecule, tempIntent, localStalkingSet)
+        Catalog.stalkingSet.update(localStalkingSet)
 
     if args.bench:
         if Catalog.canBench:
             jobList = glob.glob(args.bench)
+            tempIntent = BenchmarkIntent(files=[Path(p) for p in jobList], stalk=Catalog.isStalking, stalkLoop=Catalog.isLooping,
+                                         checkpoint=Catalog.isCheck, nbo7=Catalog.isNBO, indexOverride=Catalog.indexOverride)
+            localStalkingSet: set = set()
             for job in jobList:
                 baseName, extension = grabPaths(job)
                 charge, multiplicity = gaussianChargeFinder(job)
                 coordList = getCoords(job,baseName + Defaults.coordExtension)
                 newMolecule = Molecule(job, baseName, charge, multiplicity, coordList, extension, baseName)
-                genBench(newMolecule)
+                genBench(newMolecule, tempIntent, localStalkingSet)
+            Catalog.stalkingSet.update(localStalkingSet)
         else:
             console.print("[error]Notice: Benchmarking is unavailable without requisite file. Please create your own or download "
                 "the template from GitHub.[/error]")
@@ -102,12 +117,15 @@ def commandLineParser():
         jobList = glob.glob(args.cube)
         # This splits the entered keylist into separate keys, passed into gimmeCubes as an array which can be iterated through
         cubeOptions = cubeList.split(" ")
+        tempIntent = CubeIntent(files=[Path(p) for p in jobList], stalk=Catalog.isStalking, stalkLoop=Catalog.isLooping,
+                                checkpoint=Catalog.isCheck, nbo7=Catalog.isNBO, indexOverride=Catalog.indexOverride,
+                                cubeOptions=list(CubeOption))
         for job in jobList:
             baseName, extension = grabPaths(job)
             newMolecule = Molecule(job, baseName, 0, 0, 0, extension, baseName)
             if extension == ".chk":
                 formCheck(newMolecule)
-            gimmeCubes(newMolecule, cubeOptions)
+            gimmeCubes(newMolecule, tempIntent)
 
     if args.formcheck:
         jobList = glob.glob(args.formcheck)
@@ -131,12 +149,16 @@ def commandLineParser():
             skipIndex = 2
         else:
             skipIndex = 0
+        tempIntent = ReRunIntent(files=[Path(p) for p in jobList], stalk=Catalog.isStalking, stalkLoop=Catalog.isLooping,
+                                 checkpoint=Catalog.isCheck, nbo7=Catalog.isNBO, indexOverride=Catalog.indexOverride)
+        localStalkingSet: set = set()
         for job in jobList:
             baseName, extension = grabPaths(job)
             charge, multiplicity = gaussianChargeFinder(job)
             coordList = getCoords(job,baseName + "_failed" + Defaults.coordExtension)
             newMolecule = Molecule(job, baseName, charge, multiplicity, coordList, extension, baseName)
-            genReRun(newMolecule,skipIndex)
+            genReRun(newMolecule, tempIntent, localStalkingSet)
+        Catalog.stalkingSet.update(localStalkingSet)
 
     if args.update:
         branch = AskStr("Which branch from the GitHub do you want to update with?", "main")
