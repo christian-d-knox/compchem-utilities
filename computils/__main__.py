@@ -20,18 +20,12 @@ def Main() -> None:
         firstTimeSetup()
 
     ApplyTheme(Defaults.colorMode)
-    from .cli   import commandLineParser
-    from .stalk import jobStalking
 
-    commandLineParser()
+    from .cli   import ParseCLI
+    from .dispatch import Dispatch
 
-    if Catalog.isStalking:
-        jobStalking(
-            Catalog.stalkingSet,
-            Defaults.stalkDuration,
-            Defaults.stalkFrequency,
-            Catalog.isLooping,
-        )
+    intent = ParseCLI(sys.argv[1:])
+    Dispatch(intent)
 
 
 if __name__ == "__main__":
