@@ -8,7 +8,7 @@ from .molecule  import Molecule
 from .fileops    import grabPaths, gaussianChargeFinder, formCheck, getCoords
 from .jobs      import runJob
 from .notify import CheckAndBroadcast
-from .prompts import *
+from .prompts import AskBool, AskStr
 from .workflows import genBench, genSinglePoint, genReRun, gimmeCubes
 from .analysis  import goodVibesInteractive, goodVibesProcessor
 from .wizards   import firstTimeSetup
@@ -43,17 +43,9 @@ def commandLineParser():
                                                             " full passthrough into gimmeCubes.")
     parser.add_argument('-first','--first',action='store_true',help="Activates first-time set-up again.")
     parser.add_argument('-up','--update', action='store_true',help="Prompts a CompUtils update")
-    parser.add_argument('-test',"--test",type=str,help="Tests whatever the fuck I need it to.")
 
     # Figures out what the hell you told it to do
     args = parser.parse_args()
-
-    if args.test:
-        jobs = glob.glob(args.test)
-        for job in jobs:
-            job = Path(job)
-            charge, multiplicity = gaussianChargeFinder(job)
-            console.print(f"[info]{job.stem} charge is {charge} and multiplicity is {multiplicity}[/info]")
 
     # Flags that set bools come first
     if args.stalk:
@@ -67,7 +59,7 @@ def commandLineParser():
         Catalog.isNBO = True
     if args.override:
         Catalog.indexOverride = args.override
-        console.print(f"[operation]Registered {Catalog.indexOverride} as the index override.[/operation]")
+        console.print(f"[operation]Registered {args.indexOverride} as the index override.[/operation]")
     if args.first:
         firstTimeSetup()
 
