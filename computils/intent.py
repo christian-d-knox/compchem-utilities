@@ -16,9 +16,17 @@ from typing import Optional
 
 from .actions import Action, CubeOption
 
+"""CLI flags indicate a specific task. The parser populates an IntentDraft field-by-field as it reads each flag — 
+including setting draft.action to one of the Action enum values. After all fields are set, Validate() checks that the 
+draft has everything the chosen Action requires; if so, Finalize() constructs the appropriate Intent subclass with only 
+the relevant fields populated. Dispatch(intent) then runs the per-action handler.
+Each Intent subclass is a @dataclass that declares its own fields plus inherits fields from its parent class. Each 
+instantiation produces an independent object with its own field values — modifying one Intent doesn't affect any other. 
+The field(default_factory=list) calls ensure mutable defaults are created fresh per instance rather than shared."""
+
 
 # ─── Base ─────────────────────────────────────────────────────────────
-
+# This is the master class, shaping all subclasses as an Intent
 @dataclass
 class Intent:
     """Abstract base for all dispatchable intents. Never instantiated directly."""
@@ -26,7 +34,7 @@ class Intent:
 
 
 # ─── SLURM-submitting intents ──────────────────────────────────────────
-
+# Subclass Master for all batch-file operations (SLURM, etc.)
 @dataclass
 class JobIntent(Intent):
     """Base for any intent that submits one or more SLURM jobs.
@@ -41,7 +49,7 @@ class JobIntent(Intent):
     nbo7:          bool = False
     indexOverride: int  = 0
 
-
+# Subclass of JobIntent, specific for runJob() by Action()
 @dataclass
 class RunIntent(JobIntent):
     """`cu -r <pattern>` — submit existing input files as-written."""
@@ -59,7 +67,7 @@ class BenchmarkIntent(JobIntent):
     """`cu -b <pattern>` — generate the full benchmark suite, then submit each."""
     pass
 
-
+# Re-running a job introduces a new parameter. As such, the SUBCLASS ReRun adds this ON TOP OF Job
 @dataclass
 class ReRunIntent(JobIntent):
     """`cu -re <pattern>` — regenerate failed-job input, then submit.
@@ -122,7 +130,8 @@ class UpdateIntent(Intent):
 
 
 # ─── Mutable draft (TUI assembles this progressively) ──────────────────
-
+# Draft containing ALL options. This is what a parser will add arguments to, before Validating and Finalizing
+# to a specific Intent type as shown above
 @dataclass
 class IntentDraft:
     """
@@ -167,6 +176,7 @@ class IntentDraft:
     # UPDATE
     updateBranch: str = "main"
 
+    # This validates the fields for an Action() wants from its Intent()
     def Validate(self) -> list[str]:
         """Return human-readable errors. Empty list means valid."""
         errors: list[str] = []
