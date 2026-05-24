@@ -1,10 +1,7 @@
-import os
 from pathlib import Path
 
 import pandas
 
-from .console  import console
-from .catalog  import Catalog
 from .prompts import AskBool, AskFloat, AskStr
 from .fileops import MapFile, ExtractGoodVibes
 

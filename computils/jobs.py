@@ -3,7 +3,6 @@ from pathlib import Path
 from .console  import console
 from .defaults import Defaults
 from .catalog  import Catalog
-from .fileops   import fileCreation, extensionGetter, grabPaths
 from .molecule import Molecule
 from .intent import JobIntent
 

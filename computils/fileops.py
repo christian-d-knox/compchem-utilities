@@ -1,4 +1,4 @@
-import os, regex, subprocess
+import regex, subprocess
 from contextlib import closing, contextmanager
 from mmap import mmap, ACCESS_READ
 from pathlib import Path
