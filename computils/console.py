@@ -11,7 +11,7 @@ lowColorTheme = Theme({
     "good":      "bright_green",      # was: light_green
     "operation": "bright_cyan",       # was: light_cyan and light_blue
     "info":      "bright_magenta",    # was: light_magenta
-    "prompt":    "dark_orange",       # probably still needs adjustment
+    "prompt":    "#875F00",           # probably still needs adjustment, ideally darker yellow
 })
 
 hexCodeTheme = Theme({
