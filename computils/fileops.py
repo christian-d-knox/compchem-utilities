@@ -200,7 +200,7 @@ def gaussianChargeFinder(geometryFile: Path) -> tuple[str,str]:
     return charge, multiplicity
 
 # This subroutine returns file name and extension for ease-of-use
-def grabPaths(fileName: str) -> tuple[str,str] | tuple[None,None]:
+def grabPaths(fileName: str|Path) -> tuple[str,str] | tuple[None,None]:
     filePath = Path(fileName)
     if filePath.exists():
         baseName, extension = filePath.stem, filePath.suffix

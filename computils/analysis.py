@@ -44,7 +44,7 @@ def goodVibesInteractive() -> list[str]:
     return keyList
 
 # An improved version of goodVibesToExcelv3 that now properly formats the numbers in Excel as numbers
-def goodVibesProcessor(inputFile) -> None:
+def goodVibesProcessor(inputFile: Path) -> None:
     with MapFile(inputFile) as inFile:
         outputData = ExtractGoodVibes(inFile)
     dataFrame = pandas.DataFrame(outputData)
