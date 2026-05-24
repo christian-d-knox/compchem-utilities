@@ -6,7 +6,6 @@ In Step 4, the CLI-state attributes (isStalking, isCheck, isNBO,
 indexOverride, isLooping, fileExtension) move into Intent fields; only
 the loaded-data attributes (methodLine, methodList, etc.) stay here.
 """
-import os
 from pathlib import Path
 from .console  import console
 from .defaults import Defaults
@@ -22,18 +21,6 @@ class Catalog:
     # ── Capability flags (set during Load) ──────────────────────────────────
     canBench = True
     isCustomTarget = True
-
-    # ── CLI runtime state (set by argparse, read during dispatch) ───────────
-    # In Step 4, these move into Intent fields. They live here for Step 1.
-    isStalking = False
-    isLooping = False
-    isCheck = False
-    isNBO = False
-    indexOverride  = 0
-    fileExtension  = ""
-
-    # ── Runtime tracking ────────────────────────────────────────────────────
-    stalkingSet = set()
 
     @classmethod
     def Load(cls) -> None:

@@ -4,16 +4,14 @@ Single execution path for all Intents.
 CLI argparse (and eventually TUI screens) build typed Intents which arrive
 here. Dispatch() routes to the per-action handler based on intent type.
 """
-import glob
 import subprocess
-from pathlib import Path
 
 from .console   import console
 from .defaults  import Defaults
 from .catalog   import Catalog
 from .molecule  import Molecule
 from .intent    import (
-    Intent, JobIntent,
+    Intent,
     RunIntent, SinglePointIntent, BenchmarkIntent, ReRunIntent,
     CubeIntent, FormCheckIntent, ExcelIntent, GoodVibesIntent,
     FirstTimeSetupIntent, UpdateIntent,

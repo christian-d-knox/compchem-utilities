@@ -1,11 +1,8 @@
-import os, subprocess, time, regex
-from contextlib import closing
-from mmap import mmap, ACCESS_READ
+import subprocess, time
 from pathlib import Path
 
 from .console  import console
 from .defaults import Defaults
-from .catalog  import Catalog
 from .notify   import NotifyPersonal
 from .fileops import MapFile, ExtractStalking
 
