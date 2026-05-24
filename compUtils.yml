@@ -153,5 +153,5 @@ dependencies:
   - textual>=0.50
   - pip
   - pip:
-      - git+https://github.com/christian-d-knox/compchem-utilities.git@dev
+      - git+https://github.com/christian-d-knox/compchem-utilities.git@main
 prefix: /ihome/pliu/cdk67/miniconda3/envs/compUtils
