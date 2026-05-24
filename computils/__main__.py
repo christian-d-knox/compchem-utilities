@@ -20,12 +20,6 @@ def Main() -> None:
         firstTimeSetup()
 
     ApplyTheme(Defaults.colorMode)
-    # In Step 4 this entire block becomes:
-    #     from .cli      import ParseCLI
-    #     from .dispatch import Dispatch
-    #     intent = ParseCLI(sys.argv[1:])
-    #     Dispatch(intent)
-    # For Step 1, preserve existing dispatch via commandLineParser:
     from .cli   import commandLineParser
     from .stalk import jobStalking
 

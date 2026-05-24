@@ -6,7 +6,8 @@ from rich.panel import Panel
 from .console  import console
 from .defaults import Defaults, H2PSubmission, Bridges2Submission, Stampede3Submission
 from .notify   import _SendTelegram, _DetectTelegramChatID
-from .prompts import *
+from .prompts import AskBool, AskStr
+
 
 def NotificationSetup() -> None:
     console.print(Panel("Notification Setup (Telegram)", style="operation"))

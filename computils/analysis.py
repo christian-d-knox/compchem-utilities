@@ -3,8 +3,9 @@ import pandas
 
 from .console  import console
 from .catalog  import Catalog
-from .prompts import *
-from .fileops import *
+from .prompts import AskBool, AskFloat, AskStr
+from .fileops import MapFile, ExtractGoodVibes
+
 
 # Because everyone hates remembering manuals. Walks through the most common use-cases with catch-all final custom keylist
 def goodVibesInteractive() -> list[str]:

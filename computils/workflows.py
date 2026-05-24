@@ -5,7 +5,7 @@ from mmap import mmap, ACCESS_READ
 from .console  import console
 from .defaults import Defaults
 from .catalog  import Catalog
-from .fileops   import *
+from .fileops import extensionGetter, fileCreation, MapFile, ExtractPriorMethod
 from .jobs     import genFile, runJob, slurmHandler
 from .molecule import Molecule
 from .prompts import AskStr

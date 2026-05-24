@@ -7,7 +7,8 @@ from .console  import console
 from .defaults import Defaults
 from .catalog  import Catalog
 from .notify   import NotifyPersonal
-from .fileops  import *
+from .fileops import MapFile, ExtractStalking
+
 
 # Finally implemented in a way I can be proud of.
 def jobStalking(jobSet: set, duration: int, frequency: int) -> None:
