@@ -1,6 +1,4 @@
 import os, time, regex, subprocess
-from contextlib import closing
-from mmap import mmap, ACCESS_READ
 
 from .console  import console
 from .defaults import Defaults
