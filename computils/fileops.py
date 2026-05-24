@@ -7,6 +7,8 @@ from typing import Any
 from .console  import console
 from .defaults import Defaults
 from .catalog  import Catalog
+from .molecule import Molecule
+
 
 # A new, working RegEx Refactor
 @contextmanager
@@ -137,7 +139,7 @@ def fileCreation(baseName, extensionType, extra) -> Path:
     return fullFile
 
 # Formats checkpoints automatically
-def formCheck(molecule: object) -> None:
+def formCheck(molecule: Molecule) -> None:
     subprocess.run(["formchk", molecule.fullPath], check=True)
     molecule.extensionType = ".fchk"
     molecule.fullPath = molecule.rootName + molecule.extensionType

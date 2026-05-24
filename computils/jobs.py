@@ -5,10 +5,11 @@ from .defaults import Defaults
 from .catalog  import Catalog
 from .fileops   import fileCreation, extensionGetter, grabPaths
 from .molecule import Molecule
+from .intent import JobIntent
 
 # Separate method for input file generation to improve code efficiency. No longer returns anything as path to input is
 # previously stored in molecule
-def genFile(molecule: object, index: int) -> None:
+def genFile(molecule: Molecule, index: int, intent: JobIntent) -> None:
     inputFile = molecule.fullPath
     mixedBasis = False
     match molecule.extensionType:
@@ -20,7 +21,7 @@ def genFile(molecule: object, index: int) -> None:
                 jobMem = str(Defaults.CPU * Defaults.memoryRatio)
                 # Writes the standard Gaussian16 formatted opening
                 jobInput.write("%nprocshared=" + jobCPU + "\n%mem=" + jobMem + "GB")
-                if Catalog.isCheck:
+                if intent.checkpoint:
                     jobInput.write(f"\n%chk={molecule.baseName}.chk")
                 # If the methodLine from benchmarking.txt is garbage, the calculation will fail. Not my fault.
                 jobInput.write("\n# " + Catalog.fullMethodLine[index].replace("\n","") + "\n\nUseless Comment line\n\n")
@@ -44,7 +45,7 @@ def genFile(molecule: object, index: int) -> None:
                     return
                 jobInput.write("\n")
                 # New NBO7 section
-                if Catalog.isNBO:
+                if intent.nbo7:
                     jobInput.write(f"{Defaults.nboKeylist} FILE={molecule.baseName} ARCHIVE $END")
                 else:
                     jobInput.write("\n")
@@ -72,7 +73,7 @@ def genFile(molecule: object, index: int) -> None:
             pass
 
 # Reorganized! Now handles SLURM commands independently because of HPC cluster agnosticism
-def slurmHandler(molecule: object, queueName: Path, outputName: Path, firstFiveLines: list[str]) -> None:
+def slurmHandler(molecule: Molecule, queueName: Path, outputName: Path, firstFiveLines: list[str]) -> None:
     coresLine, ramLine, cpus, jobRam = "", "", 0, 0
     match molecule.extensionType:
         case Defaults.gaussianExtension:
@@ -156,10 +157,10 @@ def slurmHandler(molecule: object, queueName: Path, outputName: Path, firstFiveL
                 outputFile.write(f"{line}\n")
 
 # This routine is for job submission to the cluster
-def runJob(molecule: object):
+def runJob(molecule: Molecule, intent: JobIntent, stalkingSet: set) -> None:
     # Sets up all the basic filenames for the rest of submission
-    outputName = molecule.baseName + Defaults.outputExtension
-    queueName = molecule.baseName + Defaults.queueExtension
+    outputName = Path(molecule.baseName + Defaults.outputExtension)
+    queueName = Path(molecule.baseName + Defaults.queueExtension)
 
     # A potential minor speed uplift would be the closing(mmap()) implementation used basically everywhere else, since
     # I've learned just how fast it is. Probably not necessary, though
@@ -190,9 +191,9 @@ def runJob(molecule: object):
                 subprocess.run(["sbatch", queueName], check=True)
                 #os.remove(queueName)
                 console.print(f"[good]Submitted job {molecule.baseName} to Gaussian16[/good]")
-                if Catalog.isStalking:
-                    molecule.fullPath = molecule.baseName + Defaults.outputExtension
-                    Catalog.stalkingSet.add((molecule.baseName,molecule.fullPath))
+                if intent.stalk:
+                    molecule.fullPath = Path(molecule.baseName + Defaults.outputExtension)
+                    stalkingSet.add((molecule.baseName,molecule.fullPath))
 
             case Defaults.orcaExtension:
                 with open(queueName, 'a') as outputFile:
@@ -209,9 +210,9 @@ def runJob(molecule: object):
                 subprocess.run(["sbatch", queueName], check=True)
                 #os.remove(queueName)
                 console.print(f"[good]Submitted job {molecule.baseName} to ORCA 6.0.1[/good]")
-                if Catalog.isStalking:
-                    molecule.fullPath = molecule.baseName + Defaults.outputExtension
-                    Catalog.stalkingSet.add((molecule.baseName,molecule.fullPath))
+                if intent.stalk:
+                    molecule.fullPath = Path(molecule.baseName + Defaults.outputExtension)
+                    stalkingSet.add((molecule.baseName,molecule.fullPath))
 
             # This will need updated to the modern architecture at some point
             case Defaults.qChemExtension:
@@ -237,6 +238,6 @@ def runJob(molecule: object):
                 subprocess.run(["sbatch", queueName], check=True)
                 #os.remove(queueName)
                 console.print(f"[good]Submitted job {molecule.baseName} to Q-Chem 6.3[/good]")
-                if Catalog.isStalking:
-                    molecule.fullPath = molecule.baseName + Defaults.outputExtension
-                    Catalog.stalkingSet.add((molecule.baseName,molecule.fullPath))
+                if intent.stalk:
+                    molecule.fullPath = Path(molecule.baseName + Defaults.outputExtension)
+                    stalkingSet.add((molecule.baseName,molecule.fullPath))
