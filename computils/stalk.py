@@ -11,7 +11,7 @@ from .fileops import MapFile, ExtractStalking
 
 
 # Finally implemented in a way I can be proud of.
-def jobStalking(jobSet: set, duration: int, frequency: int) -> None:
+def jobStalking(jobSet: set, duration: int, frequency: int, loop: bool) -> None:
     startTime = time.monotonic()
     # Prints queue in format of JOBNAME STATUS NODE/REASON START_TIME CURRENT_DURATION courtesy of my own improved
     # obsessiveQueuev2
@@ -99,7 +99,7 @@ def jobStalking(jobSet: set, duration: int, frequency: int) -> None:
 
         # Timeout warning
         if (pingTime - startTime) > duration * 60:
-            if Catalog.isLooping:
+            if loop:
                 startTime = pingTime
             else:
                 console.print("[warning]Job stalking terminated by timeout. Your jobs are still running.[/warning]")
