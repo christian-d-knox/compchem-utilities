@@ -16,13 +16,13 @@ from typing import Optional
 
 from .actions import Action, CubeOption
 
-"""CLI flags indicate a specific task. The parser populates an IntentDraft field-by-field as it reads each flag — 
-including setting draft.action to one of the Action enum values. After all fields are set, Validate() checks that the 
-draft has everything the chosen Action requires; if so, Finalize() constructs the appropriate Intent subclass with only 
-the relevant fields populated. Dispatch(intent) then runs the per-action handler.
-Each Intent subclass is a @dataclass that declares its own fields plus inherits fields from its parent class. Each 
-instantiation produces an independent object with its own field values — modifying one Intent doesn't affect any other. 
-The field(default_factory=list) calls ensure mutable defaults are created fresh per instance rather than shared."""
+# CLI flags indicate a specific task. The parser populates an IntentDraft field-by-field as it reads each flag —
+# including setting draft.action to one of the Action enum values. After all fields are set, Validate() checks that the
+# draft has everything the chosen Action requires; if so, Finalize() constructs the appropriate Intent subclass with only
+# the relevant fields populated. Dispatch(intent) then runs the per-action handler.
+# Each Intent subclass is a @dataclass that declares its own fields plus inherits fields from its parent class. Each
+# instantiation produces an independent object with its own field values — modifying one Intent doesn't affect any other.
+# The field(default_factory=list) calls ensure mutable defaults are created fresh per instance rather than shared."""
 
 
 # ─── Base ─────────────────────────────────────────────────────────────
