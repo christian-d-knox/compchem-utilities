@@ -140,7 +140,7 @@ def fileCreation(baseName, extensionType, extra) -> Path:
 
 # Formats checkpoints automatically
 def formCheck(molecule: Molecule) -> None:
-    subprocess.run(["formchk", molecule.fullPath], check=True)
+    subprocess.run(["bash", "-l", "-c", f"module load gaussian && formchk {molecule.fullPath}"], check=True)
     molecule.extensionType = ".fchk"
     molecule.fullPath = molecule.rootName + molecule.extensionType
 
