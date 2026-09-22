@@ -16,6 +16,8 @@ _warningBox = """\
 def tomlValue(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, Path):
+        value = str(value)
     if isinstance(value, str):
         escaped = (
             value
@@ -77,7 +79,6 @@ class Defaults:
     coordExtension = ".xyz"
     gaussianExtension = ".gjf"
     orcaExtension = ".inp"
-    qChemExtension = ".in"
     cubeExtension = ".cube"
     queueExtension = ".cmd"
     outputExtension = ".out"
@@ -106,7 +107,6 @@ class Defaults:
                       "    cp $SLURM_SUBMIT_DIR/$i $SLURM_SCRATCH/$i\ndone\n\n","# cd to the SCRATCH space\n",
                       "cd $SLURM_SCRATCH\n\n","# run the job, $(which orca) is necessary\n",
                       "# finally, copy back gbw and prop files\n","cp $SLURM_SCRATCH/*.{gbw,prop} $SLURM_SUBMIT_DIR\n\n"]
-    qChemNonVariant = []
     # Formatting related
     coreLineVariants = ["%nproc","%nprocshared","%pal"]
     ramLineVariants = ["%mem","%maxcore"]
@@ -136,12 +136,12 @@ class Defaults:
             "nboKeylist", "mixedBasisVariants",
             "potCube", "denCube", "valenceCube", "spinCube",
             "coreLineVariants", "ramLineVariants", "terminationVariants",
-            "gaussianNonVariant", "orcaNonVariant", "qChemNonVariant",
+            "gaussianNonVariant", "orcaNonVariant",
         ],
         "extensions.toml": [
             "singlePointExtra", "reRunExtra",
             "coordExtension", "gaussianExtension", "orcaExtension",
-            "qChemExtension", "cubeExtension", "queueExtension", "outputExtension",
+            "cubeExtension", "queueExtension", "outputExtension",
         ],
         "notifications.toml": [
             "isNotifications",
@@ -204,13 +204,11 @@ class Defaults:
         "terminationVariants": "Output file strings indicating normal or error job termination.",
         "gaussianNonVariant": "Gaussian16 SLURM script boilerplate written verbatim into job files.",
         "orcaNonVariant": "ORCA 6.X SLURM script boilerplate written verbatim into job files.",
-        "qChemNonVariant": "Q-Chem SLURM script boilerplate written verbatim into job files.",
         "singlePointExtra": "Filename suffix appended to single-point calculation jobs.",
         "reRunExtra": "Filename suffix appended to re-run jobs.",
         "coordExtension": "Coordinate file extension.",
         "gaussianExtension": "Gaussian16 input file extension.",
         "orcaExtension": "ORCA 6.X input file extension.",
-        "qChemExtension": "Q-Chem input file extension.",
         "cubeExtension": "Cube file extension.",
         "queueExtension": "Job queue/submission script extension.",
         "outputExtension": "Program output file extension.",
@@ -222,12 +220,57 @@ class Defaults:
         "colorMode": "Determined the level of color accuracy used in terminal output."
     }
 
+    # Expected Python type for each config key. Used by _ApplySection to validate
+    # and coerce values loaded from user-editable TOML files.
+    _TYPES: dict[str, type] = {
+        "binDirectory": str,
+        "CPU": int,
+        "memoryRatio": int,
+        "highMemoryRatio": int,
+        "memoryBuffer": int,
+        "wallTime": str,
+        "cluster": str,
+        "partition": str,
+        "hpcType": str,
+        "stalkDuration": int,
+        "stalkFrequency": int,
+        "submissionList": list,
+        "method": str,
+        "methodLine": str,
+        "methodNames": list,
+        "targetProgram": list,
+        "nboKeylist": str,
+        "mixedBasisVariants": list,
+        "potCube": str,
+        "denCube": str,
+        "valenceCube": str,
+        "spinCube": str,
+        "coreLineVariants": list,
+        "ramLineVariants": list,
+        "terminationVariants": list,
+        "gaussianNonVariant": list,
+        "orcaNonVariant": list,
+        "singlePointExtra": str,
+        "reRunExtra": str,
+        "coordExtension": str,
+        "gaussianExtension": str,
+        "orcaExtension": str,
+        "cubeExtension": str,
+        "queueExtension": str,
+        "outputExtension": str,
+        "isNotifications": bool,
+        "botToken": str,
+        "chatID": str,
+        "broadcastGroupChatID": str,
+        "broadcastThreshold": int,
+        "colorMode": str,
+    }
+
     # Keys listed here get the _warningBox comment block inserted immediately above them in the generated TOML,
     # alerting users not to edit carelessly.
     _WARNINGS: dict[str, str] = {
         "gaussianNonVariant": _warningBox,
         "orcaNonVariant": _warningBox,
-        "qChemNonVariant": _warningBox,
     }
 
 
@@ -284,12 +327,55 @@ class Defaults:
         missing = []
         for key in cls._FILE_GROUPS[filename]:
             if key in data:
-                setattr(cls, key, data[key])
+                value = cls._CoerceValue(key, data[key])
+                if value is not None:
+                    setattr(cls, key, value)
+                else:
+                    console.print(f"[warning]\\[config] Key '{key}' in {filename} has invalid type "
+                           f"(expected {cls._TYPES[key].__name__}, got {type(data[key]).__name__}). "
+                           f"Falling back to hardcoded default: {getattr(cls, key)!r}[/warning]")
             else:
                 missing.append(key)
                 console.print(f"[warning]\\[config] Key '{key}' not found in {filename}. "
                        f"Falling back to hardcoded default: {getattr(cls, key)!r}[/warning]")
         return missing
+
+    @classmethod
+    def _CoerceValue(cls, key: str, value):
+        expected = cls._TYPES.get(key)
+        if expected is None:
+            return value
+
+        # TOML bool is a Python bool (subclass of int), check it before int
+        if expected is bool:
+            if isinstance(value, bool):
+                return value
+            return None
+
+        # Reject bool where int/float expected (bool is subclass of int in Python)
+        if isinstance(value, bool) and expected in (int, float):
+            return None
+
+        if isinstance(value, expected):
+            return value
+
+        # float → int coercion (e.g. user writes 12.0 instead of 12)
+        if expected is int and isinstance(value, float):
+            if value == int(value):
+                return int(value)
+            console.print(f"[warning]\\[config] Key '{key}' should be a whole number, got {value}. "
+                   f"Rounding to {int(value)}.[/warning]")
+            return int(value)
+
+        # int → float coercion (unlikely but harmless)
+        if expected is float and isinstance(value, int):
+            return float(value)
+
+        # str coercion for Path-bound keys (binDirectory loaded as str from TOML)
+        if expected is str and isinstance(value, (int, float)):
+            return str(value)
+
+        return None
 
 
     @classmethod

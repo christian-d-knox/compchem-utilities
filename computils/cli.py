@@ -1,4 +1,4 @@
-import argparse, glob, os, time, subprocess
+import argparse, glob
 from pathlib import Path
 
 from .console   import console
@@ -14,12 +14,12 @@ def BuildParser() -> argparse.ArgumentParser:
 
     # Action flags (mutually exclusive — one action per invocation)
     actionGroup = parser.add_mutually_exclusive_group()
-    actionGroup.add_argument('-r', '--run', type=str, metavar="GLOB", help="Submit jobs as-written.")
-    actionGroup.add_argument('-sp', '--singlePoint', type=str, metavar="GLOB", help="Generate + submit single-point calculations.")
-    actionGroup.add_argument('-b', '--bench', type=str, metavar="GLOB", help="Generate + submit a benchmark suite.")
-    actionGroup.add_argument('-cu', '--cube', type=str, metavar="GLOB", help="Generate cube files via cubegen.")
-    actionGroup.add_argument('-re', '--rerun', type=str, metavar="GLOB", help="Regenerate a failed job and re-submit.")
-    actionGroup.add_argument('-form', '--formcheck', type=str, metavar="GLOB", help="Run formchk on Gaussian checkpoint files.")
+    actionGroup.add_argument('-r', '--run', nargs='+', metavar="FILE", help="Submit jobs as-written.")
+    actionGroup.add_argument('-sp', '--singlePoint', nargs='+', metavar="FILE", help="Generate + submit single-point calculations.")
+    actionGroup.add_argument('-b', '--bench', nargs='+', metavar="FILE", help="Generate + submit a benchmark suite.")
+    actionGroup.add_argument('-cu', '--cube', nargs='+', metavar="FILE", help="Generate cube files via cubegen.")
+    actionGroup.add_argument('-re', '--rerun', nargs='+', metavar="FILE", help="Regenerate a failed job and re-submit.")
+    actionGroup.add_argument('-form', '--formcheck', nargs='+', metavar="FILE", help="Run formchk on Gaussian checkpoint files.")
     actionGroup.add_argument('-ex', '--excel', type=str, metavar="FILE", help="Convert GoodVibes output to xlsx.")
     actionGroup.add_argument('-gv', '--goodvibes', action='store_true', help="Run GoodVibes interactively, then convert to xlsx.")
     actionGroup.add_argument('-first','--first', action='store_true', help="Re-run first-time setup.")
@@ -43,15 +43,15 @@ def ParseCLI(argv: list[str]) -> Intent:
     """
     args  = BuildParser().parse_args(argv)
     draft = IntentDraft()
-    pattern: str | None = None
+    rawFiles: list[str] | None = None
 
-    # Set action and gather any pattern argument
-    if   args.run:         draft.action, pattern = Action.RUN,            args.run
-    elif args.singlePoint: draft.action, pattern = Action.SINGLE_POINT,   args.singlePoint
-    elif args.bench:       draft.action, pattern = Action.BENCHMARK,      args.bench
-    elif args.cube:        draft.action, pattern = Action.CUBE,           args.cube
-    elif args.rerun:       draft.action, pattern = Action.RERUN,          args.rerun
-    elif args.formcheck:   draft.action, pattern = Action.FORM_CHECK,     args.formcheck
+    # Set action and gather any file arguments
+    if   args.run:         draft.action, rawFiles = Action.RUN,            args.run
+    elif args.singlePoint: draft.action, rawFiles = Action.SINGLE_POINT,   args.singlePoint
+    elif args.bench:       draft.action, rawFiles = Action.BENCHMARK,      args.bench
+    elif args.cube:        draft.action, rawFiles = Action.CUBE,           args.cube
+    elif args.rerun:       draft.action, rawFiles = Action.RERUN,          args.rerun
+    elif args.formcheck:   draft.action, rawFiles = Action.FORM_CHECK,     args.formcheck
     elif args.excel:       draft.action = Action.EXCEL
     elif args.goodvibes:   draft.action = Action.GOODVIBES
     elif args.first:       draft.action = Action.FIRST_TIME_SETUP
@@ -60,9 +60,13 @@ def ParseCLI(argv: list[str]) -> Intent:
         console.print("[error]No action specified. Run `cu --help` for usage.[/error]")
         raise SystemExit(2)
 
-    # File-bearing actions: glob and store
-    if pattern is not None:
-        draft.files = [Path(p) for p in glob.glob(pattern)]
+    # File-bearing actions: expand globs if the shell didn't, collect all files
+    if rawFiles is not None:
+        for entry in rawFiles:
+            if any(c in entry for c in ("*", "?", "[")):
+                draft.files.extend(Path(p) for p in glob.glob(entry))
+            else:
+                draft.files.append(Path(entry))
 
     # Single-file actions
     if args.excel:

@@ -21,7 +21,7 @@ def _SendTelegram(botToken: str, chatID: str, message: str) -> bool:
         with urlopen(request, timeout=10) as response:
             return response.status == 200
     except (URLError, HTTPError, TimeoutError) as error:
-        console.print(f"[error]  \\[Notification] Telegram send failed: {error}[error]")
+        console.print(f"[error]  \\[Notification] Telegram send failed: {error}[/error]")
         return False
 
 

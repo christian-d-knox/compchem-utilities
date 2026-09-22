@@ -60,10 +60,8 @@ def ExtractGaussianCharge(data) -> tuple[str, str]:
     if chargeLocation is None:
         return "", ""
     data.seek(chargeLocation.start())
-    chargeSub = data.readline().decode().strip().split()
-    # This chunk handles the special case where a stupid non-breaking space is used for neutral charges?
-    if chargeSub[2] == '':
-        del chargeSub[2]
+    # Replace non-breaking spaces so they don't swallow a charge value and shift indices
+    chargeSub = data.readline().decode().replace('\xa0', ' ').strip().split()
     charge = chargeSub[2]
     multiplicity = chargeSub[5]
     return charge, multiplicity
@@ -131,18 +129,16 @@ def ExtractStalking(data, extractType: str) -> Any:
             return False, ""
 
 # Finally handle filename creation in one place to stop the infinite copypasta
-def fileCreation(baseName, extensionType, extra) -> Path:
-    if not len(extra) == 0:
-        fullFile = baseName + extra + extensionType
-    else:
-        fullFile = baseName + extensionType
-    return fullFile
+def fileCreation(baseName: str, extensionType: str, extra: str = "") -> Path:
+    if extra:
+        return Path(baseName + extra + extensionType)
+    return Path(baseName + extensionType)
 
 # Formats checkpoints automatically
 def formCheck(molecule: Molecule) -> None:
     subprocess.run(["bash", "-l", "-c", f"module load gaussian && formchk {molecule.fullPath}"], check=True)
     molecule.extensionType = ".fchk"
-    molecule.fullPath = molecule.rootName + molecule.extensionType
+    molecule.fullPath = fileCreation(molecule.rootName, molecule.extensionType)
 
 # A new fully pythonic solution to coordinate scraping, agnostic of the PERL bullshit on LOCAL_CLUSTER
 def getCoords(fileName: Path, outputFileName: Path) -> list:
@@ -185,8 +181,6 @@ def extensionGetter(method: str) -> str:
             fileExtension = Defaults.gaussianExtension
         case "O":
             fileExtension = Defaults.orcaExtension
-        case "Q":
-            fileExtension = Defaults.qChemExtension
         case _:
             console.print("[error]Notice: One or more of your intended methods is not specified in programs file nor hardcoded."
                    " Defaulting to Gaussian16.[/error]")

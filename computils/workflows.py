@@ -78,7 +78,8 @@ def gimmeCubes(molecule: Molecule, intent: CubeIntent) -> None:
                 queueName = fileCreation(molecule.baseName, Defaults.queueExtension, cubeOption.value)
                 keyWord = "MO=Valence"
             case "Range":
-                orbitalRange = AskStr("Enter the range of MOs you want printed (e.g. 10-15)")
+                if not intent.orbitalRange:
+                    intent.orbitalRange = AskStr("Enter the range of MOs you want printed (e.g. 10-15)")
                 outputName = fileCreation(molecule.baseName, Defaults.cubeExtension, cubeOption.value + intent.orbitalRange)
                 queueName = fileCreation(molecule.baseName, Defaults.queueExtension, cubeOption.value + intent.orbitalRange)
                 keyWord = f"MO={intent.orbitalRange}"

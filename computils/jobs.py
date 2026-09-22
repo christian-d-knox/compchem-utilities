@@ -3,6 +3,7 @@ from pathlib import Path
 from .console  import console
 from .defaults import Defaults
 from .catalog  import Catalog
+from .fileops  import fileCreation
 from .molecule import Molecule
 from .intent import JobIntent
 
@@ -68,9 +69,6 @@ def genFile(molecule: Molecule, index: int, intent: JobIntent) -> None:
                     jobInput.write(line)
                 jobInput.write("\n*")
 
-        case Defaults.qChemExtension:
-            pass
-
 # Reorganized! Now handles SLURM commands independently because of HPC cluster agnosticism
 def slurmHandler(molecule: Molecule, queueName: Path, outputName: Path, firstFiveLines: list[str]) -> None:
     coresLine, ramLine, cpus, jobRam = "", "", 0, 0
@@ -85,7 +83,7 @@ def slurmHandler(molecule: Molecule, queueName: Path, outputName: Path, firstFiv
                 cpus = Defaults.CPU
                 console.print("[error]Couldn't find CPU count in input file. Submitting instead according to Defaults.[/error]")
             else:
-                cpus = coresLine.strip().split("=")[1]
+                cpus = int(coresLine.strip().split("=")[1])
             if len(ramLine) == 0:
                 ram = cpus * Defaults.memoryRatio
                 jobRam = ram + Defaults.memoryBuffer
@@ -104,7 +102,7 @@ def slurmHandler(molecule: Molecule, queueName: Path, outputName: Path, firstFiv
                 cpus = Defaults.CPU
                 console.print("[error]Couldn't find CPU count in input file. Submitting instead according to Defaults.[/error]")
             else:
-                cpus = coresLine.strip().split()[2]
+                cpus = int(coresLine.strip().split()[2])
             if len(ramLine) == 0:
                 ram = cpus * Defaults.memoryRatio
                 jobRam = ram + Defaults.memoryBuffer
@@ -112,25 +110,6 @@ def slurmHandler(molecule: Molecule, queueName: Path, outputName: Path, firstFiv
             else:
                 ram = int(ramLine.strip().split()[1]) / 1000
                 jobRam = int(int(cpus) * ram + Defaults.memoryBuffer)
-
-        case Defaults.qChemExtension:
-            for line in firstFiveLines:
-                if regex.search(Defaults.coreLineVariants[0], line) or regex.search(Defaults.coreLineVariants[1], line):
-                    coresLine = line
-                if regex.search(Defaults.ramLineVariants[0], line):
-                    ramLine = line
-            if len(coresLine) == 0:
-                cpus = Defaults.CPU
-                console.print("[error]Couldn't find CPU count in input file. Submitting instead according to Defaults.[/error]")
-            else:
-                cpus = coresLine.strip().split("=")[1]
-            if len(ramLine) == 0:
-                ram = cpus * Defaults.memoryRatio
-                jobRam = ram + Defaults.memoryBuffer
-                console.print("[error]Couldn't find RAM count in input file. Submitting instead according to Defaults.[/error]")
-            else:
-                ram = int(ramLine.strip().split("=")[1].replace("GB", ""))
-                jobRam = ram + Defaults.memoryBuffer
 
         case _:
             cpus = Defaults.CPU
@@ -158,8 +137,8 @@ def slurmHandler(molecule: Molecule, queueName: Path, outputName: Path, firstFiv
 # This routine is for job submission to the cluster
 def runJob(molecule: Molecule, intent: JobIntent, stalkingSet: set) -> None:
     # Sets up all the basic filenames for the rest of submission
-    outputName = Path(molecule.baseName + Defaults.outputExtension)
-    queueName = Path(molecule.baseName + Defaults.queueExtension)
+    outputName = fileCreation(molecule.baseName, Defaults.outputExtension)
+    queueName = fileCreation(molecule.baseName, Defaults.queueExtension)
 
     # A potential minor speed uplift would be the closing(mmap()) implementation used basically everywhere else, since
     # I've learned just how fast it is. Probably not necessary, though
@@ -171,9 +150,8 @@ def runJob(molecule: Molecule, intent: JobIntent, stalkingSet: set) -> None:
 
         # Craps out if the first line doesn't exist, or is entirely blank
         if not currentLine:
-            console.print(f"[error]Job file {molecule.baseName} is empty. Terminating submission attempt.[/error]")
-        if len(currentLine) == 0:
-            console.print(f"[error]First line of job file {molecule.baseName} is blank. Terminating submission attempt.[/error]")
+            console.print(f"[error]Job file {molecule.baseName} is empty or blank. Skipping submission.[/error]")
+            return
 
         for index in range(0,4):
             firstFiveLines.append(inputFile.readline().strip())
@@ -191,7 +169,7 @@ def runJob(molecule: Molecule, intent: JobIntent, stalkingSet: set) -> None:
                 #os.remove(queueName)
                 console.print(f"[good]Submitted job {molecule.baseName} to Gaussian16[/good]")
                 if intent.stalk:
-                    molecule.fullPath = Path(molecule.baseName + Defaults.outputExtension)
+                    molecule.fullPath = fileCreation(molecule.baseName, Defaults.outputExtension)
                     stalkingSet.add((molecule.baseName,molecule.fullPath))
 
             case Defaults.orcaExtension:
@@ -199,10 +177,10 @@ def runJob(molecule: Molecule, intent: JobIntent, stalkingSet: set) -> None:
                     # Now runs in ORCA 6.0.1 instead of 4.2.0
                     for index in range(0,3):
                         outputFile.write(Defaults.orcaNonVariant[index])
-                    outputFile.write(f"files=({molecule.baseName + Defaults.orcaExtension})\n")
+                    outputFile.write(f"files=({fileCreation(molecule.baseName, Defaults.orcaExtension)})\n")
                     for index in range(3,8):
                         outputFile.write(Defaults.orcaNonVariant[index])
-                    outputFile.write(f"$(which orca) {molecule.baseName + Defaults.orcaExtension}\n\n")
+                    outputFile.write(f"$(which orca) {fileCreation(molecule.baseName, Defaults.orcaExtension)}\n\n")
                     for index in range(8,10):
                         outputFile.write(Defaults.orcaNonVariant[index])
 
@@ -210,33 +188,6 @@ def runJob(molecule: Molecule, intent: JobIntent, stalkingSet: set) -> None:
                 #os.remove(queueName)
                 console.print(f"[good]Submitted job {molecule.baseName} to ORCA 6.0.1[/good]")
                 if intent.stalk:
-                    molecule.fullPath = Path(molecule.baseName + Defaults.outputExtension)
+                    molecule.fullPath = fileCreation(molecule.baseName, Defaults.outputExtension)
                     stalkingSet.add((molecule.baseName,molecule.fullPath))
 
-            # This will need updated to the modern architecture at some point
-            case Defaults.qChemExtension:
-                with open(queueName, 'a') as outputFile:
-                    outputFile.write("module purge\nmodule load qchem/6.3.0-REDACTED\n\n\n")
-                    # This crap was in the original and I have no clue if it's still necessary
-                    # output.write("export QCSCRATCH=$LOCAL\n")
-                    # output.write("export QC=/ihome/REDACTED/REDACTED/qchem/qchem_for_peng_20151014\n")
-                    # output.write("export PATH=$PATH:$QC/bin\n")
-                    # output.write("export QCAUX=/ihome/REDACTED/REDACTED/qchem/qcaux4\n")
-                    outputFile.write("# Change to working directory\n")
-                    outputFile.write(f"cp $SLURM_SUBMIT_DIR/{molecule.fullPath} $SLURM_SCRATCH\n")
-                    outputFile.write("cd $SLURM_SCRATCH\n\n")
-                    # No clue what this line is and if it's needed, it's not in the Q-Chem documentation
-                    outputFile.write("df -h\n")
-
-                    # Re-wrote the script in order to make this line *actually* match the Q-Chem documentation
-                    # Re-wrote to allow nthreads to match ncpu since each thread only runs on 1 CPU (see Q-Chem manual)
-                    # Do NOT specify outfile, it LITERALLY breaks shit for some reason
-                    #outputFile.write("qchem -slurm -nt " + str(cpus) + " " + molecule.fullPath + " " + "\n")
-                    outputFile.write("du -h\n\n")
-
-                subprocess.run(["sbatch", queueName], check=True)
-                #os.remove(queueName)
-                console.print(f"[good]Submitted job {molecule.baseName} to Q-Chem 6.3[/good]")
-                if intent.stalk:
-                    molecule.fullPath = Path(molecule.baseName + Defaults.outputExtension)
-                    stalkingSet.add((molecule.baseName,molecule.fullPath))

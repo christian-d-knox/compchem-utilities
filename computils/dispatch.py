@@ -16,7 +16,7 @@ from .intent    import (
     CubeIntent, FormCheckIntent, ExcelIntent, GoodVibesIntent,
     FirstTimeSetupIntent, UpdateIntent,
 )
-from .fileops   import grabPaths, gaussianChargeFinder, formCheck, getCoords
+from .fileops   import grabPaths, gaussianChargeFinder, formCheck, getCoords, fileCreation
 from .jobs      import runJob
 from .workflows import genBench, genSinglePoint, genReRun, gimmeCubes
 from .analysis  import goodVibesProcessor
@@ -48,6 +48,8 @@ def _DispatchRun(intent: RunIntent) -> None:
     stalkingSet: set = set()
     for jobPath in intent.files:
         baseName, extension = grabPaths(jobPath)
+        if baseName is None:
+            continue
         molecule = Molecule(jobPath, baseName, 0, 0, 0, extension, baseName)
         runJob(molecule, intent, stalkingSet)
     if intent.stalk:
@@ -58,8 +60,10 @@ def _DispatchSinglePoint(intent: SinglePointIntent) -> None:
     stalkingSet: set = set()
     for jobPath in intent.files:
         baseName, extension = grabPaths(jobPath)
+        if baseName is None:
+            continue
         charge, multiplicity = gaussianChargeFinder(jobPath)
-        coordList = getCoords(jobPath, baseName + Defaults.coordExtension)
+        coordList = getCoords(jobPath, fileCreation(baseName, Defaults.coordExtension))
         molecule = Molecule(jobPath, baseName, charge, multiplicity, coordList, extension, baseName)
         genSinglePoint(molecule, intent, stalkingSet)
     if intent.stalk:
@@ -73,8 +77,10 @@ def _DispatchBenchmark(intent: BenchmarkIntent) -> None:
     stalkingSet: set = set()
     for jobPath in intent.files:
         baseName, extension = grabPaths(jobPath)
+        if baseName is None:
+            continue
         charge, multiplicity = gaussianChargeFinder(jobPath)
-        coordList = getCoords(jobPath, baseName + Defaults.coordExtension)
+        coordList = getCoords(jobPath, fileCreation(baseName, Defaults.coordExtension))
         molecule = Molecule(jobPath, baseName, charge, multiplicity, coordList, extension, baseName)
         genBench(molecule, intent, stalkingSet)
     if intent.stalk:
@@ -85,8 +91,10 @@ def _DispatchReRun(intent: ReRunIntent) -> None:
     stalkingSet: set = set()
     for jobPath in intent.files:
         baseName, extension = grabPaths(jobPath)
+        if baseName is None:
+            continue
         charge, multiplicity = gaussianChargeFinder(jobPath)
-        coordList = getCoords(jobPath, baseName + "_failed" + Defaults.coordExtension)
+        coordList = getCoords(jobPath, fileCreation(baseName, Defaults.coordExtension, "_failed"))
         molecule = Molecule(jobPath, baseName, charge, multiplicity, coordList, extension, baseName)
         genReRun(molecule, intent, stalkingSet)
     if intent.stalk:
@@ -96,6 +104,8 @@ def _DispatchReRun(intent: ReRunIntent) -> None:
 def _DispatchCube(intent: CubeIntent) -> None:
     for jobPath in intent.files:
         baseName, extension = grabPaths(jobPath)
+        if baseName is None:
+            continue
         molecule = Molecule(jobPath, baseName, 0, 0, 0, extension, baseName)
         if extension == ".chk":
             formCheck(molecule)
@@ -107,6 +117,8 @@ def _DispatchCube(intent: CubeIntent) -> None:
 def _DispatchFormCheck(intent: FormCheckIntent) -> None:
     for jobPath in intent.files:
         baseName, extension = grabPaths(jobPath)
+        if baseName is None:
+            continue
         molecule = Molecule(jobPath, baseName, 0, 0, 0, extension, baseName)
         formCheck(molecule)
 
@@ -117,12 +129,12 @@ def _DispatchExcel(intent: ExcelIntent) -> None:
 
 def _DispatchGoodVibes(intent: GoodVibesIntent) -> None:
     # Build the goodvibes command from the intent's fields.
-    keyList: list[str] = ["-v", "1.0"]
+    vibeScale = str(intent.vibeScale) if intent.vibeScale is not None else "1.0"
+    keyList: list[str] = ["-v", vibeScale]
     if intent.quasiharmonic:           keyList.append("-q")
     if intent.freqCutoff is not None:  keyList.extend(["-f", str(intent.freqCutoff)])
     if intent.tempCorrection is not None: keyList.extend(["-t", str(intent.tempCorrection)])
     if intent.concCorrection is not None: keyList.extend(["-c", str(intent.concCorrection)])
-    if intent.vibeScale is not None:   keyList.extend(["-v", str(intent.vibeScale)])
     if intent.singlePointPattern is not None: keyList.extend(["--spc", intent.singlePointPattern])
     if intent.extraKeys:               keyList.extend(intent.extraKeys.split())
 
