@@ -84,13 +84,44 @@ def ExtractGoodVibes(data) -> list:
         line = data.readline().decode().strip()
     return outputData
 
-def ExtractPriorMethod(data) -> str:
-    methodLocation = FindInMap(data, "Will use up to")
-    if methodLocation is None:
+def ExtractRouteLine(data, extensionType: str) -> str:
+    """Extract the route card from an input or output file via mmap regex.
+
+    Searches for the first '#' (Gaussian) or '!' (ORCA) marker,
+    then reads the full line. For output files or unknown extensions, tries both.
+    Returns the route card with the leading marker stripped.
+    """
+    match extensionType:
+        case Defaults.gaussianExtension:
+            routeMatch = FindInMap(data, r"#")
+        case Defaults.orcaExtension:
+            routeMatch = FindInMap(data, r"!")
+        case _:
+            routeMatch = FindInMap(data, r"#")
+            if routeMatch is None:
+                routeMatch = FindInMap(data, r"!")
+    if routeMatch is None:
         return ""
-    SkipInMap(data, methodLocation, 2, True)
-    originalMethod = data.readline().decode()
-    return originalMethod
+    data.seek(routeMatch.start())
+    routeLine = data.readline().decode().strip()
+    # Strip the leading marker (e.g. '#p', '#', '!')
+    routeLine = routeLine.lstrip("#pPnN! ").strip()
+    return routeLine
+
+
+def IdentifyMethod(routeLine: str) -> str:
+    """Find the method name in a route card by matching against Catalog.methodList.
+
+    Returns the method name if found, or empty string if no match.
+    """
+    for token in routeLine.split():
+        # Strip parentheses for matching — e.g. DLPNO-CCSD(T) may appear with basis set syntax
+        cleanToken = token.replace("(", "").replace(")", "")
+        for method in Catalog.methodList:
+            cleanMethod = method.replace("(", "").replace(")", "")
+            if cleanToken.upper() == cleanMethod.upper():
+                return method
+    return ""
 
 def ExtractStalking(data, extractType: str) -> Any:
     match extractType:
@@ -127,6 +158,53 @@ def ExtractStalking(data, extractType: str) -> Any:
                 if termLine is not None:
                     return True, termination
             return False, ""
+
+def ExtractResources(data, extensionType: str) -> tuple[int, int]:
+    """Extract CPU count and SLURM memory request from an mmap data stream.
+
+    Returns (cpus, jobRam) ready for slurmHandler.
+    Falls back to Defaults for any values not found in the file.
+    """
+    cpus, jobRam = 0, 0
+
+    match extensionType:
+        case Defaults.gaussianExtension:
+            coreMatch = FindInMap(data, r"%nproc(?:shared)?=(\d+)", ignoreCase=True)
+            if coreMatch:
+                cpus = int(coreMatch.group(1).decode())
+            else:
+                cpus = Defaults.CPU
+                console.print("[error]Couldn't find CPU count in input file. Submitting according to Defaults.[/error]")
+
+            ramMatch = FindInMap(data, r"%mem=(\d+)GB", ignoreCase=True)
+            if ramMatch:
+                ram = int(ramMatch.group(1).decode())
+                jobRam = ram + Defaults.memoryBuffer
+            else:
+                jobRam = cpus * Defaults.memoryRatio + Defaults.memoryBuffer
+                console.print("[error]Couldn't find RAM count in input file. Submitting according to Defaults.[/error]")
+
+        case Defaults.orcaExtension:
+            coreMatch = FindInMap(data, r"nprocs\s+(\d+)", ignoreCase=True)
+            if coreMatch:
+                cpus = int(coreMatch.group(1).decode())
+            else:
+                cpus = Defaults.CPU
+                console.print("[error]Couldn't find CPU count in input file. Submitting according to Defaults.[/error]")
+
+            ramMatch = FindInMap(data, r"%maxcore\s+(\d+)", ignoreCase=True)
+            if ramMatch:
+                ramPerCore = int(ramMatch.group(1).decode()) / 1000
+                jobRam = int(cpus * ramPerCore + Defaults.memoryBuffer)
+            else:
+                jobRam = cpus * Defaults.memoryRatio + Defaults.memoryBuffer
+                console.print("[error]Couldn't find RAM count in input file. Submitting according to Defaults.[/error]")
+
+        case _:
+            cpus = Defaults.CPU
+            jobRam = cpus * Defaults.memoryRatio + Defaults.memoryBuffer
+
+    return cpus, jobRam
 
 # Finally handle filename creation in one place to stop the infinite copypasta
 def fileCreation(baseName: str, extensionType: str, extra: str = "") -> Path:

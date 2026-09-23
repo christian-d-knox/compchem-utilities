@@ -72,7 +72,7 @@ def _DispatchSinglePoint(intent: SinglePointIntent) -> None:
 
 def _DispatchBenchmark(intent: BenchmarkIntent) -> None:
     if not Catalog.canBench:
-        console.print("[error]Notice: Benchmarking is unavailable without requisite file.[/error]")
+        console.print("[error]Notice: Benchmarking requires at least 2 entries in benchmarkMethods (programs.toml).[/error]")
         return
     stalkingSet: set = set()
     for jobPath in intent.files:

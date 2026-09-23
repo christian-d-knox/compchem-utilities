@@ -13,7 +13,7 @@ _warningBox = """\
 # +-----------------------------------------------------------------------------+"""
 
 
-def tomlValue(value: Any) -> str:
+def tomlValue(value: Any, forceMultiline: bool = False) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, Path):
@@ -33,8 +33,8 @@ def tomlValue(value: Any) -> str:
             return "[]"
         formattedItems = [tomlValue(v) for v in value]
         inlineFmt = f"[{', '.join(formattedItems)}]"
-        # Use multiline array format if inline would be too wide
-        if len(inlineFmt) <= 88:
+        # Use multiline array format if forced or inline would be too wide
+        if not forceMultiline and len(inlineFmt) <= 88:
             return inlineFmt
         innerFmt = ",\n    ".join(formattedItems)
         return f"[\n    {innerFmt},\n]"
@@ -82,12 +82,11 @@ class Defaults:
     cubeExtension = ".cube"
     queueExtension = ".cmd"
     outputExtension = ".out"
-    # Single point calculation related
-    method = "M062X"
-    methodLine = "M062X 6-311+G(d,p)"
-    # What runs where. Edit carefully (recommended to use programs.txt instead)
+    # What runs where
     methodNames = ["B3LYP","M062X","M06","M06L","B2PLYP","wB97XD","DLPNO-CCSD(T)","BLYP"]
     targetProgram = ["G16","G16","G16","G16","G16","G16","O","G16"]
+    # Benchmark suite route cards (one complete route card per entry)
+    benchmarkMethods = ["M062X 6-311+G(d,p)"]
     # Optional job keylist data
     nboKeylist = "$NBO STERIC PLOT"
     mixedBasisVariants = ["Gen", "GenECP", "gen", "genecp"]
@@ -132,7 +131,8 @@ class Defaults:
             "stalkDuration", "stalkFrequency", "submissionList",
         ],
         "programs.toml": [
-            "method", "methodLine", "methodNames", "targetProgram",
+            "methodNames", "targetProgram",
+            "benchmarkMethods",
             "nboKeylist", "mixedBasisVariants",
             "potCube", "denCube", "valenceCube", "spinCube",
             "coreLineVariants", "ramLineVariants", "terminationVariants",
@@ -189,10 +189,9 @@ class Defaults:
         "stalkDuration": "How long (minutes) before job stalking times out without looping.",
         "stalkFrequency": "How often (minutes) to ping the queue while stalking.",
         "submissionList": "SLURM header lines for job submission. Set automatically by hpcType.",
-        "method": "Default DFT method for single-point calculations.",
-        "methodLine": "Full method/basis string written into input files.",
         "methodNames": "Ordered list of known method names. Index must match targetProgram.",
         "targetProgram": "Program that runs methodNames[i]. Must be the same length as methodNames.",
+        "benchmarkMethods": "Benchmark suite: each entry is a COMPLETE route card (method + basis + keywords).\n# Entry 0 is also the default for -sp. Add one entry per line you want benchmarked.",
         "nboKeylist": "NBO keylist string appended to relevant Gaussian16 jobs.",
         "mixedBasisVariants": "Basis set keylist indicating a mixed/custom basis is in use.",
         "potCube": "Cube file label for electrostatic potential.",
@@ -235,10 +234,9 @@ class Defaults:
         "stalkDuration": int,
         "stalkFrequency": int,
         "submissionList": list,
-        "method": str,
-        "methodLine": str,
         "methodNames": list,
         "targetProgram": list,
+        "benchmarkMethods": list,
         "nboKeylist": str,
         "mixedBasisVariants": list,
         "potCube": str,
@@ -272,6 +270,9 @@ class Defaults:
         "gaussianNonVariant": _warningBox,
         "orcaNonVariant": _warningBox,
     }
+
+    # Keys whose list values should always render as multiline arrays for readability.
+    _FORCE_MULTILINE: set[str] = {"benchmarkMethods"}
 
 
     @classmethod
@@ -317,7 +318,7 @@ class Defaults:
             commentText = cls._COMMENTS.get(key, "")
             if commentText:
                 lines.append(f"# {commentText}")
-            lines.append(f"{key} = {tomlValue(value)}")
+            lines.append(f"{key} = {tomlValue(value, forceMultiline=(key in cls._FORCE_MULTILINE))}")
             lines.append("")
         return "\n".join(lines)
 
@@ -390,7 +391,7 @@ class Defaults:
                     commentText = cls._COMMENTS.get(key, "")
                     if commentText:
                         file.write(f"\n# {commentText}\n")
-                    file.write(f"{key} = {tomlValue(getattr(cls, key))}\n")
+                    file.write(f"{key} = {tomlValue(getattr(cls, key), forceMultiline=(key in cls._FORCE_MULTILINE))}\n")
             console.print(f"[warning]\\[config] Appended {len(missingKeys)} missing key(s) to {filename}.[/warning]")
         except OSError as error:
             console.print(f"[error]\\[config] Could not append missing keys to {filePath}: {error}[/error]")

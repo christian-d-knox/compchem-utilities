@@ -3,7 +3,7 @@ import os, time, regex, subprocess
 from .console  import console
 from .defaults import Defaults
 from .catalog  import Catalog
-from .fileops import extensionGetter, fileCreation, MapFile, ExtractPriorMethod
+from .fileops import extensionGetter, fileCreation, MapFile, ExtractRouteLine, IdentifyMethod
 from .intent import BenchmarkIntent, SinglePointIntent, ReRunIntent, CubeIntent
 from .jobs     import genFile, runJob, slurmHandler
 from .molecule import Molecule
@@ -12,15 +12,17 @@ from .prompts import AskStr
 def genSinglePoint(molecule: Molecule, intent: SinglePointIntent, stalkingSet: set) -> None:
     startTime = time.monotonic()
 
-    # Update molecule properties
-    molecule.extensionType = extensionGetter(Catalog.methodLine[0])
-    inputFile = fileCreation(molecule.baseName, molecule.extensionType, Defaults.singlePointExtra)
-    molecule.fullPath = inputFile
-    molecule.baseName = molecule.baseName + Defaults.singlePointExtra
+    # Resolve the method index first so extensionGetter uses the correct method
     if intent.indexOverride != 0:
         index = intent.indexOverride
     else:
         index = 0
+
+    # Update molecule properties
+    molecule.extensionType = extensionGetter(Catalog.methodLine[index])
+    inputFile = fileCreation(molecule.baseName, molecule.extensionType, Defaults.singlePointExtra)
+    molecule.fullPath = inputFile
+    molecule.baseName = molecule.baseName + Defaults.singlePointExtra
 
     # Calls the separate file generation method, feeds directly into runJob
     genFile(molecule, index, intent)
@@ -86,7 +88,7 @@ def gimmeCubes(molecule: Molecule, intent: CubeIntent) -> None:
             case _:
                 console.print(f"[error]Error: Unknown keyword found in keylist for {molecule.baseName} : {cubeOption.value}[/error]")
 
-        slurmHandler(molecule, queueName, outputName,[])
+        slurmHandler(molecule, queueName, outputName, Defaults.CPU, Defaults.CPU * Defaults.memoryRatio + Defaults.memoryBuffer)
 
         with open(queueName,"a") as queueFile:
             for nonVariantLine in Defaults.gaussianNonVariant:
@@ -102,11 +104,20 @@ def gimmeCubes(molecule: Molecule, intent: CubeIntent) -> None:
 # Because jobs don't always work the first time
 def genReRun(molecule: Molecule, intent: ReRunIntent, stalkingSet: set) -> None:
     with MapFile(molecule.fullPath) as inFile:
-        originalMethod = ExtractPriorMethod(inFile)
+        routeLine = ExtractRouteLine(inFile, molecule.extensionType)
 
-    Catalog.fullMethodLine[0] = originalMethod.replace("#","").strip()
-    Catalog.methodLine[0] = originalMethod.replace("#","").strip().split()[intent.skipIndex]
-    molecule.extensionType = extensionGetter(Catalog.methodLine[0])
+    if not routeLine:
+        console.print(f"[error]Could not find route card in {molecule.baseName}. Skipping re-run.[/error]")
+        return
+
+    methodName = IdentifyMethod(routeLine)
+    if not methodName:
+        console.print(f"[error]Could not identify method in route card for {molecule.baseName}. Skipping re-run.[/error]")
+        return
+
+    Catalog.fullMethodLine[0] = routeLine
+    Catalog.methodLine[0] = methodName
+    molecule.extensionType = extensionGetter(methodName)
     inputFile = fileCreation(molecule.baseName, molecule.extensionType, Defaults.reRunExtra)
     molecule.fullPath = inputFile
     molecule.baseName = molecule.baseName + Defaults.reRunExtra

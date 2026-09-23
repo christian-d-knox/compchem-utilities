@@ -67,15 +67,13 @@ class BenchmarkIntent(JobIntent):
     """`cu -b <pattern>` — generate the full benchmark suite, then submit each."""
     pass
 
-# Re-running a job introduces a new parameter. As such, the SUBCLASS ReRun adds this ON TOP OF Job
 @dataclass
 class ReRunIntent(JobIntent):
     """`cu -re <pattern>` — regenerate failed-job input, then submit.
 
-    skipIndex answers the sub-prompt: "Is your input 'opt freq FUNCTIONAL' (2)
-    or 'FUNCTIONAL other keys' (0)?"
+    Method detection is now automatic via ExtractRouteLine + IdentifyMethod.
     """
-    skipIndex: int = 0
+    pass
 
 
 @dataclass
@@ -154,9 +152,6 @@ class IntentDraft:
     nbo7:          bool = False
     indexOverride: int  = 0
 
-    # RERUN
-    skipIndex: int = 0
-
     # CUBE
     cubeOptions:  list[CubeOption] = field(default_factory=list)
     orbitalRange: Optional[str]    = None
@@ -221,7 +216,7 @@ class IntentDraft:
             case Action.BENCHMARK:
                 return BenchmarkIntent(**jobKwargs)
             case Action.RERUN:
-                return ReRunIntent(**jobKwargs, skipIndex=self.skipIndex)
+                return ReRunIntent(**jobKwargs)
             case Action.CUBE:
                 return CubeIntent(
                     **jobKwargs,
@@ -302,17 +297,15 @@ if __name__ == "__main__":
         f"Test 4 wrong error: {errors}"
     print("Test 4 (CUBE with RANGE, no range): PASS")
 
-    # Test 5: ReRun intent preserves skipIndex
+    # Test 5: ReRun intent finalizes correctly
     draft = IntentDraft()
     draft.action = Action.RERUN
     draft.files = [Path("failed.out")]
-    draft.skipIndex = 2
     errors = draft.Validate()
     assert errors == [], f"Test 5 errors: {errors}"
     intent = draft.Finalize()
     assert isinstance(intent, ReRunIntent)
-    assert intent.skipIndex == 2
-    print("Test 5 (RERUN with skipIndex): PASS")
+    print("Test 5 (RERUN intent): PASS")
 
     # Test 6: GoodVibes intent has no files (acts on CWD)
     draft = IntentDraft()
@@ -326,17 +319,6 @@ if __name__ == "__main__":
     assert intent.quasiharmonic is True
     assert intent.freqCutoff == 100.0
     print("Test 6 (GOODVIBES with options): PASS")
-
-    # Test 7: Action-specific fields aren't carried into wrong intents
-    draft = IntentDraft()
-    draft.action = Action.RUN
-    draft.files = [Path("test.gjf")]
-    draft.skipIndex = 99   # this is for RERUN, should be ignored by Finalize
-    intent = draft.Finalize()
-    assert isinstance(intent, RunIntent)
-    assert not hasattr(intent, "skipIndex"), \
-        "RunIntent should not have skipIndex"
-    print("Test 7 (irrelevant fields not propagated): PASS")
 
     print("=" * 50)
     print("All smoke tests passed.")
