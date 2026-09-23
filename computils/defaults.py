@@ -382,7 +382,7 @@ class Defaults:
     @classmethod
     def _AppendMissing(cls, filename: str, missingKeys: list[str]) -> None:
         configDir = cls.binDirectory
-        filePath = configDir / filename
+        filePath = configDir / Path(filename)
         try:
             with open(filePath, "a", encoding="utf-8") as file:
                 for key in missingKeys:
