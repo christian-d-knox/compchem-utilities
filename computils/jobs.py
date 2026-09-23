@@ -3,7 +3,7 @@ from pathlib import Path
 from .console  import console
 from .defaults import Defaults
 from .catalog  import Catalog
-from .fileops  import fileCreation
+from .fileops  import fileCreation, MapFile, ExtractResources
 from .molecule import Molecule
 from .intent import JobIntent
 
@@ -70,51 +70,7 @@ def genFile(molecule: Molecule, index: int, intent: JobIntent) -> None:
                 jobInput.write("\n*")
 
 # Reorganized! Now handles SLURM commands independently because of HPC cluster agnosticism
-def slurmHandler(molecule: Molecule, queueName: Path, outputName: Path, firstFiveLines: list[str]) -> None:
-    coresLine, ramLine, cpus, jobRam = "", "", 0, 0
-    match molecule.extensionType:
-        case Defaults.gaussianExtension:
-            for line in firstFiveLines:
-                if regex.search(Defaults.coreLineVariants[0], line) or regex.search(Defaults.coreLineVariants[1], line):
-                    coresLine = line
-                if regex.search(Defaults.ramLineVariants[0], line):
-                    ramLine = line
-            if len(coresLine) == 0:
-                cpus = Defaults.CPU
-                console.print("[error]Couldn't find CPU count in input file. Submitting instead according to Defaults.[/error]")
-            else:
-                cpus = int(coresLine.strip().split("=")[1])
-            if len(ramLine) == 0:
-                ram = cpus * Defaults.memoryRatio
-                jobRam = ram + Defaults.memoryBuffer
-                console.print("[error]Couldn't find RAM count in input file. Submitting instead according to Defaults.[/error]")
-            else:
-                ram = int(ramLine.strip().split("=")[1].replace("GB", ""))
-                jobRam = ram + Defaults.memoryBuffer
-
-        case Defaults.orcaExtension:
-            for line in firstFiveLines:
-                if regex.search(Defaults.coreLineVariants[2], line):
-                    coresLine = line
-                if regex.search(Defaults.ramLineVariants[1], line):
-                    ramLine = line
-            if len(coresLine) == 0:
-                cpus = Defaults.CPU
-                console.print("[error]Couldn't find CPU count in input file. Submitting instead according to Defaults.[/error]")
-            else:
-                cpus = int(coresLine.strip().split()[2])
-            if len(ramLine) == 0:
-                ram = cpus * Defaults.memoryRatio
-                jobRam = ram + Defaults.memoryBuffer
-                console.print("[error]Couldn't find RAM count in input file. Submitting instead according to Defaults.[/error]")
-            else:
-                ram = int(ramLine.strip().split()[1]) / 1000
-                jobRam = int(int(cpus) * ram + Defaults.memoryBuffer)
-
-        case _:
-            cpus = Defaults.CPU
-            jobRam = cpus * Defaults.memoryRatio + Defaults.memoryBuffer
-
+def slurmHandler(molecule: Molecule, queueName: Path, outputName: Path, cpus: int, jobRam: int) -> None:
     with open(queueName, 'w') as outputFile:
         for line in Defaults.submissionList:
             if regex.search("-J", line):
@@ -140,54 +96,47 @@ def runJob(molecule: Molecule, intent: JobIntent, stalkingSet: set) -> None:
     outputName = fileCreation(molecule.baseName, Defaults.outputExtension)
     queueName = fileCreation(molecule.baseName, Defaults.queueExtension)
 
-    # A potential minor speed uplift would be the closing(mmap()) implementation used basically everywhere else, since
-    # I've learned just how fast it is. Probably not necessary, though
-    with open(molecule.fullPath, 'r+') as inputFile:
-        firstFiveLines = []
-        # Reads the first line of the file
-        currentLine = inputFile.readline().strip()
-        firstFiveLines.append(currentLine)
+    # Empty file guard
+    if molecule.fullPath.stat().st_size == 0:
+        console.print(f"[error]Job file {molecule.baseName} is empty or blank. Skipping submission.[/error]")
+        return
 
-        # Craps out if the first line doesn't exist, or is entirely blank
-        if not currentLine:
-            console.print(f"[error]Job file {molecule.baseName} is empty or blank. Skipping submission.[/error]")
-            return
+    # Extract CPU and RAM from the input file via mmap regex
+    with MapFile(molecule.fullPath) as data:
+        cpus, jobRam = ExtractResources(data, molecule.extensionType)
 
-        for index in range(0,4):
-            firstFiveLines.append(inputFile.readline().strip())
+    slurmHandler(molecule, queueName, outputName, cpus, jobRam)
 
-        slurmHandler(molecule, queueName, outputName, firstFiveLines)
+    match molecule.extensionType:
+        case Defaults.gaussianExtension:
+            with open(queueName, 'a') as outputFile:
+                for nonVariantLine in Defaults.gaussianNonVariant:
+                    outputFile.write(nonVariantLine)
+                outputFile.write(f"\ng16 < {molecule.fullPath}\n\n")
 
-        match molecule.extensionType:
-            case Defaults.gaussianExtension:
-                with open(queueName, 'a') as outputFile:
-                    for nonVariantLine in Defaults.gaussianNonVariant:
-                        outputFile.write(nonVariantLine)
-                    outputFile.write(f"\ng16 < {molecule.fullPath}\n\n")
+            subprocess.run(["sbatch", queueName], check=True)
+            #os.remove(queueName)
+            console.print(f"[good]Submitted job {molecule.baseName} to Gaussian16[/good]")
+            if intent.stalk:
+                molecule.fullPath = fileCreation(molecule.baseName, Defaults.outputExtension)
+                stalkingSet.add((molecule.baseName,molecule.fullPath))
 
-                subprocess.run(["sbatch", queueName], check=True)
-                #os.remove(queueName)
-                console.print(f"[good]Submitted job {molecule.baseName} to Gaussian16[/good]")
-                if intent.stalk:
-                    molecule.fullPath = fileCreation(molecule.baseName, Defaults.outputExtension)
-                    stalkingSet.add((molecule.baseName,molecule.fullPath))
+        case Defaults.orcaExtension:
+            with open(queueName, 'a') as outputFile:
+                # Now runs in ORCA 6.0.1 instead of 4.2.0
+                for index in range(0,3):
+                    outputFile.write(Defaults.orcaNonVariant[index])
+                outputFile.write(f"files=({fileCreation(molecule.baseName, Defaults.orcaExtension)})\n")
+                for index in range(3,8):
+                    outputFile.write(Defaults.orcaNonVariant[index])
+                outputFile.write(f"$(which orca) {fileCreation(molecule.baseName, Defaults.orcaExtension)}\n\n")
+                for index in range(8,10):
+                    outputFile.write(Defaults.orcaNonVariant[index])
 
-            case Defaults.orcaExtension:
-                with open(queueName, 'a') as outputFile:
-                    # Now runs in ORCA 6.0.1 instead of 4.2.0
-                    for index in range(0,3):
-                        outputFile.write(Defaults.orcaNonVariant[index])
-                    outputFile.write(f"files=({fileCreation(molecule.baseName, Defaults.orcaExtension)})\n")
-                    for index in range(3,8):
-                        outputFile.write(Defaults.orcaNonVariant[index])
-                    outputFile.write(f"$(which orca) {fileCreation(molecule.baseName, Defaults.orcaExtension)}\n\n")
-                    for index in range(8,10):
-                        outputFile.write(Defaults.orcaNonVariant[index])
-
-                subprocess.run(["sbatch", queueName], check=True)
-                #os.remove(queueName)
-                console.print(f"[good]Submitted job {molecule.baseName} to ORCA 6.0.1[/good]")
-                if intent.stalk:
-                    molecule.fullPath = fileCreation(molecule.baseName, Defaults.outputExtension)
-                    stalkingSet.add((molecule.baseName,molecule.fullPath))
+            subprocess.run(["sbatch", queueName], check=True)
+            #os.remove(queueName)
+            console.print(f"[good]Submitted job {molecule.baseName} to ORCA 6.0.1[/good]")
+            if intent.stalk:
+                molecule.fullPath = fileCreation(molecule.baseName, Defaults.outputExtension)
+                stalkingSet.add((molecule.baseName,molecule.fullPath))
 

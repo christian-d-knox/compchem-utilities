@@ -83,11 +83,6 @@ def ParseCLI(argv: list[str]) -> Intent:
     if draft.stalk:
         draft.stalkLoop = AskBool("Enable stalk looping (i.e. re-initialize until all jobs terminate)?", "Y")
 
-    if draft.action == Action.RERUN:
-        keylistOrder = AskBool("Is your input structured as 'opt freq FUNCTIONAL' (Y) or 'FUNCTIONAL other keys' "
-                               "(n)?", "Y")
-        draft.skipIndex = 2 if keylistOrder else 0
-
     if draft.action == Action.CUBE:
         keyText = AskStr("Enter the list of options you want for cube files generated, separated by spaces (e.g. Pot Den"
                          " Val Spin or Range)")
