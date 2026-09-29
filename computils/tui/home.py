@@ -15,7 +15,7 @@ from textual.worker import get_current_worker
 from ..actions  import Action, FILE_ACTIONS
 from ..intent   import FormCheckIntent
 from ..project  import ChangeDirectory, FindProjectRoot
-from .common    import NAV_BINDINGS, NavFooter
+from .common    import NAV_BINDINGS, NavFooter, Notice
 from .inspect   import ActionExtensions, FileDetails, FileStatus, Styled
 
 ACTION_LABELS = {
@@ -34,7 +34,7 @@ CONTINUE = Binding("enter", "screen.continue", "Continue")
 STATUS_STYLES = {"normal": "good", "error": "error", "unknown": "warning"}
 
 HELP = {
-    "actions": "↑/↓ choose the action · space choose it and go to the folders · enter continue (to the file list until files are selected) · 1 collapse",
+    "actions": "↑/↓ choose the action · space choose it and go to the folders · enter continue (to the file list until files are selected) · space or enter on Config opens the config editor · 1 collapse",
     "folders": "↑/↓ move · space open folder (becomes the working directory) · ←/→ fold · enter continue · 2 collapse",
     "glob":    "Type a pattern to select matching files · enter or esc returns to the file list",
     "files":   "space select · a all · n none · / glob · enter continue to the builder",
@@ -179,7 +179,11 @@ class HomeScreen(Screen):
         project = f"project: {root.name}" if root else "no project"
         self.query_one("#title", Static).update(TitleLine("CompUtils", Styled(project, "info")))
         self.query_one("#files-pane").border_title = f"{Path.cwd().name} · {' '.join(ActionExtensions(self.action))}"
-        self.query_one("#actions-panel", Collapsible).title = f"Actions: {ACTION_LABELS[self.action]}"
+        # A screen item (Config) highlighted names itself, and dims the file pane it doesn't use (4.1)
+        onScreen = self.ScreenItemHighlighted()
+        self.query_one("#actions-panel", Collapsible).title = f"Actions: {'Config' if onScreen else ACTION_LABELS[self.action]}"
+        for pane in ("#files-pane", "#details"):
+            self.query_one(pane).set_class(onScreen, "-dimmed")
         self.query_one("#folders-panel", Collapsible).title = f"Folders: {Path.cwd().name}"
 
     def RefreshFiles(self, keep: set[str] | None = None) -> None:
@@ -197,6 +201,10 @@ class HomeScreen(Screen):
         self.RefreshHeader()
         self.LoadStatuses(paths)
         self.ScheduleDetails(paths[0] if paths else None, 0)
+
+    def ScreenItemHighlighted(self) -> bool:
+        item = self.query_one("#actions", ActionList).highlighted_child
+        return item is not None and item.id == CONFIG_ITEM
 
     def FilePrompt(self, name: str, status: str) -> Text:
         return Text.assemble(name.ljust(self._nameWidth), Styled(status, STATUS_STYLES.get(status, "dim")))
@@ -261,12 +269,14 @@ class HomeScreen(Screen):
     # ─── Events ───────────────────────────────────────────────────────
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
-        # Screens below the divider don't change the action (or the file filter)
+        # Screens below the divider don't change the action (or the file filter), only the header
         if event.item is None or event.item.id is None or not event.item.id.startswith("action-"):
+            self.RefreshHeader()
             return
         action = Action(event.item.id.removeprefix("action-"))
         # The mount-time highlight (and re-highlighting the same action) would only re-scan the same files
         if action == self.action:
+            self.RefreshHeader()
             return
         previous = set(self.query_one("#files", FileList).selected)
         self.action = action
@@ -332,8 +342,8 @@ class HomeScreen(Screen):
 
     def action_help(self) -> None:
         focused = self.focused.id if self.focused else None
-        self.notify(HELP.get(focused, "tab / shift+tab move between panes · ↑/↓ move · 1/2 collapse panels · ctrl+q quit"),
-                    title="Help")
+        Notice(self.app, "Help", HELP.get(focused, "tab / shift+tab move between panes · ↑/↓ move · 1/2 collapse panels · "
+                                                    "ctrl+q quit").replace(" · ", "\n"))
 
     def OpenConfig(self) -> None:
         from .config import ConfigScreen
@@ -346,8 +356,7 @@ class HomeScreen(Screen):
         self.app.push_screen(ConfigScreen(), Closed)
 
     def action_continue(self) -> None:
-        actions = self.query_one("#actions", ActionList)
-        if actions.has_focus and actions.highlighted_child is not None and actions.highlighted_child.id == CONFIG_ITEM:
+        if self.query_one("#actions", ActionList).has_focus and self.ScreenItemHighlighted():
             self.OpenConfig()
             return
         files = [Path(name) for name in self.query_one("#files", FileList).selected]
@@ -357,7 +366,7 @@ class HomeScreen(Screen):
             # From another pane, continuing without a selection just moves on to the file list
             fileList = self.query_one("#files", FileList)
             if fileList.has_focus:
-                self.notify("Select at least one file first (space, a, or a glob).", severity="warning")
+                Notice(self.app, "No files selected", "Select at least one file first (space, a, or a glob).", "warning")
             fileList.focus()
             return
         # FormChk has no options, so it skips the builder (D22)

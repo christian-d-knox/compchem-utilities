@@ -12,7 +12,7 @@ from ..actions  import Action, CubeOption
 from ..catalog  import Catalog
 from ..defaults import Defaults
 from ..intent   import IntentDraft
-from .common    import NAV_BINDINGS, FrameRule, KeyHint, NavFooter, OptionRow
+from .common    import NAV_BINDINGS, FrameRule, KeyHint, NavFooter, Notice, OptionRow
 from .home      import ACTION_LABELS, TitleLine
 from .inspect   import MethodIndices, PreviewMolecule, PreviewRowFor, ProgramName, Styled
 
@@ -270,7 +270,7 @@ class BuilderScreen(Screen):
         self.Refresh()
 
     def action_help(self) -> None:
-        self.notify("tab / shift+tab move between fields · ↑/↓ move in the method list · ←/→ move between options · "
-                    "space toggles an option or chooses the highlighted method · ←/→ change the previewed file (Benchmark) · "
-                    "enter submits · "
-                    "esc goes back to the file list · ctrl+q quits", title="Help")
+        Notice(self.app, "Help", "\n".join([
+            "tab / shift+tab move between fields", "↑/↓ move in the method list", "←/→ move between options",
+            "space toggles an option or chooses the highlighted method", "←/→ change the previewed file (Benchmark)",
+            "enter submits", "esc goes back to the file list", "ctrl+q quits"]))

@@ -1,11 +1,13 @@
 """Pieces every TUI screen shares, so navigation looks and works the same everywhere (TUI_DESIGN.md P2)."""
 from rich.text import Text
 from textual.binding import Binding
-from textual.containers import Horizontal
+from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.screen import ModalScreen
 from textual.widgets import Checkbox, Footer, Static
 from textual.widgets._footer import FooterKey
+
+from ..console import console
 
 # Every screen puts these at the end of its BINDINGS (so Quit is the footer's last hint) and yields NavFooter, so the footer always shows how to move around
 _PANE = Binding.Group("Pane", compact=False)
@@ -105,34 +107,50 @@ def KeyHint(app, key: str, description: str) -> Text:
                          (description, colors["footer-description-foreground"]))
 
 
-class ConfirmScreen(ModalScreen[str]):
-    """A question answered by a key, e.g. unsaved changes: `s Save  d Discard  esc Cancel`.
-    choices are (key, label, result); dismisses with the chosen result, or "cancel" on esc."""
+class Popup(ModalScreen[str]):
+    """Every message the TUI shows, framed like the Builder (P2; no toasts): the title on the top edge, the message
+    inside, the keys on the bottom edge (`s Save  d Discard  esc Cancel`). choices are (key, label, result): a key
+    dismisses with its result, esc with "cancel". Without choices it is a notice, dismissed by ⏎ or esc.
+    severity (warning, error) colours only the title."""
     DEFAULT_CSS = """
-    ConfirmScreen { align: center middle; }
-    ConfirmScreen > Static { width: 64; height: auto; border: solid $warning; padding: 1 2; }
+    Popup { align: center middle; }
+    Popup > Vertical { height: auto; }
     """
+    MIN_WIDTH, MAX_WIDTH = 40, 72
 
-    def __init__(self, message: str, choices: list[tuple[str, str, str]]) -> None:
+    def __init__(self, title: str, message: str, choices: list[tuple[str, str, str]] = (), severity: str = "",
+                 cancel: str = "Cancel") -> None:
         super().__init__()
-        self.message, self.choices = message, choices
+        self.title_, self.message, self.choices, self.severity, self.cancel = title, message, choices, severity, cancel
 
     def compose(self):
-        yield Static()
+        with Vertical():
+            yield FrameRule("┌┐", Text(self.title_, console.get_style(self.severity) if self.severity else ""))
+            yield Static(f"\n{self.message}\n", classes="side")
+            yield FrameRule("└┘", id="popup-keys")
 
     def on_mount(self) -> None:
-        hints = [KeyHint(self.app, key, label) for key, label, _ in self.choices] + [KeyHint(self.app, "esc", "Cancel")]
-        self.query_one(Static).update(Text.assemble(self.message, "\n\n", Text("   ").join(hints)))
+        keys = ([(key, label) for key, label, _ in self.choices] + [("esc", self.cancel)]) if self.choices else [("⏎", "OK")]
+        hints = Text("  ").join(KeyHint(self.app, key, label) for key, label in keys)
+        self.query_one("#popup-keys", FrameRule).right = hints
+        # As wide as the message (or the key hints), within limits and the screen
+        widest = max([len(line) + 4 for line in self.message.split("\n")] + [hints.cell_len + 8, len(self.title_) + 8])
+        self.query_one(Vertical).styles.width = min(max(widest, self.MIN_WIDTH), self.MAX_WIDTH, self.app.size.width - 4)
 
     def on_key(self, event) -> None:
         event.stop()
-        if event.key == "escape":
-            self.dismiss("cancel")
+        if event.key == "escape" or (event.key == "enter" and not self.choices):
+            self.dismiss("cancel" if self.choices else "ok")
             return
         for key, _, result in self.choices:
             if event.character == key:
                 self.dismiss(result)
                 return
+
+
+def Notice(app, title: str, message: str, severity: str = "", then=None) -> None:
+    """A one-button Popup (⏎ OK); then() runs once it is dismissed."""
+    app.push_screen(Popup(title, message, severity=severity), (lambda _: then()) if then else None)
 
 
 class FrameRule(Static):
