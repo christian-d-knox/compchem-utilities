@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 from .console  import console, Panel
-from .defaults import Defaults, LOCAL_CLUSTERSubmission, Bridges2Submission, Stampede3Submission
+from .defaults import Defaults, SUBMISSIONS
 from .notify   import _SendTelegram, _DetectTelegramChatID
 from .prompts import AskBool, AskStr
 
@@ -98,19 +98,21 @@ def ColorSetup() -> None:
 
 
 
-def firstTimeSetup() -> None:
+def firstTimeSetup() -> bool | None:
+    """Set the cluster (and then notifications). True once a cluster is set, False for an unknown name,
+    None for an unsupported cluster (asking again won't help)."""
     systemType = AskStr("Enter the name of the HPC cluster you are using (LOCAL_CLUSTER, Expanse, Bridges2, Stampede3)")
     if systemType == "Expanse":
         console.print("[error]CompUtils is not supported on the Expanse architecture due to being outdated and messy. Have a good day.[/error]")
-        return
+        return None
     # Each cluster's header and settings live on its Submission class (defaults.py)
-    submission = next((option for option in (LOCAL_CLUSTERSubmission, Bridges2Submission, Stampede3Submission)
-                       if option.hpcType == systemType), None)
+    submission = next((option for option in SUBMISSIONS if option.hpcType == systemType), None)
     if submission is None:
         console.print("[error]Unknown HPC architecture input. Aborting.[/error]")
-        return
+        return False
     Defaults.hpcType, Defaults.submissionList = submission.hpcType, submission.submissionList
     for key, value in submission.settings.items():
         setattr(Defaults, key, value)
     Defaults._SaveSection("slurm.toml")
     NotificationSetup()
+    return True

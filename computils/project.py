@@ -8,8 +8,8 @@ import functools, os, shutil
 import tomllib as tom
 from pathlib import Path
 
-from .console  import console
-from .defaults import Defaults, loadToml, writeToml
+from .console  import ApplyTheme, console
+from .defaults import DELETE, Defaults, loadToml, writeToml
 from .prompts  import AskBool, AskChoice
 
 # Known shareable files. -init (and the auto-prompt) offer to move these from the CWD into a new marker.
@@ -93,22 +93,40 @@ def LoadProjectConfig() -> None:
         console.print(f"[info]Project config ({configPath}) overrides: {', '.join(overridden)}[/info]")
 
 
+def SaveProjectConfig(root: Path, updates: dict) -> bool:
+    """Write project overrides into <marker>/project.toml in place (Defaults.DELETE removes one: follow global)."""
+    configPath = ProjectFilePath(root, PROJECT_CONFIG)
+    if configPath.is_file():
+        return Defaults._PatchFile(configPath, updates, Defaults.ProjectComments())
+    kept = {key: value for key, value in updates.items() if value is not DELETE}
+    return writeToml(configPath.parent, PROJECT_CONFIG, Defaults.BuildProjectContent(kept))
+
+
+def ReloadConfig(readGlobals: bool = True) -> None:
+    """Re-apply the config mid-run, in Main()'s order: the global files (unless only the project changed, e.g. the TUI
+    moved to another project), then project.toml, then the Catalog derived from them."""
+    from .catalog import Catalog
+    Defaults.ResetProjectOverrides()
+    if readGlobals:
+        Defaults.Load()
+        ApplyTheme(Defaults.colorMode)
+    LoadProjectConfig()
+    Catalog.Load()
+
+
 def ChangeDirectory(target: Path) -> bool:
     """Move the CWD mid-run (TUI navigation). Returns True if the nearest project root changed.
 
     The root/file lookups are re-walked on every move, since a subfolder can hold its own CWD copy of a project file.
     project.toml and the Catalog are only reloaded when the root itself changes.
     """
-    from .catalog import Catalog
     previousRoot = FindProjectRoot()
     os.chdir(target)
     FindProjectRoot.cache_clear()
     ResolveProjectFile.cache_clear()
     if FindProjectRoot() == previousRoot:
         return False
-    Defaults.ResetProjectOverrides()
-    LoadProjectConfig()
-    Catalog.Load()
+    ReloadConfig(readGlobals=False)
     return True
 
 
