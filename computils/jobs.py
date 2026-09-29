@@ -4,7 +4,8 @@ from .console  import console
 from rich.markup import escape
 from .defaults import Defaults
 from .catalog  import Catalog, RenderRoute, ROUTE_LEAK_PATTERN
-from .fileops  import fileCreation, MapFile, ExtractResources, ExtractOrcaBlocks
+from .fileops  import (fileCreation, MapFile, ExtractResources, ExtractOrcaBlocks, ExtractMixedBasis, MixedBasis,
+                       BasisEntry, NormalizeElement, MoleculeElements)
 from .molecule import Molecule
 from .project  import ResolveProjectFile, FindProjectRoot, ProjectFilePath
 from .intent import JobIntent
@@ -17,6 +18,48 @@ def _LoadOrcaBlocks(blocksPath: Path) -> dict[str, str]:
         return {}
     with MapFile(blocksPath) as data:
         return ExtractOrcaBlocks(data)
+
+@functools.cache
+def _LoadMixedBasis(basisPath: Path) -> MixedBasis:
+    if basisPath.stat().st_size == 0:
+        return MixedBasis([], [])
+    with MapFile(basisPath) as data:
+        return ExtractMixedBasis(data)
+
+# Route tokens that request a mixed basis, including the slash form (B3LYP/GenECP)
+def _IsMixedBasisKeyword(word: str) -> bool:
+    return word.lower() in {variant.lower() for variant in Defaults.mixedBasisVariants}
+
+def _UsesMixedBasis(route: str) -> bool:
+    return any(_IsMixedBasisKeyword(word) for word in regex.findall(r"[^\s/]+", route))
+
+# Swaps Gen <-> GenECP in the route, keeping the user's capitalization style (gen / GEN / Gen)
+def _SetMixedBasisKeyword(route: str, needsEcp: bool) -> str:
+    def Styled(original: str) -> str:
+        target = "GenECP" if needsEcp else "Gen"
+        if original.islower():
+            return target.lower()
+        if original.isupper():
+            return target.upper()
+        return target
+    return regex.sub(r"[^\s/]+", lambda word: Styled(word.group()) if _IsMixedBasisKeyword(word.group())
+                     else word.group(), route)
+
+# Writes only the master mixedbasis.txt entries for elements this molecule contains.
+# Returns (basis section, ECP section, elements with no basis entry)
+def _FilterMixedBasis(master: MixedBasis, elements: set[str]) -> tuple[str, str, set[str]]:
+    def Section(entries: list[BasisEntry]) -> str:
+        text = ""
+        for entry in entries:
+            kept = entry.tokens if entry.byCenter else [token for token in entry.tokens
+                                                          if NormalizeElement(token) in elements]
+            if kept:
+                text += " ".join(kept) + " 0\n" + entry.body
+        return text
+    covered = {element for entry in master.basis for element in entry.elements}
+    # Center-number groups could cover anything, so coverage can't be checked
+    missing = set() if any(entry.byCenter for entry in master.basis) else elements - covered
+    return Section(master.basis), Section(master.ecp), missing
 
 # Shared error for a required project file that couldn't be found
 def _ReportMissingProjectFile(fileName: str, reason: str, molecule: Molecule) -> None:
@@ -41,12 +84,27 @@ def genFile(molecule: Molecule, index: int, intent: JobIntent) -> bool:
                 console.print(f"[warning]Block tags {blockTags} only apply to ORCA jobs. Ignoring them for "
                               f"{molecule.baseName}.[/warning]")
             # Resolve required files BEFORE opening the input, so a failure never leaves a half-written file
-            basisPath = None
-            if any(keyWord in Defaults.mixedBasisVariants for keyWord in route.split()):
+            basisSection, ecpSection = "", ""
+            usesMixedBasis = _UsesMixedBasis(route)
+            if usesMixedBasis:
                 basisPath = ResolveProjectFile("mixedbasis.txt")
                 if basisPath is None:
                     _ReportMissingProjectFile("mixedbasis.txt", "Mixed basis detected", molecule)
                     return False
+                # The master file lists every element the project may need; keep only this molecule's
+                elements = MoleculeElements(molecule.coordinateList)
+                basisSection, ecpSection, missing = _FilterMixedBasis(_LoadMixedBasis(basisPath), elements)
+                if missing:
+                    console.print(f"[error]{basisPath} has no basis entry for {' '.join(sorted(missing))}. "
+                                  f"Skipping {molecule.baseName}.[/error]")
+                    return False
+                # GenECP with an empty ECP section (or Gen with ECP elements) fails in Gaussian
+                switchedRoute = _SetMixedBasisKeyword(route, bool(ecpSection))
+                if switchedRoute != route:
+                    reason = "ECP elements present" if ecpSection else "no ECP elements"
+                    console.print(f"[info]{molecule.baseName}: using {'GenECP' if ecpSection else 'Gen'} "
+                                  f"({reason}).[/info]")
+                    route = switchedRoute
             # No longer accesses the XYZ file due to Molecule coordinateList property
             with open(inputFile, 'w') as jobInput:
                 # Sets the job's CPU and RAM
@@ -62,12 +120,11 @@ def genFile(molecule: Molecule, index: int, intent: JobIntent) -> bool:
                 # Accessing the stored coordinate list is significantly faster in run-time than prior crappy implementation
                 for line in molecule.coordinateList:
                     jobInput.write(line)
-                # Adds in mixed basis info from the CWD, or the project root if the CWD has none
-                if basisPath:
-                    jobInput.write("\n")
-                    with open(basisPath) as mixedBasisFile:
-                        for line in mixedBasisFile:
-                            jobInput.write(line)
+                # Mixed basis entries for this molecule's elements, from the CWD or project root mixedbasis.txt
+                if usesMixedBasis:
+                    jobInput.write("\n" + basisSection)
+                    if ecpSection:
+                        jobInput.write("\n" + ecpSection)
                 jobInput.write("\n")
                 # New NBO7 section
                 if intent.nbo7:
