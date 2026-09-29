@@ -13,6 +13,9 @@ def Main() -> None:
     LoadProjectConfig()
     Catalog.Load()
 
+    argv = sys.argv[1:]
+    opensTUI = argv in (["-tui"], ["--tui"]) or (not argv and Defaults.bareCommandOpensTUI)
+
     # If Defaults._Validate determined that first-time setup is needed,
     # run it here rather than from inside Defaults.
     if Defaults.colorMode not in ("lowColor", "hexCode"):
@@ -20,15 +23,22 @@ def Main() -> None:
         ColorSetup()
     if Defaults.needsFirstTimeSetup:
         from .wizards import firstTimeSetup
-        firstTimeSetup()
+        result = firstTimeSetup()
+        # The TUI can't set the cluster (hpcType is setup-only), so it opens only once setup has set one
+        while opensTUI and result is False:
+            result = firstTimeSetup()
+        if opensTUI and result is None:
+            return
+    elif opensTUI and "notifications.toml" in Defaults.generatedFiles:
+        from .wizards import NotificationSetup
+        NotificationSetup()
 
     ApplyTheme(Defaults.colorMode)
 
     from .cli   import ParseCLI
     from .dispatch import Dispatch
 
-    argv = sys.argv[1:]
-    if argv in (["-tui"], ["--tui"]) or (not argv and Defaults.bareCommandOpensTUI):
+    if opensTUI:
         # The TUI only builds the Intent; it then runs here exactly as a CLI invocation would
         from .tui import RunTUI
         intent = RunTUI()

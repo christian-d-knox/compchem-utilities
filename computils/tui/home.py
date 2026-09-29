@@ -22,8 +22,9 @@ ACTION_LABELS = {
     Action.RUN: "Run as Written", Action.SINGLE_POINT: "Single Point", Action.BENCHMARK: "Benchmark",
     Action.RERUN: "Re-run", Action.CUBE: "Cube Files", Action.FORM_CHECK: "FormChk",
 }
-# Listed so the layout matches the design; their screens come after v1
-LATER_SCREENS = ["Queue Monitor", "GoodVibes", "Config", "Project Files"]
+# Screens below the divider: opened with ␣, ⏎ or a click. The rest are listed so the layout matches the design
+CONFIG_ITEM = "screen-config"
+LATER_SCREENS = ["Queue Monitor", "GoodVibes", "Project Files"]
 _COLLAPSE = Binding.Group("Collapse")
 _ALL_NONE = Binding.Group("All/None")
 _FOLD = Binding.Group("Fold", compact=True)
@@ -33,7 +34,7 @@ CONTINUE = Binding("enter", "screen.continue", "Continue")
 STATUS_STYLES = {"normal": "good", "error": "error", "unknown": "warning"}
 
 HELP = {
-    "actions": "↑/↓ choose the action · enter continue (to the file list until files are selected) · 1 collapse",
+    "actions": "↑/↓ choose the action · space choose it and go to the folders · enter continue (to the file list until files are selected) · 1 collapse",
     "folders": "↑/↓ move · space open folder (becomes the working directory) · ←/→ fold · enter continue · 2 collapse",
     "glob":    "Type a pattern to select matching files · enter or esc returns to the file list",
     "files":   "space select · a all · n none · / glob · enter continue to the builder",
@@ -60,7 +61,8 @@ def TitleLine(label: str, *extra) -> Text:
 
 
 class ActionList(ListView):
-    BINDINGS = [CONTINUE]
+    # ␣ chooses the highlighted action and moves on to the Folders tree (on_list_view_selected), like a click
+    BINDINGS = [Binding("space", "select_cursor", "Choose", key_display="␣"), CONTINUE]
 
 
 class GlobInput(Input):
@@ -155,6 +157,7 @@ class HomeScreen(Screen):
                 with Collapsible(title="Actions", collapsed=False, id="actions-panel"):
                     items = [ListItem(Label(label), id=f"action-{action.value}") for action, label in ACTION_LABELS.items()]
                     items.append(ListItem(Label("──────────────"), disabled=True))
+                    items.append(ListItem(Label("Config"), id=CONFIG_ITEM))
                     items += [ListItem(Label(f"{name} (later)"), disabled=True, classes="later") for name in LATER_SCREENS]
                     yield ActionList(*items, initial_index=1, id="actions")
                 with Collapsible(title="Folders", collapsed=False, id="folders-panel"):
@@ -258,7 +261,8 @@ class HomeScreen(Screen):
     # ─── Events ───────────────────────────────────────────────────────
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
-        if event.item is None or event.item.id is None:
+        # Screens below the divider don't change the action (or the file filter)
+        if event.item is None or event.item.id is None or not event.item.id.startswith("action-"):
             return
         action = Action(event.item.id.removeprefix("action-"))
         # The mount-time highlight (and re-highlighting the same action) would only re-scan the same files
@@ -269,7 +273,12 @@ class HomeScreen(Screen):
         self.RefreshFiles(previous)
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        self.query_one("#files").focus()
+        if event.item.id == CONFIG_ITEM:
+            self.OpenConfig()
+            return
+        # Next stop after the action is the folder; with Folders collapsed, the file list
+        collapsed = self.query_one("#folders-panel", Collapsible).collapsed
+        self.query_one("#files" if collapsed else "#folders").focus()
 
     def on_selection_list_selection_highlighted(self, event: SelectionList.SelectionHighlighted) -> None:
         self.ScheduleDetails(Path.cwd() / event.selection.value)
@@ -326,7 +335,21 @@ class HomeScreen(Screen):
         self.notify(HELP.get(focused, "tab / shift+tab move between panes · ↑/↓ move · 1/2 collapse panels · ctrl+q quit"),
                     title="Help")
 
+    def OpenConfig(self) -> None:
+        from .config import ConfigScreen
+        keep = set(self.query_one("#files", FileList).selected)
+
+        def Closed(saved: bool) -> None:
+            # Saved values (extensions, project overrides) change what Home lists and shows
+            if saved:
+                self.RefreshFiles(keep)
+        self.app.push_screen(ConfigScreen(), Closed)
+
     def action_continue(self) -> None:
+        actions = self.query_one("#actions", ActionList)
+        if actions.has_focus and actions.highlighted_child is not None and actions.highlighted_child.id == CONFIG_ITEM:
+            self.OpenConfig()
+            return
         files = [Path(name) for name in self.query_one("#files", FileList).selected]
         if self.action not in FILE_ACTIONS:
             return

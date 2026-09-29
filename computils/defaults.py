@@ -1,5 +1,7 @@
+import copy
 from typing import Any
 from pathlib import Path
+import regex
 import tomllib as tom
 
 from .console import console
@@ -52,15 +54,41 @@ def loadToml(configDir: Path, filename: str) -> dict:
         return {}
 
 
-def writeToml(configDir: Path, filename: str, content: str) -> None:
+def writeToml(configDir: Path, filename: str, content: str) -> bool:
     filePath = configDir / Path(filename)
     try:
         with open(filePath, "w", encoding="utf-8") as file:
             file.write(content)
         console.print(f"[operation]\\[config] Wrote config file: {filePath}[/operation]")
+        return True
     except OSError as error:
         console.print(f"[error]\\[config] Could not write {filePath}: {error}\n"
             "         Hardcoded defaults will be used for this section.[/error]")
+        return False
+
+
+# _PatchFile: remove the key (a project override going back to following the global value)
+DELETE = object()
+
+
+def _TomlForm(value: Any) -> Any:
+    """A value as it reads back from TOML (Paths are written as strings)."""
+    return str(value) if isinstance(value, Path) else value
+
+
+def _KeySpan(lines: list[str], key: str) -> tuple[int, int] | None:
+    """The lines holding `key = value` in a flat TOML file: from the key line until the value parses (multiline arrays)."""
+    pattern = regex.compile(rf'^(?:{regex.escape(key)}|"{regex.escape(key)}")\s*=')
+    start = next((index for index, line in enumerate(lines) if pattern.match(line)), None)
+    if start is None:
+        return None
+    for end in range(start + 1, len(lines) + 1):
+        try:
+            tom.loads("\n".join(lines[start:end]))
+            return start, end
+        except tom.TOMLDecodeError:
+            continue
+    return None
 
 
 class Defaults:
@@ -258,16 +286,26 @@ class Defaults:
     # never leak into the global TOML files when a wizard re-saves a section
     _globalValues: dict[str, Any] = {}
     _projectValues: dict[str, Any] = {}
+    # Every key's hardcoded default (set below the class), for DefaultValue
+    _HARDCODED: dict[str, Any] = {}
+    # Global comments that don't hold for a project file
+    _PROJECT_COMMENTS: dict[str, str] = {
+        "cluster": "Cluster for jobs in this project.", "partition": "Partition for jobs in this project.",
+    }
+    # Files the last Load() had to generate (Main runs their setup before the TUI opens)
+    generatedFiles: list[str] = []
 
 
     @classmethod
     def Load(cls) -> None:
+        cls.generatedFiles = []
         for filename in cls._FILE_GROUPS:
             configDir = cls.binDirectory
             filePath = configDir / Path(filename)
 
             if not filePath.exists():
                 console.print(f"[warning]\\[config] {filename} not found — generating from hardcoded defaults.[/warning]")
+                cls.generatedFiles.append(filename)
                 cls._SaveSection(filename)
                 continue
 
@@ -282,9 +320,58 @@ class Defaults:
 
     @classmethod
     def _SaveSection(cls, filename: str) -> None:
-        configDir = cls.binDirectory
-        content = cls._BuildContent(filename)
-        writeToml(configDir, filename, content)
+        # binDirectory is a str once loaded from paths.toml
+        configDir = Path(cls.binDirectory)
+        # An existing file is patched in place (only the values that changed), so hand-written comments survive
+        if (configDir / filename).is_file():
+            data = loadToml(configDir, filename)
+            if data:
+                changed = {key: cls._PersistedValue(key) for key in cls._FILE_GROUPS[filename]
+                           if data.get(key, DELETE) != _TomlForm(cls._PersistedValue(key))}
+                if not changed or cls._PatchFile(configDir / filename, changed):
+                    return
+        writeToml(configDir, filename, cls._BuildContent(filename))
+
+
+    @classmethod
+    def _PatchFile(cls, filePath: Path, updates: dict[str, Any], comments: dict[str, str] | None = None) -> bool:
+        """Write values into an existing flat TOML file in place: only each key's own `key = value` lines change, so
+        comments survive. A missing key is appended with its comment; DELETE removes a key and the comments directly
+        above it. Nothing is written unless the result parses and reads back as the values given."""
+        comments = cls._COMMENTS if comments is None else comments
+        try:
+            lines = filePath.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError) as error:
+            console.print(f"[error]\\[config] Could not read {filePath}: {error}[/error]")
+            return False
+        for key, value in updates.items():
+            span = _KeySpan(lines, key)
+            if span is None:
+                if value is not DELETE:
+                    lines += [""] + cls._KeyLines(key, value, comments.get(key, ""))
+                continue
+            start, end = span
+            if value is not DELETE:
+                lines[start:end] = cls._KeyLines(key, value, "")[-1:]
+                continue
+            while start > 0 and lines[start - 1].lstrip().startswith("#"):
+                start -= 1
+            if end < len(lines) and not lines[end].strip():
+                end += 1
+            del lines[start:end]
+        text = "\n".join(lines) + "\n"
+        try:
+            data, problem = tom.loads(text), ""
+        except tom.TOMLDecodeError as error:
+            data, problem = None, str(error)
+        if data is not None:
+            wrong = [key for key, value in updates.items()
+                     if (key in data if value is DELETE else data.get(key, DELETE) != _TomlForm(value))]
+            problem = f"{', '.join(wrong)} did not read back as written" if wrong else ""
+        if problem:
+            console.print(f"[error]\\[config] Could not update {filePath} in place ({problem}); left unchanged.[/error]")
+            return False
+        return writeToml(filePath.parent, filePath.name, text)
 
 
     @classmethod
@@ -298,10 +385,12 @@ class Defaults:
 
 
     @classmethod
-    def _BuildContent(cls, filename: str) -> str:
+    def _BuildContent(cls, filename: str, valueOf=None) -> str:
+        """A freshly generated file: header, then each key with its comment. valueOf(key) picks the values written."""
+        valueOf = valueOf or cls._PersistedValue
         lines = [cls._HEADERS[filename], ""]
         for key in cls._FILE_GROUPS[filename]:
-            lines += cls._KeyLines(key, cls._PersistedValue(key), cls._COMMENTS.get(key, "")) + [""]
+            lines += cls._KeyLines(key, valueOf(key), cls._COMMENTS.get(key, "")) + [""]
         return "\n".join(lines)
 
 
@@ -368,23 +457,15 @@ class Defaults:
 
     @classmethod
     def _AppendMissing(cls, filename: str, missingKeys: list[str]) -> None:
-        configDir = cls.binDirectory
-        filePath = configDir / Path(filename)
-        try:
-            with open(filePath, "a", encoding="utf-8") as file:
-                for key in missingKeys:
-                    file.write("\n" + "\n".join(cls._KeyLines(key, cls._PersistedValue(key), cls._COMMENTS.get(key, ""))) + "\n")
+        if cls._PatchFile(Path(cls.binDirectory) / filename, {key: cls._PersistedValue(key) for key in missingKeys}):
             console.print(f"[warning]\\[config] Appended {len(missingKeys)} missing key(s) to {filename}.[/warning]")
-        except OSError as error:
-            console.print(f"[error]\\[config] Could not append missing keys to {filePath}: {error}[/error]")
 
 
     @classmethod
     def _Validate(cls) -> None:
         cls._ValidateReference()
-        # Main() runs the setup wizard
-        if len(cls.hpcType) == 0:
-            cls.needsFirstTimeSetup = True
+        # Main() runs the setup wizard. Recomputed on every Load, since the config can be reloaded mid-run
+        cls.needsFirstTimeSetup = len(cls.hpcType) == 0
 
 
     @classmethod
@@ -394,6 +475,21 @@ class Defaults:
                           "Falling back to \"U\".[/warning]")
             cls.openShellReference = "U"
         cls.openShellReference = cls.openShellReference.upper()
+
+
+    @classmethod
+    def DefaultValue(cls, key: str) -> Any:
+        """What resetting a key writes: the active cluster's setting for it (e.g. Stampede3's full-node memoryRatio),
+        else its hardcoded default."""
+        cluster = next((option for option in SUBMISSIONS if option.hpcType == cls.hpcType), None)
+        if cluster is not None and key in cluster.settings:
+            return cluster.settings[key]
+        return copy.deepcopy(cls._HARDCODED[key])
+
+
+    @classmethod
+    def ProjectComments(cls) -> dict[str, str]:
+        return {**cls._COMMENTS, **cls._PROJECT_COMMENTS}
 
 
     @classmethod
@@ -443,22 +539,29 @@ class Defaults:
 
 
     @classmethod
-    def BuildProjectContent(cls) -> str:
-        """A full project.toml snapshot of the current GLOBAL values of every project-overridable key."""
+    def BuildProjectContent(cls, values: dict[str, Any] | None = None) -> str:
+        """project.toml holding values, by default a full snapshot of the current GLOBAL value of every
+        project-overridable key (what `cu -init` writes)."""
+        snapshot = values is None
+        if snapshot:
+            values = {key: cls.GlobalValue(key) for key in cls._PROJECT_KEYS}
         lines = ["# project.toml -- Project-level overrides of the global CompUtils config",
-                 "# Generated by `cu -init` as a snapshot of the global config at that time.",
+                 "# Generated by `cu -init` as a snapshot of the global config at that time." if snapshot
+                 else "# Written by the CompUtils config editor.",
                  "# Every key here overrides the global value for jobs run anywhere inside this project.",
-                 "# Delete a key to follow the global value again. Only the keys below can be overridden.", ""]
-        # Global comments that don't hold for a project file
-        projectComments = {"cluster": "Cluster for jobs in this project.", "partition": "Partition for jobs in this project."}
+                 "# Delete a key to follow the global value again. Only the keys below can be overridden." if snapshot
+                 else f"# Delete a key to follow the global value again. Overridable: {', '.join(cls._PROJECT_KEYS)}.", ""]
+        comments = cls.ProjectComments()
         for key in cls._PROJECT_KEYS:
-            lines += cls._KeyLines(key, cls.GlobalValue(key), projectComments.get(key, cls._COMMENTS.get(key, ""))) + [""]
+            if key in values:
+                lines += cls._KeyLines(key, values[key], comments.get(key, "")) + [""]
         return "\n".join(lines)
 
 
 # binDirectory is a Path here but a str in TOML
 Defaults._TYPES = {key: str if isinstance(getattr(Defaults, key), Path) else type(getattr(Defaults, key))
                    for keys in Defaults._FILE_GROUPS.values() for key in keys}
+Defaults._HARDCODED = {key: copy.deepcopy(getattr(Defaults, key)) for keys in Defaults._FILE_GROUPS.values() for key in keys}
 
 
 # Each supported cluster: its SLURM header, and the Defaults firstTimeSetup() sets for it
@@ -483,3 +586,5 @@ class Bridges2Submission:
                       "#SBATCH --ntasks-per-node=","#SBATCH -t"]
     hpcType = "Bridges2"
     settings = {"partition": "RM-shared", "memoryRatio": 2.0, "memoryBuffer": 0, "highMemoryRatio": 2.0}
+
+SUBMISSIONS = (LOCAL_CLUSTERSubmission, Bridges2Submission, Stampede3Submission)

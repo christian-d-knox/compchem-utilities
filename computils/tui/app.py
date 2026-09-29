@@ -64,6 +64,11 @@ class CompUtilsApp(App):
     #methods { height: auto; max-height: 12; }
     #range { width: 24; height: 1; border: none; }
 
+    /* The config editor: the table takes the height the details strip leaves */
+    #config-table { height: 1fr; }
+    #config-details { height: 3; }
+    #config-edit { height: 1; border: none; }
+
     /* Even single spaces between footer hints; compact mode otherwise runs group labels into the next key */
     NavFooter FooterKey.-grouped { margin: 0 1 0 0; }
     NavFooter FooterLabel { margin: 0 1 0 0; }
@@ -75,6 +80,14 @@ class CompUtilsApp(App):
 
     def on_mount(self) -> None:
         self.push_screen(HomeScreen())
+
+    def action_quit(self) -> None:
+        # A screen holding unsaved work (the config editor) asks first
+        confirmLeave = getattr(self.screen, "ConfirmLeave", None)
+        if confirmLeave is None:
+            self.exit()
+        else:
+            confirmLeave(self.exit)
         self.CheckSize(self.size)
 
     def on_resize(self, event) -> None:

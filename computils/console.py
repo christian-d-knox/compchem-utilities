@@ -33,8 +33,15 @@ hexCodeTheme = Theme({
 
 console = Console(theme=lowColorTheme)
 
-# Updates the theme after initially booting in low color mode
+_hexCodeActive = False
+
+# Updates the theme after initially booting in low color mode (again whenever the config is reloaded)
 def ApplyTheme(themeName: str) -> None:
-    # lowColor is already active (and anything else falls back to it)
-    if themeName == "hexCode":
+    global _hexCodeActive
+    # lowColor is the base theme (anything else falls back to it); hexCode is pushed on top, and popped to switch back
+    wanted = themeName == "hexCode"
+    if wanted and not _hexCodeActive:
         console.push_theme(hexCodeTheme)
+    elif _hexCodeActive and not wanted:
+        console.pop_theme()
+    _hexCodeActive = wanted

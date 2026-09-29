@@ -21,6 +21,7 @@ RESOURCE_KEYS = [("CPU", "CPU"), ("memoryRatio", "Memory Ratio"), ("wallTime", "
 USES_METHODS = (Action.SINGLE_POINT, Action.BENCHMARK)
 USES_GENERATION = (Action.SINGLE_POINT, Action.BENCHMARK, Action.RERUN)
 SHOWN_NAMES = 6                  # the Files section lists this many names, then "… +N more"
+_FILE = Binding.Group("File", compact=True)
 
 
 class FilesPane(Static):
@@ -30,8 +31,15 @@ class FilesPane(Static):
 
 
 class MethodList(OptionList):
-    # Space chooses, like every other list; enter submits, as it does from every Builder field
-    BINDINGS = [Binding("space", "select", "Choose", key_display="␣"), Binding("enter", "screen.submit", show=False)]
+    # Space chooses, like every other list; enter submits, as from every Builder field. Bound here (not only on the
+    # screen) so the footer shows them: the list's hidden enter and the form's hidden ←/→ scrolling would shadow them.
+    # ←/→ change the file Benchmark previews across its methods
+    BINDINGS = [
+        Binding("space", "select", "Choose", key_display="␣"),
+        Binding("left", "screen.preview_file(-1)", "File", group=_FILE),
+        Binding("right", "screen.preview_file(1)", "File", group=_FILE),
+        Binding("enter", "screen.submit", "Submit"),
+    ]
 
 
 class BuilderScreen(Screen):
@@ -49,6 +57,7 @@ class BuilderScreen(Screen):
         self.action, self.files = action, files
         self.methodIndex = 0          # -ovr: Benchmark starts here, Single Point uses only this one
         self.previewIndex = 0         # the highlighted method row
+        self.previewFile = 0          # Benchmark: the file previewed across its methods
         self.molecules = {}
         self.rows = {}                # (method index, file name) -> PreviewRow
         self.ready = False            # the draft is valid and at least one job would run
@@ -148,12 +157,19 @@ class BuilderScreen(Screen):
         return len(rows) - skipped, skipped
 
     def PreviewText(self) -> Text:
-        index = self.previewIndex if self.action in USES_METHODS else 0
-        width = max(len(path.name) for path in self.files) + 2
+        # Benchmark: one file, a row per method it will run (▸ the highlighted method). Otherwise: a row per file
+        if self.action == Action.BENCHMARK:
+            name = self.files[self.previewFile].name
+            rows = [(f"{'▸' if index == self.previewIndex else ' '} {index:<3}", self.Row(index, name))
+                    for index in MethodIndices(self.action, self.methodIndex)]
+        else:
+            index = self.previewIndex if self.action in USES_METHODS else 0
+            width = max(len(path.name) for path in self.files) + 2
+            rows = [(f"{row.spin:<5}{path.name.ljust(width)}", row)
+                    for path in self.files for row in [self.Row(index, path.name)]]
         lines = []
-        for path in self.files:
-            row = self.Row(index, path.name)
-            line = Text.assemble(f"{row.spin:<5}", path.name.ljust(width))
+        for prefix, row in rows:
+            line = Text(prefix)
             for text, origin in row.spans:
                 line.append_text(Styled(text, SPAN_STYLES[origin]))
             if row.tags:
@@ -162,6 +178,13 @@ class BuilderScreen(Screen):
                 line.append_text(Styled(f"  ⚠ {row.problem}", "warning"))
             lines.append(line)
         return Text("\n").join(lines)
+
+    def PreviewLabel(self) -> str:
+        if self.action == Action.BENCHMARK:
+            name = self.files[self.previewFile].name
+            count = f" · file {self.previewFile + 1} of {len(self.files)}" if len(self.files) > 1 else ""
+            return f"Route Preview: {name} ({self.Row(self.methodIndex, name).spin}){count}"
+        return f"Route Preview: method {self.previewIndex}" if self.action in USES_METHODS else "Route Preview (from each file)"
 
     def CubeOptions(self) -> list[CubeOption]:
         return [option for option in CubeOption if self.query_one(f"#cube-{option.value}", Checkbox).value]
@@ -182,8 +205,7 @@ class BuilderScreen(Screen):
     def Refresh(self) -> None:
         """Re-validate live (D16): Submit stays disabled while the draft has errors or no job would run."""
         if self.action in USES_GENERATION:
-            self.query_one("#preview-rule", FrameRule).label = (f"Route Preview: method {self.previewIndex}"
-                                                                if self.action in USES_METHODS else "Route Preview (from each file)")
+            self.query_one("#preview-rule", FrameRule).label = self.PreviewLabel()
             self.query_one("#preview", Static).update(self.PreviewText())
         count, skipped = self.JobCount()
         errors = self.Draft().Validate()
@@ -233,7 +255,9 @@ class BuilderScreen(Screen):
         self.app.pop_screen()
 
     def check_action(self, action: str, parameters) -> bool | None:
-        # ⏎ Submit shows dimmed in the footer while nothing can be submitted
+        # ⏎ Submit shows dimmed in the footer while nothing can be submitted; ←→ File only for a multi-file Benchmark
+        if action == "preview_file":
+            return self.action == Action.BENCHMARK and len(self.files) > 1
         return None if action == "submit" and not self.ready else True
 
     def action_submit(self) -> None:
@@ -241,7 +265,12 @@ class BuilderScreen(Screen):
             return
         self.app.exit(self.Draft().Finalize())
 
+    def action_preview_file(self, step: int) -> None:
+        self.previewFile = (self.previewFile + step) % len(self.files)
+        self.Refresh()
+
     def action_help(self) -> None:
         self.notify("tab / shift+tab move between fields · ↑/↓ move in the method list · ←/→ move between options · "
-                    "space toggles an option or chooses the highlighted method · enter submits · "
+                    "space toggles an option or chooses the highlighted method · ←/→ change the previewed file (Benchmark) · "
+                    "enter submits · "
                     "esc goes back to the file list · ctrl+q quits", title="Help")

@@ -3,6 +3,7 @@ from rich.text import Text
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.reactive import reactive
+from textual.screen import ModalScreen
 from textual.widgets import Checkbox, Footer, Static
 from textual.widgets._footer import FooterKey
 
@@ -102,6 +103,36 @@ def KeyHint(app, key: str, description: str) -> Text:
     colors = app.theme_variables
     return Text.assemble((key, f"bold {colors['footer-key-foreground']}"), " ",
                          (description, colors["footer-description-foreground"]))
+
+
+class ConfirmScreen(ModalScreen[str]):
+    """A question answered by a key, e.g. unsaved changes: `s Save  d Discard  esc Cancel`.
+    choices are (key, label, result); dismisses with the chosen result, or "cancel" on esc."""
+    DEFAULT_CSS = """
+    ConfirmScreen { align: center middle; }
+    ConfirmScreen > Static { width: 64; height: auto; border: solid $warning; padding: 1 2; }
+    """
+
+    def __init__(self, message: str, choices: list[tuple[str, str, str]]) -> None:
+        super().__init__()
+        self.message, self.choices = message, choices
+
+    def compose(self):
+        yield Static()
+
+    def on_mount(self) -> None:
+        hints = [KeyHint(self.app, key, label) for key, label, _ in self.choices] + [KeyHint(self.app, "esc", "Cancel")]
+        self.query_one(Static).update(Text.assemble(self.message, "\n\n", Text("   ").join(hints)))
+
+    def on_key(self, event) -> None:
+        event.stop()
+        if event.key == "escape":
+            self.dismiss("cancel")
+            return
+        for key, _, result in self.choices:
+            if event.character == key:
+                self.dismiss(result)
+                return
 
 
 class FrameRule(Static):
