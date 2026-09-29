@@ -3,12 +3,14 @@ from fnmatch import fnmatch
 from pathlib import Path
 
 from rich.text import Text
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Collapsible, DirectoryTree, Footer, Input, Label, ListItem, ListView, SelectionList, Static
 from textual.widgets.selection_list import Selection
+from textual.worker import get_current_worker
 
 from ..actions  import Action
 from ..intent   import FormCheckIntent
@@ -25,7 +27,7 @@ STATUS_STYLES = {"normal": "good", "error": "error", "unknown": "warning"}
 
 HELP = {
     "actions": "↑/↓ choose the action · enter go to the file list · 1 collapse",
-    "folders": "↑/↓ move · enter open folder (becomes the working directory) · backspace up one level · 2 collapse",
+    "folders": "↑/↓ move · enter open folder (becomes the working directory) · 2 collapse",
     "glob":    "Type a pattern to select matching files · enter or esc returns to the file list",
     "files":   "space toggle · a all · n none · / glob · enter continue to the builder",
 }
@@ -70,7 +72,6 @@ class HomeScreen(Screen):
         Binding("/", "focus_glob", "Glob"),
         Binding("a", "select_all", "All"),
         Binding("n", "select_none", "None"),
-        Binding("backspace", "folder_up", "Up"),
         Binding("escape", "leave_glob", show=False),
         Binding("question_mark", "help", "Help"),
         Binding("q", "app.exit", "Quit"),
@@ -80,6 +81,8 @@ class HomeScreen(Screen):
         super().__init__()
         self.action = Action.SINGLE_POINT
         self._detailsTimer = None
+        self._detailsPath: Path | None = None
+        self._nameWidth = 0
 
     def compose(self) -> ComposeResult:
         yield Static(id="title")
@@ -114,30 +117,76 @@ class HomeScreen(Screen):
         self.query_one("#folders-panel", Collapsible).title = f"Folders: {Path.cwd().name}"
 
     def RefreshFiles(self, keep: set[str] | None = None) -> None:
-        """Re-list the CWD for the current action. Selections that no longer match the filter are dropped."""
+        """Re-list the CWD for the current action. Selections that no longer match the filter are dropped.
+
+        Names appear at once; statuses and details are read by workers, so a folder of large outputs never blocks input.
+        """
         keep = keep or set()
         extensions = ActionExtensions(self.action)
         paths = sorted(path for path in Path.cwd().iterdir() if path.is_file() and path.suffix in extensions)
-        width = max((len(path.name) for path in paths), default=0) + 3
+        self._nameWidth = max((len(path.name) for path in paths), default=0) + 3
         fileList = self.query_one("#files", FileList)
         fileList.clear_options()
-        for path in paths:
-            status = FileStatus(path)
-            prompt = Text.assemble(path.name.ljust(width), Styled(status, STATUS_STYLES.get(status, "")))
-            fileList.add_option(Selection(prompt, path.name, path.name in keep))
+        fileList.add_options([Selection(self.FilePrompt(path.name, "…"), path.name, path.name in keep) for path in paths])
         self.RefreshHeader()
-        self.ShowDetails(Path(paths[0].name) if paths else None)
+        self.LoadStatuses(paths)
+        self.ScheduleDetails(paths[0] if paths else None, 0)
+
+    def FilePrompt(self, name: str, status: str) -> Text:
+        return Text.assemble(name.ljust(self._nameWidth), Styled(status, STATUS_STYLES.get(status, "dim")))
+
+    # Paths are absolute: the CWD can change while a worker is still running
+    @work(thread=True, exclusive=True, group="status")
+    def LoadStatuses(self, paths: list[Path]) -> None:
+        worker = get_current_worker()
+        for index, path in enumerate(paths):
+            if worker.is_cancelled:
+                return
+            try:
+                status = FileStatus(path)
+            except (OSError, ValueError):
+                # Deleted or unreadable since the folder was listed
+                status = "unknown"
+            self.app.call_from_thread(self.SetStatus, index, path.name, status)
+
+    def SetStatus(self, index: int, name: str, status: str) -> None:
+        fileList = self.query_one("#files", FileList)
+        # The list may have been rebuilt (new folder or action) since the worker read this file
+        if index < fileList.option_count and fileList.get_option_at_index(index).value == name:
+            fileList.replace_option_prompt_at_index(index, self.FilePrompt(name, status))
 
     def SelectedFiles(self) -> list[Path]:
         return [Path(name) for name in self.query_one("#files", FileList).selected]
 
-    def ShowDetails(self, path: Path | None) -> None:
+    def ScheduleDetails(self, path: Path | None, delay: float = 0.15) -> None:
+        # Debounced, so holding an arrow key doesn't scan every file it passes
+        if self._detailsTimer is not None:
+            self._detailsTimer.stop()
+        self._detailsPath = path
+        if delay:
+            self._detailsTimer = self.set_timer(delay, lambda: self.LoadDetails(path))
+        else:
+            self._detailsTimer = None
+            self.LoadDetails(path)
+
+    @work(thread=True, exclusive=True, group="details")
+    def LoadDetails(self, path: Path | None) -> None:
+        try:
+            fields = FileDetails(path) if path else None
+        except (OSError, ValueError, IndexError):
+            fields = None
+        if not get_current_worker().is_cancelled:
+            self.app.call_from_thread(self.ShowDetails, path, fields)
+
+    def ShowDetails(self, path: Path | None, fields: dict[str, str] | None) -> None:
+        # A newer highlight has been scheduled since this file was read
+        if path != self._detailsPath:
+            return
         details = self.query_one("#details", Static)
         details.border_title = f"Details: {path.name}" if path else "Details"
-        if path is None:
+        if path is None or fields is None:
             details.update("")
             return
-        fields = FileDetails(path)
         status = fields["Status"]
         statusStyle = "error" if "error" in status.lower() else "good" if "normal" in status.lower() else ""
         details.update(Text.assemble(
@@ -151,19 +200,19 @@ class HomeScreen(Screen):
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         if event.item is None or event.item.id is None:
             return
+        action = Action(event.item.id.removeprefix("action-"))
+        # The mount-time highlight (and re-highlighting the same action) would only re-scan the same files
+        if action == self.action:
+            return
         previous = {name for name in self.query_one("#files", FileList).selected}
-        self.action = Action(event.item.id.removeprefix("action-"))
+        self.action = action
         self.RefreshFiles(previous)
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         self.query_one("#files").focus()
 
     def on_selection_list_selection_highlighted(self, event: SelectionList.SelectionHighlighted) -> None:
-        # Debounced, so holding an arrow key doesn't scan every file it passes
-        if self._detailsTimer is not None:
-            self._detailsTimer.stop()
-        path = Path(event.selection.value)
-        self._detailsTimer = self.set_timer(0.15, lambda: self.ShowDetails(path))
+        self.ScheduleDetails(Path.cwd() / event.selection.value)
 
     def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
         self.MoveTo(event.path)
@@ -211,9 +260,6 @@ class HomeScreen(Screen):
 
     def action_select_none(self) -> None:
         self.query_one("#files", FileList).deselect_all()
-
-    def action_folder_up(self) -> None:
-        self.MoveTo(Path.cwd().parent)
 
     def action_help(self) -> None:
         focused = self.focused.id if self.focused else None

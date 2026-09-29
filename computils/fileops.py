@@ -21,13 +21,14 @@ def MapFile(filePath: Path):
             yield data
 
 # Helper method for performing the searches themselves
-def FindInMap(data, pattern: str, reverse: bool = False, ignoreCase: bool = False) -> regex.Match | None:
+# start limits the search to data[start:] (still an mmap search, nothing is copied)
+def FindInMap(data, pattern: str, reverse: bool = False, ignoreCase: bool = False, start: int = 0) -> regex.Match | None:
     flags = 0
     if reverse:
         flags |= regex.REVERSE
     if ignoreCase:
         flags |= regex.IGNORECASE
-    return regex.search(pattern.encode(), data, flags)
+    return regex.search(pattern.encode(), data, flags, pos=start)
 
 # Properly handle line-skipping in extractions
 def SkipInMap(data, match, skipLines: int = 0, fromStart: bool = False) -> None:
@@ -163,7 +164,7 @@ def SplitRoute(routeLine: str) -> tuple[str, str, str]:
         keys.append(token)
     return method, basis, " ".join(keys)
 
-def ExtractStalking(data, extractType: str) -> Any:
+def ExtractStalking(data, extractType: str, start: int = 0) -> Any:
     match extractType:
         case "stability":
             containsStability = FindInMap(data, "Stability analysis")
@@ -193,7 +194,7 @@ def ExtractStalking(data, extractType: str) -> Any:
                 return convergeCriteria
         case "termination":
             for termination in Defaults.terminationVariants:
-                termLine = FindInMap(data, termination, True, True)
+                termLine = FindInMap(data, termination, True, True, start)
                 if termLine is not None:
                     return True, termination
             return False, ""

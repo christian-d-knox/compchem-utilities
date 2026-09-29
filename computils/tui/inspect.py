@@ -42,13 +42,18 @@ def ActionExtensions(action: Action) -> tuple[str, ...]:
         case _:                 return OutputExtensions()
 
 
+# The termination line is the last thing G16 and ORCA write (G16's archive entry, quote and timings come before it),
+# so only the end of the file is searched. A file without one in its tail is running or was killed
+TERMINATION_TAIL = 64 * 1024
+
+
 def _Termination(path: Path) -> str:
     """The termination variant found in an output file, or '' if none (still running, killed, or empty)."""
     # mmap can't map an empty file
     if path.stat().st_size == 0:
         return ""
     with MapFile(path) as data:
-        hasTerminated, termination = ExtractStalking(data, "termination")
+        hasTerminated, termination = ExtractStalking(data, "termination", max(0, len(data) - TERMINATION_TAIL))
     return termination if hasTerminated else ""
 
 
