@@ -8,13 +8,13 @@ The flow is:
         -> .Finalize() to a concrete Intent subclass
         -> dispatch.Dispatch(intent) executes it
 
-This module declares the types. The Step-4 refactor wires them up.
+This module declares the types.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Optional
 
-from .actions import Action, CubeOption
+from .actions import Action, CubeOption, FILE_ACTIONS
 
 # CLI flags indicate a specific task. The parser populates an IntentDraft field-by-field as it reads each flag —
 # including setting draft.action to one of the Action enum values. After all fields are set, Validate() checks that the
@@ -133,6 +133,15 @@ class InitProjectIntent(Intent):
     pass
 
 
+# The Intent each Action finalizes to. Excel and Update aren't listed: their fields are named differently on the draft
+_INTENT_TYPES = {
+    Action.RUN: RunIntent, Action.SINGLE_POINT: SinglePointIntent, Action.BENCHMARK: BenchmarkIntent,
+    Action.RERUN: ReRunIntent, Action.CUBE: CubeIntent, Action.FORM_CHECK: FormCheckIntent,
+    Action.GOODVIBES: GoodVibesIntent, Action.FIRST_TIME_SETUP: FirstTimeSetupIntent,
+    Action.INIT_PROJECT: InitProjectIntent,
+}
+
+
 # ─── Mutable draft (TUI assembles this progressively) ──────────────────
 # Draft containing ALL options. This is what a parser will add arguments to, before Validating and Finalizing
 # to a specific Intent type as shown above
@@ -184,11 +193,7 @@ class IntentDraft:
         if self.action is None:
             return ["No action selected."]
 
-        fileActions = {
-            Action.RUN, Action.SINGLE_POINT, Action.BENCHMARK,
-            Action.CUBE, Action.RERUN, Action.FORM_CHECK,
-        }
-        if self.action in fileActions and not self.files:
+        if self.action in FILE_ACTIONS and not self.files:
             errors.append("No matching files for the given pattern.")
 
         if self.action == Action.CUBE:
@@ -206,51 +211,18 @@ class IntentDraft:
         """Caller MUST have validated first.
 
         Returns a concrete Intent subclass corresponding to self.action,
-        with only the fields relevant to that action populated.
+        with only the fields relevant to that action populated: each one is
+        copied from the draft field of the same name.
         """
-        jobKwargs = dict(
-            files=self.files, stalk=self.stalk, stalkLoop=self.stalkLoop,
-            checkpoint=self.checkpoint, nbo7=self.nbo7,
-            indexOverride=self.indexOverride,
-        )
-
         match self.action:
-            case Action.RUN:
-                return RunIntent(**jobKwargs)
-            case Action.SINGLE_POINT:
-                return SinglePointIntent(**jobKwargs)
-            case Action.BENCHMARK:
-                return BenchmarkIntent(**jobKwargs)
-            case Action.RERUN:
-                return ReRunIntent(**jobKwargs)
-            case Action.CUBE:
-                return CubeIntent(
-                    **jobKwargs,
-                    cubeOptions=self.cubeOptions,
-                    orbitalRange=self.orbitalRange,
-                )
-            case Action.FORM_CHECK:
-                return FormCheckIntent(files=self.files)
             case Action.EXCEL:
                 return ExcelIntent(inputFile=self.excelInputFile)
-            case Action.GOODVIBES:
-                return GoodVibesIntent(
-                    quasiharmonic=self.quasiharmonic,
-                    freqCutoff=self.freqCutoff,
-                    tempCorrection=self.tempCorrection,
-                    concCorrection=self.concCorrection,
-                    vibeScale=self.vibeScale,
-                    singlePointPattern=self.singlePointPattern,
-                    extraKeys=self.extraKeys,
-                )
-            case Action.FIRST_TIME_SETUP:
-                return FirstTimeSetupIntent()
             case Action.UPDATE:
                 return UpdateIntent(branch=self.updateBranch)
-            case Action.INIT_PROJECT:
-                return InitProjectIntent()
-            case _:
-                raise ValueError(f"Unknown action: {self.action}")
+        intentType = _INTENT_TYPES.get(self.action)
+        if intentType is None:
+            raise ValueError(f"Unknown action: {self.action}")
+        return intentType(**{entry.name: getattr(self, entry.name) for entry in fields(intentType)})
 
 # ─── Smoke tests (run with: python -m computils.intent) ────────────────
 

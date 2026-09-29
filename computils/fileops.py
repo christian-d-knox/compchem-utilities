@@ -3,12 +3,11 @@ from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from mmap import mmap, ACCESS_READ
 from pathlib import Path
-from typing import Any
 
 from .console  import console
 from rich.markup import escape
 from .defaults import Defaults
-from .catalog  import Catalog
+from .catalog  import Catalog, MethodKey, SplitReference, RouteTemplate
 from .molecule import Molecule
 
 
@@ -21,7 +20,8 @@ def MapFile(filePath: Path):
             yield data
 
 # Helper method for performing the searches themselves
-# start limits the search to data[start:] (still an mmap search, nothing is copied). concurrent releases the GIL while
+# start limits the search to data[start:] (still an mmap search, nothing is copied); a negative start counts from the
+# end, like a slice. concurrent releases the GIL while
 # matching, so a long search in a TUI worker doesn't freeze the screen; safe because every mapping is read-only.
 # Reverse searches run from the pattern's END: start them with a literal and put trailing captures in a lookahead,
 # or the engine retries the tail (e.g. a number) at every match of it in the file
@@ -31,7 +31,21 @@ def FindInMap(data, pattern: str, reverse: bool = False, ignoreCase: bool = Fals
         flags |= regex.REVERSE
     if ignoreCase:
         flags |= regex.IGNORECASE
+    if start < 0:
+        start = max(0, len(data) + start)
     return regex.search(pattern.encode(), data, flags, pos=start, concurrent=True)
+
+# mmap can't map an empty file, so every read of a whole file checks this first
+def HasContent(filePath: Path) -> bool:
+    return filePath.is_file() and filePath.stat().st_size > 0
+
+# One extractor over a whole file: maps it, runs extractor(data, *args), or returns `empty` for a missing/empty file.
+# Callers that run several extractors on one file open it with MapFile themselves
+def ExtractFrom(filePath: Path, extractor, *args, empty=None):
+    if not HasContent(filePath):
+        return empty
+    with MapFile(filePath) as data:
+        return extractor(data, *args)
 
 # Properly handle line-skipping in extractions
 def SkipInMap(data, match, skipLines: int = 0, fromStart: bool = False) -> None:
@@ -52,14 +66,14 @@ def ExtractCoords(data) -> tuple[list[int], list[str], list[str], list[str]]:
     SkipInMap(data, tableLocation, 4)
 
     at, X, Y, Z = [], [], [], []
-    line = data.readline().decode().strip()
-    while len(line.split()) > 2:
+    fields = data.readline().decode().split()
+    while len(fields) > 2:
         # Extracts the Atomic Number, and X Y Z coordinates into their respective lists
-        at.append(str(line.split()[1]))
-        X.append(str(line.split()[3]))
-        Y.append(str(line.split()[4]))
-        Z.append(str(line.split()[5]))
-        line = data.readline().decode().strip()
+        at.append(fields[1])
+        X.append(fields[3])
+        Y.append(fields[4])
+        Z.append(fields[5])
+        fields = data.readline().decode().split()
     return at, X, Y, Z
 
 def ExtractGaussianCharge(data) -> tuple[str, str]:
@@ -136,16 +150,11 @@ def IdentifyMethod(routeLine: str) -> str:
     Returns the method name if found, or empty string if no match.
     """
     for token in routeLine.split():
-        # Gaussian joins method and basis as 'method/basis' (e.g. PBEPBE/6-31G(d)); only the method part can match
-        methodPart = token.split("/")[0]
-        # Strip parentheses for matching — e.g. DLPNO-CCSD(T) may appear with basis set syntax
-        cleanToken = methodPart.replace("(", "").replace(")", "").upper()
+        # Only the method half of Gaussian's 'method/basis' can match; compared without parentheses (MethodKey)
         # Exact name first, then with a Gaussian reference prefix removed (UB3LYP, ROB3LYP, RB3LYP -> B3LYP)
-        candidates = [cleanToken] + [cleanToken[len(prefix):] for prefix in ("RO", "U", "R") if cleanToken.startswith(prefix)]
-        for candidate in candidates:
-            for method in Catalog.methodList:
-                if candidate == method.replace("(", "").replace(")", "").upper():
-                    return method
+        found = SplitReference(MethodKey(token))
+        if found:
+            return Catalog.methodKeys[found[1]]
     return ""
 
 # Common basis-set name stems. Only needed for ORCA-style routes, where the basis is its own token
@@ -167,40 +176,31 @@ def SplitRoute(routeLine: str) -> tuple[str, str, str]:
         keys.append(token)
     return method, basis, " ".join(keys)
 
-def ExtractStalking(data, extractType: str, start: int = 0) -> Any:
-    match extractType:
-        case "stability":
-            containsStability = FindInMap(data, "Stability analysis")
-            if containsStability is not None:
-                hasStabilized = FindInMap(data, "The wavefunction is already stable.", True)
-                if hasStabilized is not None:
-                    stabilityInsert = "Wavefunction has stabilized."
-                else:
-                    stabilityInsert = "Wavefunction has not stabilized."
-            else:
-                stabilityInsert = ""
-            return stabilityInsert
-        case "convergence":
-            finalTableHeader = FindInMap(data, "Item               Value     Threshold  Converged?", True)
-            if finalTableHeader is not None:
-                if len(finalTableHeader.group().decode()) != 0:
-                    SkipInMap(data, finalTableHeader, 0)
-                    # Telling what converged is currently a stub
-                    convergeMet = []
-                    for index in range(4):
-                        convergeLine = data.readline().decode()
-                        convergeMet.append(convergeLine.split()[4])
-                        convergeCriteria = convergeMet.count("YES")
-                    return convergeCriteria
-            else:
-                convergeCriteria = 0
-                return convergeCriteria
-        case "termination":
-            for termination in Defaults.terminationVariants:
-                termLine = FindInMap(data, termination, True, True, start)
-                if termLine is not None:
-                    return True, termination
-            return False, ""
+def ExtractTermination(data, start: int = 0) -> str:
+    """The LAST termination line in an output, as its terminationVariants entry ('' if none: running, killed, or empty).
+    Multi-link Gaussian jobs print one per link, so only the last one says how the job ended."""
+    pattern = "|".join(regex.escape(variant) for variant in Defaults.terminationVariants)
+    termLine = FindInMap(data, pattern, True, True, start)
+    if termLine is None:
+        return ""
+    found = termLine.group().decode().lower()
+    return next(variant for variant in Defaults.terminationVariants if variant.lower() == found)
+
+def ExtractStability(data) -> str:
+    if FindInMap(data, "Stability analysis") is None:
+        return ""
+    if FindInMap(data, "The wavefunction is already stable.", True) is not None:
+        return "Wavefunction has stabilized."
+    return "Wavefunction has not stabilized."
+
+def ExtractConvergence(data) -> int | None:
+    """How many of the 4 optimization criteria the last convergence table marks YES, or None if there is no table yet."""
+    finalTableHeader = FindInMap(data, "Item               Value     Threshold  Converged?", True)
+    if finalTableHeader is None:
+        return None
+    SkipInMap(data, finalTableHeader, 0)
+    # Each row ends in YES/NO. While the job runs, the table can still be half-written
+    return sum(data.readline().decode().split()[-1:] == ["YES"] for index in range(4))
 
 def ExtractResources(data, extensionType: str) -> tuple[int, int]:
     """Extract CPU count and SLURM memory request from an mmap data stream.
@@ -208,46 +208,25 @@ def ExtractResources(data, extensionType: str) -> tuple[int, int]:
     Returns (cpus, jobRam) ready for slurmHandler.
     Falls back to Defaults for any values not found in the file.
     """
-    cpus, jobRam = 0, 0
-
+    # Per program: CPU pattern, memory pattern, and the job's memory in GB from (matched number, cpus).
+    # Gaussian's %mem=NGB is the total; ORCA's %maxcore N is MB per CPU
     match extensionType:
         case Defaults.gaussianExtension:
-            coreMatch = FindInMap(data, r"%nproc(?:shared)?=(\d+)", ignoreCase=True)
-            if coreMatch:
-                cpus = int(coreMatch.group(1).decode())
-            else:
-                cpus = Defaults.CPU
-                console.print("[error]Couldn't find CPU count in input file. Submitting according to Defaults.[/error]")
-
-            ramMatch = FindInMap(data, r"%mem=(\d+)GB", ignoreCase=True)
-            if ramMatch:
-                ram = int(ramMatch.group(1).decode())
-                jobRam = ram + Defaults.memoryBuffer
-            else:
-                jobRam = cpus * Defaults.memoryRatio + Defaults.memoryBuffer
-                console.print("[error]Couldn't find RAM count in input file. Submitting according to Defaults.[/error]")
-
+            corePattern, ramPattern, ToGB = r"%nproc(?:shared)?=(\d+)", r"%mem=(\d+)GB", lambda ram, cpus: ram
         case Defaults.orcaExtension:
-            coreMatch = FindInMap(data, r"nprocs\s+(\d+)", ignoreCase=True)
-            if coreMatch:
-                cpus = int(coreMatch.group(1).decode())
-            else:
-                cpus = Defaults.CPU
-                console.print("[error]Couldn't find CPU count in input file. Submitting according to Defaults.[/error]")
-
-            ramMatch = FindInMap(data, r"%maxcore\s+(\d+)", ignoreCase=True)
-            if ramMatch:
-                ramPerCore = int(ramMatch.group(1).decode()) / 1000
-                jobRam = int(cpus * ramPerCore + Defaults.memoryBuffer)
-            else:
-                jobRam = cpus * Defaults.memoryRatio + Defaults.memoryBuffer
-                console.print("[error]Couldn't find RAM count in input file. Submitting according to Defaults.[/error]")
-
+            corePattern, ramPattern, ToGB = r"nprocs\s+(\d+)", r"%maxcore\s+(\d+)", lambda ram, cpus: cpus * ram / 1000
         case _:
-            cpus = Defaults.CPU
-            jobRam = cpus * Defaults.memoryRatio + Defaults.memoryBuffer
+            return Defaults.CPU, int(Defaults.CPU * Defaults.memoryRatio + Defaults.memoryBuffer)
 
-    return cpus, jobRam
+    coreMatch = FindInMap(data, corePattern, ignoreCase=True)
+    if not coreMatch:
+        console.print("[error]Couldn't find CPU count in input file. Submitting according to Defaults.[/error]")
+    cpus = int(coreMatch.group(1)) if coreMatch else Defaults.CPU
+    ramMatch = FindInMap(data, ramPattern, ignoreCase=True)
+    if not ramMatch:
+        console.print("[error]Couldn't find RAM count in input file. Submitting according to Defaults.[/error]")
+    ram = ToGB(int(ramMatch.group(1)), cpus) if ramMatch else cpus * Defaults.memoryRatio
+    return cpus, int(ram + Defaults.memoryBuffer)
 
 def ExtractSpinContamination(data) -> float | None:
     """Return the LAST reported <S**2> in a Gaussian or ORCA output, or None if the file reports none."""
@@ -438,9 +417,14 @@ def MoleculeElements(coordinateList: list[str]) -> set[str]:
 
 # Finally handle filename creation in one place to stop the infinite copypasta
 def fileCreation(baseName: str, extensionType: str, extra: str = "") -> Path:
-    if extra:
-        return Path(baseName + extra + extensionType)
-    return Path(baseName + extensionType)
+    return Path(baseName + extra + extensionType)
+
+# Points a molecule at a new job: its working name, route recipe, program extension (from the recipe's method unless
+# given) and input path. Every workflow sets up its jobs through here, so no field is left over from the previous job
+def Retarget(molecule: Molecule, baseName: str, template: RouteTemplate | None = None, extensionType: str = "") -> None:
+    molecule.baseName, molecule.template = baseName, template
+    molecule.extensionType = extensionType or extensionGetter(template.method)
+    molecule.fullPath = fileCreation(baseName, molecule.extensionType)
 
 # Appends a suffix, or bumps its counter if the name already ends in it: mol -> mol_re -> mol_re2 -> mol_re3
 def IncrementSuffix(baseName: str, extra: str) -> str:
@@ -453,37 +437,21 @@ def IncrementSuffix(baseName: str, extra: str) -> str:
 # Formats checkpoints automatically
 def formCheck(molecule: Molecule) -> None:
     subprocess.run(["bash", "-l", "-c", f"module load gaussian && formchk {molecule.fullPath}"], check=True)
-    molecule.extensionType = ".fchk"
-    molecule.fullPath = fileCreation(molecule.rootName, molecule.extensionType)
+    Retarget(molecule, molecule.rootName, extensionType=".fchk")
 
 # A new fully pythonic solution to coordinate scraping, agnostic of the PERL bullshit on LOCAL_CLUSTER
 def getCoords(fileName: Path, outputFileName: Path) -> list:
-    coordinateList = []
-    atSymbol = ATOMIC_SYMBOLS
-
-    # Initialize local empty lists
-    with MapFile(fileName) as inFile:
-        at, X, Y, Z = ExtractCoords(inFile)
-
+    at, X, Y, Z = ExtractFrom(fileName, ExtractCoords, empty=([], [], [], []))
+    # Translates from Atomic Number to Atomic Symbol; the lines are written to the .xyz and kept for the input files
+    coordinateList = [f"{ATOMIC_SYMBOLS[int(number)]}   {x}   {y}   {z}\n" for number, x, y, z in zip(at, X, Y, Z)]
     with open(outputFileName, 'w') as outputFile:
         outputFile.write(str(len(at))+"\nPointless Comment Line\n")
-        for k in range(len(at)):
-            # Ensures the list elements are integers for dictionary pairing
-            at[k] = int(at[k])
-            # Translates from Atomic Number to Atomic Symbol and builds the entire line to be written with proper formatting
-            coordLine = f"{atSymbol[at[k]]}   {X[k]}   {Y[k]}   {Z[k]}\n"
-            coordLine = coordLine.replace(' ', ' ')
-            outputFile.write(coordLine)
-            coordinateList.append(coordLine)
+        outputFile.writelines(coordinateList)
     return coordinateList
 
 # Handles extensions so I don't have to copypasta this
 def extensionGetter(method: str) -> str:
-    programTarget = ""
-    for x in range(len(Catalog.methodList)):
-        if method == Catalog.methodList[x]:
-            programTarget = Catalog.targetProgram[x]
-    match programTarget:
+    match Catalog.programOf.get(method, ""):
         case "G16":
             fileExtension = Defaults.gaussianExtension
         case "O":
@@ -496,9 +464,7 @@ def extensionGetter(method: str) -> str:
 
 # Gaussian16 Charge Finder in its own method
 def gaussianChargeFinder(geometryFile: Path) -> tuple[str,str]:
-    with MapFile(geometryFile) as inFile:
-        charge, multiplicity = ExtractGaussianCharge(inFile)
-    return charge, multiplicity
+    return ExtractFrom(geometryFile, ExtractGaussianCharge, empty=("", ""))
 
 # This subroutine returns file name and extension for ease-of-use
 def grabPaths(fileName: str|Path) -> tuple[str,str] | tuple[None,None]:

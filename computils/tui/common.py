@@ -1,6 +1,8 @@
 """Pieces every TUI screen shares, so navigation looks and works the same everywhere (TUI_DESIGN.md P2)."""
+from rich.text import Text
 from textual.binding import Binding
 from textual.containers import Horizontal
+from textual.reactive import reactive
 from textual.widgets import Checkbox, Footer, Static
 from textual.widgets._footer import FooterKey
 
@@ -48,9 +50,7 @@ class OptionRow(Horizontal, can_focus=True, can_focus_children=False):
         Binding("space", "toggle", "Toggle", key_display="␣"),
     ]
 
-    def __init__(self, *children, **kwargs) -> None:
-        super().__init__(*children, **kwargs)
-        self.highlighted = 0
+    highlighted = 0
 
     @property
     def boxes(self) -> list[Checkbox]:
@@ -63,8 +63,6 @@ class OptionRow(Horizontal, can_focus=True, can_focus_children=False):
 
     def Highlight(self, index: int) -> None:
         boxes = self.boxes
-        if not boxes:
-            return
         self.highlighted = max(0, min(index, len(boxes) - 1))
         for position, box in enumerate(boxes):
             box.set_class(position == self.highlighted, "-selected")
@@ -80,9 +78,9 @@ class OptionRow(Horizontal, can_focus=True, can_focus_children=False):
             position += step
 
     def action_toggle(self) -> None:
-        boxes = self.boxes
-        if boxes and not boxes[self.highlighted].disabled:
-            boxes[self.highlighted].toggle()
+        box = self.boxes[self.highlighted]
+        if not box.disabled:
+            box.toggle()
 
     def on_click(self, event) -> None:
         # The checkbox toggles itself on click; the row takes focus and the highlight follows the click
@@ -95,19 +93,24 @@ class OptionRow(Horizontal, can_focus=True, can_focus_children=False):
         self.call_after_refresh(self._KeepEnabled)
 
     def _KeepEnabled(self) -> None:
-        boxes = self.boxes
-        if boxes and boxes[self.highlighted].disabled:
+        if self.boxes[self.highlighted].disabled:
             self.action_move(-1)
 
 
-class ActionPane(Static, can_focus=True):
-    """A focusable pane that runs one screen action on enter or click: the TUI's stand-in for a button (P2).
-    Subclasses set TARGET (the screen action) and an enter binding whose description is the footer hint."""
-    TARGET = ""
+class FrameRule(Static):
+    """One edge of a framed form, drawn to its width: ┌─ label ───── right ─┐ (corners ┌┐, ├┤ or └┘).
+    Textual's borders have no ├/┤ junctions, so a form's section dividers are drawn here (P2).
+    Setting label or right redraws the rule."""
+    label = reactive("")
+    right = reactive("")
 
-    async def action_press(self) -> None:
-        await self.screen.run_action(self.TARGET)
+    def __init__(self, corners: str, label: str = "", **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.corners, self.label = corners, label
 
-    async def on_click(self) -> None:
-        self.focus()
-        await self.action_press()
+    def render(self) -> Text:
+        line = self.app.theme_variables["secondary"]
+        label = Text(f" {self.label} " if self.label else "")
+        right = Text.assemble(" ", self.right, " ") if self.right else Text()
+        fill = "─" * max(0, self.size.width - 4 - label.cell_len - right.cell_len)
+        return Text.assemble((self.corners[0] + "─", line), label, (fill, line), right, ("─" + self.corners[1], line))

@@ -68,8 +68,9 @@ class Defaults:
     projectMarker = ".computils"
     # Ordinary job defaults
     CPU = 12
-    memoryRatio = 2
-    highMemoryRatio = 6
+    # GB per core. Floats: Stampede3 reserves whole nodes, so its ratio is 200/80 = 2.5
+    memoryRatio = 2.0
+    highMemoryRatio = 6.0
     memoryBuffer = 2
     wallTime = "24"
     cluster = ""
@@ -234,54 +235,9 @@ class Defaults:
         "bareCommandOpensTUI": "Set to true to open the TUI when `cu` is run with no arguments. `cu -tui` always opens it.",
     }
 
-    # Expected Python type for each config key. Used by _ApplySection to validate
-    # and coerce values loaded from user-editable TOML files.
-    _TYPES: dict[str, type] = {
-        "binDirectory": str,
-        "projectMarker": str,
-        "CPU": int,
-        "memoryRatio": int,
-        "highMemoryRatio": int,
-        "memoryBuffer": int,
-        "wallTime": str,
-        "cluster": str,
-        "partition": str,
-        "hpcType": str,
-        "stalkDuration": int,
-        "stalkFrequency": int,
-        "submissionList": list,
-        "methodNames": list,
-        "targetProgram": list,
-        "benchmarkMethods": list,
-        "openShellReference": str,
-        "ossSpinThreshold": float,
-        "nboKeylist": str,
-        "mixedBasisVariants": list,
-        "potCube": str,
-        "denCube": str,
-        "valenceCube": str,
-        "spinCube": str,
-        "coreLineVariants": list,
-        "ramLineVariants": list,
-        "terminationVariants": list,
-        "gaussianNonVariant": list,
-        "orcaNonVariant": list,
-        "singlePointExtra": str,
-        "reRunExtra": str,
-        "coordExtension": str,
-        "gaussianExtension": str,
-        "orcaExtension": str,
-        "cubeExtension": str,
-        "queueExtension": str,
-        "outputExtension": str,
-        "isNotifications": bool,
-        "botToken": str,
-        "chatID": str,
-        "broadcastGroupChatID": str,
-        "broadcastThreshold": int,
-        "colorMode": str,
-        "bareCommandOpensTUI": bool,
-    }
+    # Expected Python type for each config key, used by _CoerceValue to validate values loaded from user-editable TOML.
+    # Derived below the class from each key's hardcoded default, so it can't drift from them
+    _TYPES: dict[str, type] = {}
 
     # Keys listed here get the _warningBox comment block inserted immediately above them in the generated TOML,
     # alerting users not to edit carelessly.
@@ -332,23 +288,20 @@ class Defaults:
 
 
     @classmethod
-    def _BuildContent(cls, filename: str) -> str:
-        header = cls._HEADERS[filename]
-        keys = cls._FILE_GROUPS[filename]
-        lines = [header, ""]
+    def _KeyLines(cls, key: str, value: Any, commentText: str) -> list[str]:
+        """One key as written to a TOML file: its power-user warning block and comment (if any), then key = value."""
+        lines = [cls._WARNINGS[key], ""] if key in cls._WARNINGS else []
+        if commentText:
+            lines.append(f"# {commentText}")
+        lines.append(f"{key} = {tomlValue(value, forceMultiline=(key in cls._FORCE_MULTILINE))}")
+        return lines
 
-        for key in keys:
-            value = cls._PersistedValue(key)
-            # Insert power-user warning block before flagged keys
-            if key in cls._WARNINGS:
-                lines.append(cls._WARNINGS[key])
-                lines.append("")
-            # Insert per-key documentation comment
-            commentText = cls._COMMENTS.get(key, "")
-            if commentText:
-                lines.append(f"# {commentText}")
-            lines.append(f"{key} = {tomlValue(value, forceMultiline=(key in cls._FORCE_MULTILINE))}")
-            lines.append("")
+
+    @classmethod
+    def _BuildContent(cls, filename: str) -> str:
+        lines = [cls._HEADERS[filename], ""]
+        for key in cls._FILE_GROUPS[filename]:
+            lines += cls._KeyLines(key, cls._PersistedValue(key), cls._COMMENTS.get(key, "")) + [""]
         return "\n".join(lines)
 
 
@@ -357,18 +310,23 @@ class Defaults:
         missing = []
         for key in cls._FILE_GROUPS[filename]:
             if key in data:
-                value = cls._CoerceValue(key, data[key])
+                value = cls._Checked(key, data[key], filename, f"Falling back to hardcoded default: {getattr(cls, key)!r}")
                 if value is not None:
                     setattr(cls, key, value)
-                else:
-                    console.print(f"[warning]\\[config] Key '{key}' in {filename} has invalid type "
-                           f"(expected {cls._TYPES[key].__name__}, got {type(data[key]).__name__}). "
-                           f"Falling back to hardcoded default: {getattr(cls, key)!r}[/warning]")
             else:
                 missing.append(key)
                 console.print(f"[warning]\\[config] Key '{key}' not found in {filename}. "
                        f"Falling back to hardcoded default: {getattr(cls, key)!r}[/warning]")
         return missing
+
+    @classmethod
+    def _Checked(cls, key: str, rawValue, source, fallback: str):
+        """_CoerceValue, with a warning (ending in what is used instead) when the value has the wrong type."""
+        value = cls._CoerceValue(key, rawValue)
+        if value is None:
+            console.print(f"[warning]\\[config] Key '{key}' in {source} has invalid type (expected "
+                          f"{cls._TYPES[key].__name__}, got {type(rawValue).__name__}). {fallback}[/warning]")
+        return value
 
     @classmethod
     def _CoerceValue(cls, key: str, value):
@@ -415,12 +373,7 @@ class Defaults:
         try:
             with open(filePath, "a", encoding="utf-8") as file:
                 for key in missingKeys:
-                    if key in cls._WARNINGS:
-                        file.write(f"\n{cls._WARNINGS[key]}\n")
-                    commentText = cls._COMMENTS.get(key, "")
-                    if commentText:
-                        file.write(f"\n# {commentText}\n")
-                    file.write(f"{key} = {tomlValue(cls._PersistedValue(key), forceMultiline=(key in cls._FORCE_MULTILINE))}\n")
+                    file.write("\n" + "\n".join(cls._KeyLines(key, cls._PersistedValue(key), cls._COMMENTS.get(key, ""))) + "\n")
             console.print(f"[warning]\\[config] Appended {len(missingKeys)} missing key(s) to {filename}.[/warning]")
         except OSError as error:
             console.print(f"[error]\\[config] Could not append missing keys to {filePath}: {error}[/error]")
@@ -429,10 +382,9 @@ class Defaults:
     @classmethod
     def _Validate(cls) -> None:
         cls._ValidateReference()
+        # Main() runs the setup wizard
         if len(cls.hpcType) == 0:
-            #firstTimeSetup()
             cls.needsFirstTimeSetup = True
-        pass
 
 
     @classmethod
@@ -468,11 +420,8 @@ class Defaults:
             if key not in cls._PROJECT_KEYS:
                 console.print(f"[warning]\\[config] Key '{key}' in {source} is not project-overridable. Ignored.[/warning]")
                 continue
-            value = cls._CoerceValue(key, rawValue)
+            value = cls._Checked(key, rawValue, source, f"Keeping the global value: {cls.GlobalValue(key)!r}")
             if value is None:
-                console.print(f"[warning]\\[config] Key '{key}' in {source} has invalid type "
-                              f"(expected {cls._TYPES[key].__name__}, got {type(rawValue).__name__}). "
-                              f"Keeping the global value: {cls.GlobalValue(key)!r}[/warning]")
                 continue
             cls._globalValues.setdefault(key, getattr(cls, key))
             setattr(cls, key, value)
@@ -503,28 +452,34 @@ class Defaults:
         # Global comments that don't hold for a project file
         projectComments = {"cluster": "Cluster for jobs in this project.", "partition": "Partition for jobs in this project."}
         for key in cls._PROJECT_KEYS:
-            commentText = projectComments.get(key, cls._COMMENTS.get(key, ""))
-            if commentText:
-                lines.append(f"# {commentText}")
-            lines.append(f"{key} = {tomlValue(cls.GlobalValue(key), forceMultiline=(key in cls._FORCE_MULTILINE))}")
-            lines.append("")
+            lines += cls._KeyLines(key, cls.GlobalValue(key), projectComments.get(key, cls._COMMENTS.get(key, ""))) + [""]
         return "\n".join(lines)
 
 
+# binDirectory is a Path here but a str in TOML
+Defaults._TYPES = {key: str if isinstance(getattr(Defaults, key), Path) else type(getattr(Defaults, key))
+                   for keys in Defaults._FILE_GROUPS.values() for key in keys}
+
+
+# Each supported cluster: its SLURM header, and the Defaults firstTimeSetup() sets for it
 class Stampede3Submission:
     # JobName OutputName Error Nodes Partition Time
     submissionList = ["#!/usr/bin/env bash","#SBATCH -J","#SBATCH -o","#SBATCH -e error.%j","#SBATCH -N 1 -n 1",
                       "#SBATCH -p","#SBATCH -t"]
     hpcType = "Stampede3"
+    # Stampede3 reserves whole nodes: 200 GB over the icx node's 80 cores
+    settings = {"partition": "icx", "CPU": 80, "memoryRatio": 200/80, "memoryBuffer": 0, "highMemoryRatio": 200/80}
 
 class LOCAL_CLUSTERSubmission:
     # JobName OutputName Nodes CPUs Mem Time Cluster Partition
     submissionList = ["#!/bin/bash -l","#SBATCH -J","#SBATCH -o","#SBATCH -N 1",
                       "#SBATCH --ntasks-per-node=","#SBATCH --mem=","#SBATCH -t","#SBATCH -M","#SBATCH -p"]
     hpcType = "LOCAL_CLUSTER"
+    settings = {"partition": "REDACTED", "cluster": "smp"}
 
 class Bridges2Submission:
     # JobName Nodes Partition NTasks Time
     submissionList = ["#!/bin/csh","#SBATCH -J","#SBATCH -N 1","#SBATCH -p",
                       "#SBATCH --ntasks-per-node=","#SBATCH -t"]
     hpcType = "Bridges2"
+    settings = {"partition": "RM-shared", "memoryRatio": 2.0, "memoryBuffer": 0, "highMemoryRatio": 2.0}

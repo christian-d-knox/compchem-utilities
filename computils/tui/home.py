@@ -12,11 +12,11 @@ from textual.widgets import Collapsible, DirectoryTree, Input, Label, ListItem, 
 from textual.widgets.selection_list import Selection
 from textual.worker import get_current_worker
 
-from ..actions  import Action
+from ..actions  import Action, FILE_ACTIONS
 from ..intent   import FormCheckIntent
 from ..project  import ChangeDirectory, FindProjectRoot
 from .common    import NAV_BINDINGS, NavFooter
-from .inspect   import BATCH_ACTIONS, ActionExtensions, FileDetails, FileStatus, Styled
+from .inspect   import ActionExtensions, FileDetails, FileStatus, Styled
 
 ACTION_LABELS = {
     Action.RUN: "Run as Written", Action.SINGLE_POINT: "Single Point", Action.BENCHMARK: "Benchmark",
@@ -186,9 +186,6 @@ class HomeScreen(Screen):
         if index < fileList.option_count and fileList.get_option_at_index(index).value == name:
             fileList.replace_option_prompt_at_index(index, self.FilePrompt(name, status))
 
-    def SelectedFiles(self) -> list[Path]:
-        return [Path(name) for name in self.query_one("#files", FileList).selected]
-
     def ScheduleDetails(self, path: Path | None, delay: float = 0.15) -> None:
         # Debounced, so holding an arrow key doesn't scan every file it passes
         if self._detailsTimer is not None:
@@ -235,7 +232,7 @@ class HomeScreen(Screen):
         # The mount-time highlight (and re-highlighting the same action) would only re-scan the same files
         if action == self.action:
             return
-        previous = {name for name in self.query_one("#files", FileList).selected}
+        previous = set(self.query_one("#files", FileList).selected)
         self.action = action
         self.RefreshFiles(previous)
 
@@ -298,8 +295,8 @@ class HomeScreen(Screen):
                     title="Help")
 
     def action_continue(self) -> None:
-        files = self.SelectedFiles()
-        if self.action not in BATCH_ACTIONS:
+        files = [Path(name) for name in self.query_one("#files", FileList).selected]
+        if self.action not in FILE_ACTIONS:
             return
         if not files:
             self.notify("Select at least one file first (space, a, or a glob).", severity="warning")

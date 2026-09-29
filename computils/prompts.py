@@ -22,27 +22,16 @@ def AskBool(prompt: str, default: str = "y", style: str = "prompt") -> bool:
         console.print("[warning]Please enter Y or N.[/warning]")
 
 def AskFloat(prompt: str, default = None, style: str = "prompt") -> float:
-    """Ask for an integer input, and returns it"""
-    if default is not None:
-        suffix = f" ({default}): "
-    else:
-        suffix = ": "
+    """Ask for a number, and return it as a float"""
     while True:
-        response = console.input(f"[{style}]{prompt}{suffix}[/{style}]").strip()
-        if response == "":
-            if default is not None:
-                return default
-            console.print("[warning]Please provide an integer.[/warning]")
-            continue
+        response = AskStr(prompt, default, style)
         try:
-            value = float(response)
+            return float(response)
         except ValueError:
-            console.print(f"[warning]{escape(response)} is not an integer.[/warning]")
-            continue
-        return value
+            console.print(f"[warning]{escape(response)} is not a number.[/warning]")
 
 def AskStr(prompt: str, default = None, style: str = "prompt") -> str:
-    """Ask for an integer input, and returns it"""
+    """Ask for a non-empty string (or accept the default), and return it"""
     if default is not None:
         suffix = f" ({default}): "
     else:
@@ -52,7 +41,7 @@ def AskStr(prompt: str, default = None, style: str = "prompt") -> str:
         if response == "":
             if default is not None:
                 return default
-            console.print("[warning]Please provide an integer.[/warning]")
+            console.print("[warning]Please provide a value.[/warning]")
             continue
         return response
 

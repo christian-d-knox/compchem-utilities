@@ -1,11 +1,5 @@
-"""
-Centralizes data and runtime state previously held in module-level globals.
-
-Loaded explicitly from __main__.Main() at startup, after Defaults.Load().
-In Step 4, the CLI-state attributes (isStalking, isCheck, isNBO,
-indexOverride, isLooping, fileExtension) move into Intent fields; only
-the loaded-data attributes (methodLine, methodList, etc.) stay here.
-"""
+"""Method and route-template data derived from Defaults. Loaded from __main__.Main() after the config (and any
+project.toml) is applied, and reloaded when the TUI moves into another project."""
 from dataclasses import dataclass, field
 
 import regex
@@ -56,6 +50,7 @@ class RouteTemplate:
     base: str                                   # clean route: no tags, no groups
     tags: list[str] = field(default_factory=list)
     groups: list[tuple[frozenset[str], str, list[str]]] = field(default_factory=list)  # (selectors, keywords, tags)
+    method: str = ""                            # picks the program (extensionGetter) and names benchmark files
 
 
 def ParseRouteTemplate(routeLine: str) -> RouteTemplate:
@@ -73,16 +68,23 @@ def ParseRouteTemplate(routeLine: str) -> RouteTemplate:
     if regex.search(ROUTE_LEAK_PATTERN, base):
         console.print(f"[warning]\\[config] Malformed \\[ ] group in benchmarkMethods entry '{escape(routeLine)}'. "
                       f"Jobs using it will be skipped.[/warning]")
-    return RouteTemplate(base, tags, groups)
+    # The first token without Gaussian's '/basis' half, which would otherwise put the basis (and a '/') in filenames
+    method = base.split()[0].split("/")[0] if base else ""
+    return RouteTemplate(base, tags, groups, method)
 
 
-def _MethodPart(token: str) -> str:
-    # Gaussian joins method and basis as 'method/basis'; strip parentheses like IdentifyMethod does
+def MethodKey(token: str) -> str:
+    """The form method names are compared in: Gaussian's '/basis' half dropped, no parentheses, upper case."""
     return token.split("/")[0].replace("(", "").replace(")", "").upper()
 
 
-def IsKnownMethod(name: str) -> bool:
-    return any(name == method.replace("(", "").replace(")", "").upper() for method in Catalog.methodList)
+def SplitReference(key: str) -> tuple[str, str] | None:
+    """A MethodKey as (reference prefix, known method key): ('', 'B3LYP'), ('U', 'B3LYP'), ('RO', 'B3LYP'), or None if
+    no known method is found. The exact name is checked first, so a listed method starting with U or R stays whole."""
+    for prefix in ("", "RO", "U", "R"):
+        if key.startswith(prefix) and key[len(prefix):] in Catalog.methodKeys:
+            return prefix, key[len(prefix):]
+    return None
 
 
 def _ApplyReference(tokens: list[str], spinState: SpinState, extensionType: str) -> list[str]:
@@ -98,28 +100,25 @@ def _ApplyReference(tokens: list[str], spinState: SpinState, extensionType: str)
         # ORCA already runs UKS/UHF when multiplicity > 1
         if spinState == SpinState.OPEN and reference == "U":
             return tokens
-        method = _MethodPart(tokens[0])
+        method = MethodKey(tokens[0])
         isHartreeFock = method == "HF" or any(key in method for key in ("MP2", "CC", "CAS", "NEVPT"))
         return tokens + [reference + ("HF" if isHartreeFock else "KS")]
 
     # Gaussian: prefix the method token (the first token, and only the part before any '/')
-    method = _MethodPart(tokens[0])
-    if not IsKnownMethod(method):
-        # Known method behind a U/RO/R prefix, or an unlisted method that already starts with U/RO: already declared
-        alreadyPrefixed = any(method.startswith(prefix) and IsKnownMethod(method[len(prefix):])
-                              for prefix in ("RO", "U", "R"))
-        if alreadyPrefixed or method.startswith(("U", "RO")):
-            return tokens
+    method = MethodKey(tokens[0])
+    found = SplitReference(method)
+    # Known method behind a U/RO/R prefix, or an unlisted method that already starts with U/RO: already declared
+    if (found and found[0]) or (not found and method.startswith(("U", "RO"))):
+        return tokens
     return [reference + tokens[0]] + tokens[1:]
 
 
-def RenderRoute(index: int, molecule) -> tuple[str, list[str]]:
-    """Render benchmarkMethods[index] for one molecule's spin state. Returns (route, orcablocks tags).
+def RenderRoute(template: RouteTemplate, molecule) -> tuple[str, list[str]]:
+    """Render a route template for one molecule's spin state. Returns (route, orcablocks tags).
 
     Additive: base route + unconditional tags, then every matching group in written order, then the U/RO reference.
     Duplicate keywords and tags keep their first occurrence.
     """
-    template = Catalog.templates[index]
     try:
         multiplicity = int(molecule.multiplicity)
     except (TypeError, ValueError):
@@ -138,13 +137,21 @@ def RenderRoute(index: int, molecule) -> tuple[str, list[str]]:
     return " ".join(tokens), tags
 
 
+def MatchTemplate(routeLine: str, molecule) -> RouteTemplate | None:
+    """The benchmarkMethods entry that renders to this (already rendered) route for this molecule, so a re-run can
+    recover its orcablocks tags. None if no entry matches. Shared by genReRun and the TUI's Re-run preview."""
+    tokens = routeLine.upper().split()
+    return next((template for template in Catalog.templates
+                 if RenderRoute(template, molecule)[0].upper().split() == tokens), None)
+
+
 class Catalog:
     # ── Data derived from Defaults at startup ────────────────────────────────
-    fullMethodLine = []     # fullMethodLine[i] = templates[i].base (clean, spin-independent)
-    templates = []          # templates[i] = parsed benchmarkMethods[i]; render per molecule with RenderRoute
-    methodLine = []
+    templates = []          # templates[i] = parsed benchmarkMethods[i] (.base clean route, .method); see RenderRoute
     methodList = []
     targetProgram = []
+    methodKeys = {}         # MethodKey(name) -> name, first listed wins (SplitReference, IdentifyMethod)
+    programOf = {}          # name -> targetProgram entry
 
     # ── Capability flags (set during Load) ──────────────────────────────────
     canBench = True
@@ -155,10 +162,11 @@ class Catalog:
         # Method → program mapping
         cls.methodList    = list(Defaults.methodNames)
         cls.targetProgram = list(Defaults.targetProgram)
+        cls.methodKeys    = {}
+        for method in cls.methodList:
+            cls.methodKeys.setdefault(MethodKey(method), method)
+        cls.programOf     = dict(zip(cls.methodList, cls.targetProgram))
 
         # Benchmark method lines. Tags and groups are parsed out here so no downstream code ever sees them
-        cls.templates      = [ParseRouteTemplate(line) for line in Defaults.benchmarkMethods]
-        cls.fullMethodLine = [template.base for template in cls.templates]
-        # Method name only: Gaussian's 'method/basis' form would otherwise put the basis (and a '/') in filenames
-        cls.methodLine     = [line.strip().split()[0].split("/")[0] for line in cls.fullMethodLine]
-        cls.canBench       = len(cls.fullMethodLine) > 1
+        cls.templates = [ParseRouteTemplate(line) for line in Defaults.benchmarkMethods]
+        cls.canBench  = len(cls.templates) > 1

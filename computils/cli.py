@@ -4,7 +4,14 @@ from pathlib import Path
 from .console   import console
 from .prompts import AskBool, AskStr
 from .intent import Intent, IntentDraft
-from .actions import CubeOption, Action
+from .actions import CubeOption, Action, FILE_ACTIONS
+
+# Each action flag's argparse dest, and the Action it sets (the parser allows only one per invocation)
+ACTION_FLAGS = {
+    "run": Action.RUN, "singlePoint": Action.SINGLE_POINT, "bench": Action.BENCHMARK, "cube": Action.CUBE,
+    "rerun": Action.RERUN, "formcheck": Action.FORM_CHECK, "excel": Action.EXCEL, "goodvibes": Action.GOODVIBES,
+    "first": Action.FIRST_TIME_SETUP, "update": Action.UPDATE, "init": Action.INIT_PROJECT,
+}
 
 
 # Defines all the terminal flags the program can accept
@@ -46,27 +53,17 @@ def ParseCLI(argv: list[str]) -> Intent:
     """
     args  = BuildParser().parse_args(argv)
     draft = IntentDraft()
-    rawFiles: list[str] | None = None
 
-    # Set action and gather any file arguments
-    if   args.run:         draft.action, rawFiles = Action.RUN,            args.run
-    elif args.singlePoint: draft.action, rawFiles = Action.SINGLE_POINT,   args.singlePoint
-    elif args.bench:       draft.action, rawFiles = Action.BENCHMARK,      args.bench
-    elif args.cube:        draft.action, rawFiles = Action.CUBE,           args.cube
-    elif args.rerun:       draft.action, rawFiles = Action.RERUN,          args.rerun
-    elif args.formcheck:   draft.action, rawFiles = Action.FORM_CHECK,     args.formcheck
-    elif args.excel:       draft.action = Action.EXCEL
-    elif args.goodvibes:   draft.action = Action.GOODVIBES
-    elif args.first:       draft.action = Action.FIRST_TIME_SETUP
-    elif args.update:      draft.action = Action.UPDATE
-    elif args.init:        draft.action = Action.INIT_PROJECT
-    else:
+    # Set the action from whichever action flag was given
+    flag = next((dest for dest in ACTION_FLAGS if getattr(args, dest)), None)
+    if flag is None:
         console.print("[error]No action specified. Run `cu --help` for usage.[/error]")
         raise SystemExit(2)
+    draft.action = ACTION_FLAGS[flag]
 
     # File-bearing actions: expand globs if the shell didn't, collect all files
-    if rawFiles is not None:
-        for entry in rawFiles:
+    if draft.action in FILE_ACTIONS:
+        for entry in getattr(args, flag):
             if any(c in entry for c in ("*", "?", "[")):
                 draft.files.extend(Path(p) for p in glob.glob(entry))
             else:
@@ -102,38 +99,8 @@ def ParseCLI(argv: list[str]) -> Intent:
             draft.orbitalRange = AskStr("Enter the range of MOs you want printed (e.g. 10-15)")
 
     if draft.action == Action.GOODVIBES:
-        # Reuse the existing interactive prompts via goodVibesInteractive
         from .analysis import goodVibesInteractive
-        keyList = goodVibesInteractive()
-        # goodVibesInteractive returns a list of CLI-style flags; parse them back into intent fields.
-        # Walking the list is more robust than re-prompting separately.
-        i = 0
-        while i < len(keyList):
-            token = keyList[i]
-            if token == "-q":
-                draft.quasiharmonic = True
-                i += 1
-            elif token == "-f":
-                draft.freqCutoff = float(keyList[i + 1]); i += 2
-            elif token == "-t":
-                draft.tempCorrection = float(keyList[i + 1]); i += 2
-            elif token == "-c":
-                draft.concCorrection = float(keyList[i + 1]); i += 2
-            elif token == "-v":
-                # -v appears both for the default 1.0 and a custom scale; skip if 1.0
-                scale = float(keyList[i + 1])
-                if scale != 1.0:
-                    draft.vibeScale = scale
-                i += 2
-            elif token == "--spc":
-                draft.singlePointPattern = keyList[i + 1]; i += 2
-            else:
-                # Anything else goes into extraKeys
-                if draft.extraKeys is None:
-                    draft.extraKeys = token
-                else:
-                    draft.extraKeys += " " + token
-                i += 1
+        goodVibesInteractive(draft)
 
     # Validate
     errors = draft.Validate()

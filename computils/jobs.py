@@ -3,9 +3,9 @@ from pathlib import Path
 from .console  import console
 from rich.markup import escape
 from .defaults import Defaults
-from .catalog  import Catalog, RenderRoute, ROUTE_LEAK_PATTERN
-from .fileops  import (fileCreation, MapFile, ExtractResources, ExtractOrcaBlocks, ExtractMixedBasis, MixedBasis,
-                       BasisEntry, NormalizeElement, MoleculeElements)
+from .catalog  import RenderRoute, ROUTE_LEAK_PATTERN
+from .fileops  import (fileCreation, ExtractFrom, HasContent, ExtractResources, ExtractOrcaBlocks, ExtractMixedBasis,
+                       MixedBasis, BasisEntry, NormalizeElement, MoleculeElements)
 from .molecule import Molecule
 from .project  import ResolveProjectFile, FindProjectRoot, ProjectFilePath
 from .intent import JobIntent
@@ -13,18 +13,11 @@ from .intent import JobIntent
 # Parsed once per run, however many jobs use it
 @functools.cache
 def _LoadOrcaBlocks(blocksPath: Path) -> dict[str, str]:
-    # mmap can't map an empty file
-    if blocksPath.stat().st_size == 0:
-        return {}
-    with MapFile(blocksPath) as data:
-        return ExtractOrcaBlocks(data)
+    return ExtractFrom(blocksPath, ExtractOrcaBlocks, empty={})
 
 @functools.cache
 def _LoadMixedBasis(basisPath: Path) -> MixedBasis:
-    if basisPath.stat().st_size == 0:
-        return MixedBasis([], [])
-    with MapFile(basisPath) as data:
-        return ExtractMixedBasis(data)
+    return ExtractFrom(basisPath, ExtractMixedBasis, empty=MixedBasis([], []))
 
 # Route tokens that request a mixed basis, including the slash form (B3LYP/GenECP)
 def _IsMixedBasisKeyword(word: str) -> bool:
@@ -61,43 +54,56 @@ def _FilterMixedBasis(master: MixedBasis, elements: set[str]) -> tuple[str, str,
     missing = set() if any(entry.byCenter for entry in master.basis) else elements - covered
     return Section(master.basis), Section(master.ecp), missing
 
-# Shared error for a required project file that couldn't be found
-def _ReportMissingProjectFile(fileName: str, reason: str, molecule: Molecule) -> None:
-    root = FindProjectRoot()
-    projectLocation = ProjectFilePath(root, fileName) if root else "no project root"
-    console.print(f"[error]{reason} but {fileName} not found (checked CWD and {projectLocation}). "
-                  f"Skipping {molecule.baseName}.[/error]")
+# Why genFile would skip a job, or '' if it can be generated. The one check shared by genFile and the TUI's route
+# preview, which passes required=False so a missing project file never prompts
+def JobFileProblem(route: str, tags: list[str], extensionType: str, elements: set[str], required: bool = True) -> str:
+    # {tag} and [group] syntax is parsed out in Catalog.Load and must never reach an input file
+    if regex.search(ROUTE_LEAK_PATTERN, route):
+        return "malformed [ ] group in benchmarkMethods"
+    if extensionType == Defaults.gaussianExtension and _UsesMixedBasis(route):
+        basisPath = ResolveProjectFile("mixedbasis.txt", required)
+        if basisPath is None:
+            return _MissingProjectFile("mixedbasis.txt")
+        _, _, missing = _FilterMixedBasis(_LoadMixedBasis(basisPath), elements)
+        if missing:
+            return f"mixedbasis.txt has no basis for {' '.join(sorted(missing))}"
+    if extensionType == Defaults.orcaExtension and tags:
+        blocksPath = ResolveProjectFile("orcablocks.txt", required)
+        if blocksPath is None:
+            return _MissingProjectFile("orcablocks.txt")
+        missingTags = [tag for tag in tags if tag not in _LoadOrcaBlocks(blocksPath)]
+        if missingTags:
+            return f"orcablocks.txt has no {', '.join(missingTags)}"
+    return ""
 
-# Separate method for input file generation to improve code efficiency. Path to input is previously stored in molecule.
+def _MissingProjectFile(fileName: str) -> str:
+    root = FindProjectRoot()
+    return f"{fileName} not found (checked CWD and {ProjectFilePath(root, fileName) if root else 'no project root'})"
+
+# Separate method for input file generation to improve code efficiency. Path to input and the route template are
+# previously stored in molecule (fileops.Retarget).
 # Returns False if this job can't be generated (e.g. missing mixedbasis.txt), so the caller skips only this job.
-def genFile(molecule: Molecule, index: int, intent: JobIntent) -> bool:
+def genFile(molecule: Molecule, intent: JobIntent) -> bool:
     inputFile = molecule.fullPath
     # Route card rendered for this molecule's spin state: base + matching [spin groups] + U/RO reference
-    route, blockTags = RenderRoute(index, molecule)
-    # Guard: {tag} and [group] syntax is parsed out in Catalog.Load and must never reach an input file
-    if regex.search(ROUTE_LEAK_PATTERN, route):
-        console.print(f"[error]Unparsed tag/group syntax in route card '{escape(route)}'. Skipping {molecule.baseName}.[/error]")
+    route, blockTags = RenderRoute(molecule.template, molecule)
+    elements = MoleculeElements(molecule.coordinateList)
+    # Checked BEFORE opening the input, so a failure never leaves a half-written file
+    problem = JobFileProblem(route, blockTags, molecule.extensionType, elements, True)
+    if problem:
+        console.print(f"[error]{escape(problem)}. Skipping {molecule.baseName}.[/error]")
         return False
     match molecule.extensionType:
         case Defaults.gaussianExtension:
             if blockTags:
                 console.print(f"[warning]Block tags {blockTags} only apply to ORCA jobs. Ignoring them for "
                               f"{molecule.baseName}.[/warning]")
-            # Resolve required files BEFORE opening the input, so a failure never leaves a half-written file
             basisSection, ecpSection = "", ""
             usesMixedBasis = _UsesMixedBasis(route)
             if usesMixedBasis:
-                basisPath = ResolveProjectFile("mixedbasis.txt")
-                if basisPath is None:
-                    _ReportMissingProjectFile("mixedbasis.txt", "Mixed basis detected", molecule)
-                    return False
                 # The master file lists every element the project may need; keep only this molecule's
-                elements = MoleculeElements(molecule.coordinateList)
-                basisSection, ecpSection, missing = _FilterMixedBasis(_LoadMixedBasis(basisPath), elements)
-                if missing:
-                    console.print(f"[error]{basisPath} has no basis entry for {' '.join(sorted(missing))}. "
-                                  f"Skipping {molecule.baseName}.[/error]")
-                    return False
+                master = _LoadMixedBasis(ResolveProjectFile("mixedbasis.txt", True))
+                basisSection, ecpSection, _ = _FilterMixedBasis(master, elements)
                 # GenECP with an empty ECP section (or Gen with ECP elements) fails in Gaussian
                 switchedRoute = _SetMixedBasisKeyword(route, bool(ecpSection))
                 if switchedRoute != route:
@@ -109,7 +115,7 @@ def genFile(molecule: Molecule, index: int, intent: JobIntent) -> bool:
             with open(inputFile, 'w') as jobInput:
                 # Sets the job's CPU and RAM
                 jobCPU = str(Defaults.CPU)
-                jobMem = str(Defaults.CPU * Defaults.memoryRatio)
+                jobMem = str(int(Defaults.CPU * Defaults.memoryRatio))
                 # Writes the standard Gaussian16 formatted opening
                 jobInput.write("%nprocshared=" + jobCPU + "\n%mem=" + jobMem + "GB")
                 if intent.checkpoint:
@@ -118,8 +124,7 @@ def genFile(molecule: Molecule, index: int, intent: JobIntent) -> bool:
                 jobInput.write("\n# " + route + "\n\nUseless Comment line\n\n")
                 jobInput.write(f"{molecule.charge} {molecule.multiplicity}\n")
                 # Accessing the stored coordinate list is significantly faster in run-time than prior crappy implementation
-                for line in molecule.coordinateList:
-                    jobInput.write(line)
+                jobInput.writelines(molecule.coordinateList)
                 # Mixed basis entries for this molecule's elements, from the CWD or project root mixedbasis.txt
                 if usesMixedBasis:
                     jobInput.write("\n" + basisSection)
@@ -133,63 +138,50 @@ def genFile(molecule: Molecule, index: int, intent: JobIntent) -> bool:
                     jobInput.write("\n")
 
         case Defaults.orcaExtension:
-            # Resolve tagged blocks BEFORE opening the input, so a failure never leaves a half-written file
+            # Tagged blocks from orcablocks.txt, in route-card tag order (JobFileProblem checked they all exist)
             selectedBlocks = []
             if blockTags:
-                blocksPath = ResolveProjectFile("orcablocks.txt")
-                if blocksPath is None:
-                    _ReportMissingProjectFile("orcablocks.txt", f"Block tags {blockTags} requested", molecule)
-                    return False
-                availableBlocks = _LoadOrcaBlocks(blocksPath)
-                missingTags = [tag for tag in blockTags if tag not in availableBlocks]
-                if missingTags:
-                    console.print(f"[error]Block tag(s) {missingTags} not found in {blocksPath}. "
-                                  f"Skipping {molecule.baseName}.[/error]")
-                    return False
+                availableBlocks = _LoadOrcaBlocks(ResolveProjectFile("orcablocks.txt", True))
                 selectedBlocks = [availableBlocks[tag] for tag in blockTags]
             # Opens the job file
             with open(inputFile, 'w') as jobInput:
                 # Sets the job's CPU and RAM
                 jobCPU = str(Defaults.CPU)
                 if "DLPNO" in route:
-                    jobMem = str(Defaults.highMemoryRatio * 1000)
+                    jobMem = str(int(Defaults.highMemoryRatio * 1000))
                 else:
-                    jobMem = str(Defaults.memoryRatio * 1000)
+                    jobMem = str(int(Defaults.memoryRatio * 1000))
                 # Writes the standard ORCA formatted opening
                 jobInput.write(f"%pal nprocs {jobCPU}\nend\n%maxcore {jobMem}")
                 # If the methodLine from benchmarking.txt is garbage, the calculation will fail. Not my fault.
                 jobInput.write("\n! " + route + "\n")
-                # Tagged blocks from orcablocks.txt, in route-card tag order
                 for block in selectedBlocks:
                     jobInput.write(block if block.endswith("\n") else block + "\n")
                 jobInput.write("\n")
                 # ORCA is smart enough to read from an XYZ directly
                 jobInput.write(f"* xyz {molecule.charge} {molecule.multiplicity} \n")
-                for line in molecule.coordinateList:
-                    jobInput.write(line)
+                jobInput.writelines(molecule.coordinateList)
                 jobInput.write("\n*")
     return True
 
 # Reorganized! Now handles SLURM commands independently because of HPC cluster agnosticism
 def slurmHandler(molecule: Molecule, queueName: Path, outputName: Path, cpus: int, jobRam: int) -> None:
+    # What each header line gets filled with, by the flag it contains. Checked in this order; first match wins
+    fills = [("-J", f" {molecule.baseName}"), ("-o", f" {outputName}"), ("--ntasks", f"{cpus}"), ("--mem", f"{jobRam}GB"),
+             ("-t", f" {Defaults.wallTime}:00:00"), ("-p", f" {Defaults.partition}"), ("-M", f" {Defaults.cluster}")]
     with open(queueName, 'w') as outputFile:
         for line in Defaults.submissionList:
-            if regex.search("-J", line):
-                outputFile.write(f"{line} {molecule.baseName}\n")
-            elif regex.search("-o", line):
-                outputFile.write(f"{line} {outputName}\n")
-            elif regex.search("--ntasks", line):
-                outputFile.write(f"{line}{cpus}\n")
-            elif regex.search("--mem", line):
-                outputFile.write(f"{line}{jobRam}GB\n")
-            elif regex.search("-t", line):
-                outputFile.write(f"{line} {Defaults.wallTime}:00:00\n")
-            elif regex.search("-p", line):
-                outputFile.write(f"{line} {Defaults.partition}\n")
-            elif regex.search("-M", line):
-                outputFile.write(f"{line} {Defaults.cluster}\n")
-            else:
-                outputFile.write(f"{line}\n")
+            fill = next((value for flag, value in fills if flag in line), "")
+            outputFile.write(f"{line}{fill}\n")
+
+# Every job reaches the queue through here, so the group broadcast can count the whole invocation (dispatch)
+submittedJobs = 0
+
+def SubmitJob(queueName: Path) -> None:
+    global submittedJobs
+    subprocess.run(["sbatch", queueName], check=True)
+    #os.remove(queueName)
+    submittedJobs += 1
 
 # This routine is for job submission to the cluster
 def runJob(molecule: Molecule, intent: JobIntent, stalkingSet: set) -> None:
@@ -198,46 +190,40 @@ def runJob(molecule: Molecule, intent: JobIntent, stalkingSet: set) -> None:
     queueName = fileCreation(molecule.baseName, Defaults.queueExtension)
 
     # Empty file guard
-    if molecule.fullPath.stat().st_size == 0:
+    if not HasContent(molecule.fullPath):
         console.print(f"[error]Job file {molecule.baseName} is empty or blank. Skipping submission.[/error]")
         return
 
     # Extract CPU and RAM from the input file via mmap regex
-    with MapFile(molecule.fullPath) as data:
-        cpus, jobRam = ExtractResources(data, molecule.extensionType)
+    cpus, jobRam = ExtractFrom(molecule.fullPath, ExtractResources, molecule.extensionType)
 
     slurmHandler(molecule, queueName, outputName, cpus, jobRam)
 
     match molecule.extensionType:
         case Defaults.gaussianExtension:
+            program = "Gaussian16"
             with open(queueName, 'a') as outputFile:
-                for nonVariantLine in Defaults.gaussianNonVariant:
-                    outputFile.write(nonVariantLine)
+                outputFile.writelines(Defaults.gaussianNonVariant)
                 outputFile.write(f"\ng16 < {molecule.fullPath}\n\n")
 
-            subprocess.run(["sbatch", queueName], check=True)
-            #os.remove(queueName)
-            console.print(f"[good]Submitted job {molecule.baseName} to Gaussian16[/good]")
-            if intent.stalk:
-                molecule.fullPath = fileCreation(molecule.baseName, Defaults.outputExtension)
-                stalkingSet.add((molecule.baseName,molecule.fullPath))
-
         case Defaults.orcaExtension:
+            program = "ORCA 6.0.1"
+            inputName = fileCreation(molecule.baseName, Defaults.orcaExtension)
             with open(queueName, 'a') as outputFile:
                 # Now runs in ORCA 6.0.1 instead of 4.2.0
-                for index in range(0,3):
-                    outputFile.write(Defaults.orcaNonVariant[index])
-                outputFile.write(f"files=({fileCreation(molecule.baseName, Defaults.orcaExtension)})\n")
-                for index in range(3,8):
-                    outputFile.write(Defaults.orcaNonVariant[index])
-                outputFile.write(f"$(which orca) {fileCreation(molecule.baseName, Defaults.orcaExtension)}\n\n")
-                for index in range(8,10):
-                    outputFile.write(Defaults.orcaNonVariant[index])
+                outputFile.writelines(Defaults.orcaNonVariant[0:3])
+                outputFile.write(f"files=({inputName})\n")
+                outputFile.writelines(Defaults.orcaNonVariant[3:8])
+                outputFile.write(f"$(which orca) {inputName}\n\n")
+                outputFile.writelines(Defaults.orcaNonVariant[8:10])
 
-            subprocess.run(["sbatch", queueName], check=True)
-            #os.remove(queueName)
-            console.print(f"[good]Submitted job {molecule.baseName} to ORCA 6.0.1[/good]")
-            if intent.stalk:
-                molecule.fullPath = fileCreation(molecule.baseName, Defaults.outputExtension)
-                stalkingSet.add((molecule.baseName,molecule.fullPath))
+        # Only Gaussian and ORCA inputs are submitted
+        case _:
+            return
+
+    SubmitJob(queueName)
+    console.print(f"[good]Submitted job {molecule.baseName} to {program}[/good]")
+    if intent.stalk:
+        molecule.fullPath = outputName
+        stalkingSet.add((molecule.baseName,molecule.fullPath))
 

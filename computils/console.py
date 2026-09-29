@@ -35,10 +35,6 @@ console = Console(theme=lowColorTheme)
 
 # Updates the theme after initially booting in low color mode
 def ApplyTheme(themeName: str) -> None:
+    # lowColor is already active (and anything else falls back to it)
     if themeName == "hexCode":
         console.push_theme(hexCodeTheme)
-    elif themeName == "lowColor":
-        pass
-    else:
-        # Shit's borked and CompUtils is confused
-        pass

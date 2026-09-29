@@ -6,23 +6,18 @@ project files are always resolved with required=False (the required path can pro
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import regex
 from rich.text import Text
 
 from ..actions  import Action
 from ..console  import console
-from ..catalog  import Catalog, RenderRoute, ROUTE_LEAK_PATTERN, _ApplyReference
+from ..catalog  import Catalog, MatchTemplate, RenderRoute, RouteTemplate
 from ..defaults import Defaults
-from ..fileops  import (MapFile, FindInMap, ExtractStalking, ExtractGaussianCharge, ExtractCoords, ExtractRouteLine,
-                        ExtractResources, IdentifyMethod, SplitRoute, MoleculeElements, extensionGetter)
-from ..jobs     import _UsesMixedBasis, _LoadMixedBasis, _FilterMixedBasis, _LoadOrcaBlocks
+from ..fileops  import (MapFile, FindInMap, HasContent, ExtractFrom, ExtractTermination, ExtractCoords, ExtractRouteLine,
+                        ExtractResources, IdentifyMethod, SplitRoute, MoleculeElements, extensionGetter,
+                        gaussianChargeFinder)
+from ..jobs     import JobFileProblem
 from ..molecule import Molecule
-from ..project  import ResolveProjectFile
 from ..spin     import ClassifySpin
-
-# Actions that build jobs from a batch of files. Everything else on the Home screen is a separate screen
-BATCH_ACTIONS = [Action.RUN, Action.SINGLE_POINT, Action.BENCHMARK, Action.RERUN, Action.CUBE, Action.FORM_CHECK]
-
 
 def Styled(text: str, styleName: str) -> Text:
     """Text in one of the CLI's semantic styles (error, good, ...). ApplyTheme has already chosen lowColor or hexCode (D28)."""
@@ -49,12 +44,7 @@ TERMINATION_TAIL = 64 * 1024
 
 def _Termination(path: Path) -> str:
     """The termination variant found in an output file, or '' if none (still running, killed, or empty)."""
-    # mmap can't map an empty file
-    if path.stat().st_size == 0:
-        return ""
-    with MapFile(path) as data:
-        hasTerminated, termination = ExtractStalking(data, "termination", max(0, len(data) - TERMINATION_TAIL))
-    return termination if hasTerminated else ""
+    return ExtractFrom(path, ExtractTermination, -TERMINATION_TAIL, empty="")
 
 
 def FileStatus(path: Path) -> str:
@@ -70,24 +60,21 @@ def FileStatus(path: Path) -> str:
 def _Charge(path: Path) -> tuple[str, str]:
     # Only Gaussian outputs have the 'Charge = 0 Multiplicity = 1' line; anything else can fail to index
     try:
-        with MapFile(path) as data:
-            return ExtractGaussianCharge(data)
+        return gaussianChargeFinder(path)
     except (IndexError, ValueError, OSError):
         return "", ""
 
 
 def ProgramName(method: str) -> str:
     # Same lookup as extensionGetter, without its console warning
-    if method in Catalog.methodList:
-        return {"G16": "G16", "O": "ORCA"}.get(Catalog.targetProgram[Catalog.methodList.index(method)], "")
-    return ""
+    return {"G16": "G16", "O": "ORCA"}.get(Catalog.programOf.get(method), "")
 
 
 def FileDetails(path: Path) -> dict[str, str]:
     """The Details pane fields for one file (D12). Missing values are '—'."""
     details = {"Status": "—", "Charge": "—", "Mult": "—", "Spin": "—", "Method": "—", "Program": "—",
                "CPU": "—", "Mem": "—", "Keys": "—"}
-    if not path.is_file() or path.stat().st_size == 0:
+    if not HasContent(path):
         return details
     if path.suffix in OutputExtensions():
         details["Status"] = _Termination(path).capitalize() or "Unknown (no termination line)"
@@ -126,9 +113,8 @@ class PreviewRow:
 def PreviewMolecule(path: Path) -> Molecule:
     """A Molecule for previewing, built the way dispatch builds one, but without writing the .xyz file."""
     charge, multiplicity = _Charge(path)
-    with MapFile(path) as data:
-        # Atomic numbers are enough for MoleculeElements, which is all the preview needs the coordinates for
-        atomicNumbers, _, _, _ = ExtractCoords(data)
+    # Atomic numbers are enough for MoleculeElements, which is all the preview needs the coordinates for
+    atomicNumbers, _, _, _ = ExtractFrom(path, ExtractCoords, empty=([], [], [], []))
     molecule = Molecule(path, path.stem, charge, multiplicity, atomicNumbers, path.suffix, path.stem)
     molecule.spinState, _ = ClassifySpin(path, path.stem, multiplicity, path.suffix)
     return molecule
@@ -158,64 +144,36 @@ def RouteSpans(route: str, base: str) -> list[tuple[str, str]]:
     return spans
 
 
-def _ProjectFileProblem(route: str, tags: list[str], extensionType: str, elements: set[str]) -> str:
-    """Why genFile would skip this job (D24), or ''. Mirrors genFile's checks using its own helpers."""
-    if regex.search(ROUTE_LEAK_PATTERN, route):
-        return "malformed [ ] group in benchmarkMethods"
-    if extensionType == Defaults.gaussianExtension and _UsesMixedBasis(route):
-        basisPath = ResolveProjectFile("mixedbasis.txt", False)
-        if basisPath is None:
-            return "mixedbasis.txt not found"
-        _, _, missing = _FilterMixedBasis(_LoadMixedBasis(basisPath), elements)
-        if missing:
-            return f"mixedbasis.txt has no basis for {' '.join(sorted(missing))}"
-    if extensionType == Defaults.orcaExtension and tags:
-        blocksPath = ResolveProjectFile("orcablocks.txt", False)
-        if blocksPath is None:
-            return "orcablocks.txt not found"
-        missingTags = [tag for tag in tags if tag not in _LoadOrcaBlocks(blocksPath)]
-        if missingTags:
-            return f"orcablocks.txt has no {', '.join(missingTags)}"
-    return ""
-
-
 def PreviewRowFor(action: Action, molecule: Molecule, index: int) -> PreviewRow:
-    """The route one job would get. Re-run mirrors genReRun's template matching, without mutating the Catalog."""
+    """The route one job would get, from the template its workflow would choose (Re-run shares genReRun's MatchTemplate).
+    The template is rendered directly: the preview never sets molecule.template, nor mutates the Catalog."""
     row = PreviewRow(molecule.rootName, spin=molecule.spinState.name)
     if action == Action.RERUN:
-        with MapFile(molecule.fullPath) as data:
-            routeLine = ExtractRouteLine(data, molecule.fullPath.suffix)
+        routeLine = ExtractFrom(molecule.sourcePath, ExtractRouteLine, molecule.sourcePath.suffix, empty="")
         method = IdentifyMethod(routeLine) if routeLine else ""
         if not method:
             row.problem = "no route card found" if not routeLine else "method not recognised"
             return row
         molecule.extensionType = extensionGetter(method)
-        extractedTokens = routeLine.upper().split()
-        matchedIndex = next((i for i in range(len(Catalog.templates))
-                             if RenderRoute(i, molecule)[0].upper().split() == extractedTokens), None)
-        if matchedIndex is not None:
-            route, row.tags = RenderRoute(matchedIndex, molecule)
-            base = Catalog.templates[matchedIndex].base
-        else:
-            # genReRun renders the extracted route as a bare template: only the U/RO reference can be added
-            route = " ".join(_ApplyReference(routeLine.split(), molecule.spinState, molecule.extensionType))
-            base = routeLine
+        # No matching entry: genReRun uses the route verbatim, so only the U/RO reference can be added
+        template = MatchTemplate(routeLine, molecule) or RouteTemplate(routeLine, method=method)
     else:
-        molecule.extensionType = extensionGetter(Catalog.methodLine[index])
-        route, row.tags = RenderRoute(index, molecule)
-        base = Catalog.templates[index].base
-    row.spans = RouteSpans(route, base)
+        template = Catalog.templates[index]
+        molecule.extensionType = extensionGetter(template.method)
+    route, row.tags = RenderRoute(template, molecule)
+    row.spans = RouteSpans(route, template.base)
     if not molecule.coordinateList:
         # dispatch skips files with no geometry
         row.problem = "no coordinates found"
         return row
-    row.problem = _ProjectFileProblem(route, row.tags, molecule.extensionType, MoleculeElements(molecule.coordinateList))
+    # The same check genFile skips jobs with, without its prompt for a missing project file
+    row.problem = JobFileProblem(route, row.tags, molecule.extensionType, MoleculeElements(molecule.coordinateList), False)
     return row
 
 
 def MethodIndices(action: Action, index: int) -> list[int]:
     """Benchmark method indices that will run. -b -ovr N runs methods N..end (genBench); -sp -ovr N runs only N."""
     match action:
-        case Action.BENCHMARK:    return list(range(index, len(Catalog.methodLine)))
+        case Action.BENCHMARK:    return list(range(index, len(Catalog.templates)))
         case Action.SINGLE_POINT: return [index]
         case _:                   return [0]

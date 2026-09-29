@@ -52,7 +52,11 @@ class CompUtilsApp(App):
     #body.stacked #left Collapsible { width: 1fr; }
     .later { color: $text-muted; }
 
-    #form { padding: 0 1; }
+    /* The Builder's framed form: FrameRules draw the edges and section dividers, .side draws the sides */
+    FrameRule { height: 1; width: 1fr; }
+    /* Hug the sections so the bottom edge closes the frame (BuilderScreen caps the height to scroll instead) */
+    #form { height: auto; }
+    .side { border: none; border-left: solid $secondary; border-right: solid $secondary; padding: 0 1; height: auto; }
     #form Checkbox { margin-right: 2; }
     #form .nest { width: auto; }
     /* Stalk ( [ ] Loop ): a checkbox label already carries one space either side */
