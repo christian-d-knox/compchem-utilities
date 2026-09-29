@@ -5,14 +5,17 @@ CompUtils walks upward from the CWD to the nearest marker, the same way git find
 (e.g. mixedbasis.txt) live inside the marker so every subdirectory of the project can find them.
 """
 import functools, shutil
+import tomllib as tom
 from pathlib import Path
 
 from .console  import console
-from .defaults import Defaults
+from .defaults import Defaults, loadToml, writeToml
 from .prompts  import AskBool, AskChoice
 
 # Known shareable files. -init (and the auto-prompt) offer to move these from the CWD into a new marker.
 PROJECT_FILES = ["mixedbasis.txt", "orcablocks.txt", "spinstates.txt"]
+# Project-level overrides of the global config. Only ever lives inside the marker
+PROJECT_CONFIG = "project.toml"
 
 # Batch guard: the create-project prompt is offered at most once per run
 _hasPrompted = False
@@ -43,6 +46,7 @@ def CreateProjectRoot(target: Path, offerMove: bool = True) -> Path | None:
     console.print(f"[good]Project root created: {target}[/good]")
     FindProjectRoot.cache_clear()
     ResolveProjectFile.cache_clear()
+    EnsureProjectConfig(target)
 
     if offerMove:
         for fileName in PROJECT_FILES:
@@ -51,6 +55,42 @@ def CreateProjectRoot(target: Path, offerMove: bool = True) -> Path | None:
                 shutil.move(localFile, markerDir / fileName)
                 console.print(f"[operation]Moved {fileName} -> {markerDir / fileName}[/operation]")
     return target
+
+
+def EnsureProjectConfig(root: Path) -> None:
+    """Generate project.toml from the global config if it is missing or unparseable. A valid file is never touched."""
+    configPath = ProjectFilePath(root, PROJECT_CONFIG)
+    if configPath.is_file():
+        try:
+            with open(configPath, "rb") as file:
+                tom.load(file)
+            console.print(f"[info]{configPath} already exists; left unchanged.[/info]")
+            return
+        except (tom.TOMLDecodeError, OSError, UnicodeDecodeError) as error:
+            backupPath = configPath.with_name(PROJECT_CONFIG + ".bak")
+            console.print(f"[warning]{configPath} could not be read ({error}). Backing it up to {backupPath.name} "
+                          f"and regenerating it from the global config.[/warning]")
+            try:
+                shutil.move(configPath, backupPath)
+            except OSError as moveError:
+                console.print(f"[error]Could not back up {configPath}: {moveError}. Leaving it as-is.[/error]")
+                return
+    writeToml(configPath.parent, PROJECT_CONFIG, Defaults.BuildProjectContent())
+
+
+def LoadProjectConfig() -> None:
+    """Overlay the project's project.toml (if any) onto the global Defaults. Must run before Catalog.Load()."""
+    root = FindProjectRoot()
+    if root is None:
+        return
+    configPath = ProjectFilePath(root, PROJECT_CONFIG)
+    if not configPath.is_file():
+        return
+    data = loadToml(configPath.parent, PROJECT_CONFIG)
+    overridden = Defaults.ApplyProjectOverrides(data, configPath)
+    # Only real deviations are reported, so a freshly generated snapshot is silent
+    if overridden:
+        console.print(f"[info]Project config ({configPath}) overrides: {', '.join(overridden)}[/info]")
 
 
 def PromptCreateProject(missingFile: str) -> Path | None:
