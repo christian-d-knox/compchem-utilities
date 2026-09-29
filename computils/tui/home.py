@@ -59,6 +59,29 @@ class FolderTree(DirectoryTree):
     def filter_paths(self, paths):
         return [path for path in paths if path.is_dir() and not path.name.startswith(".")]
 
+    async def watch_path(self) -> None:
+        # The root is (re)loaded here, on mount and when MoveTo re-roots the tree; revealing any earlier gets reset
+        await super().watch_path()
+        await self.Reveal(Path.cwd().resolve())
+
+    async def Reveal(self, target: Path) -> None:
+        """Expand the tree down to target and put the cursor on it, so the user starts out seeing where they are."""
+        if not target.is_relative_to(self.path):
+            return
+        node = self.root
+        for part in (*target.relative_to(self.path).parts, None):
+            # reload_node loads the node's children and expands it; awaiting it waits for the load
+            await self.reload_node(node)
+            if part is None:
+                break
+            child = next((child for child in node.children if child.data and child.data.path.name == part), None)
+            # A hidden folder isn't in the tree: stop at the nearest one shown
+            if child is None:
+                break
+            node = child
+        # Node line numbers are only recomputed on the next refresh after the expansions; before that they're -1
+        self.call_after_refresh(self.move_cursor, node, animate=False)
+
 
 class FileList(SelectionList):
     # enter continues to the builder instead of toggling (space still toggles)
@@ -105,7 +128,6 @@ class HomeScreen(Screen):
     def on_mount(self) -> None:
         self.RefreshFiles()
         self.query_one("#files").focus()
-
     # ─── State ────────────────────────────────────────────────────────
 
     def RefreshHeader(self) -> None:

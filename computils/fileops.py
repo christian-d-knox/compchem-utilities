@@ -21,14 +21,17 @@ def MapFile(filePath: Path):
             yield data
 
 # Helper method for performing the searches themselves
-# start limits the search to data[start:] (still an mmap search, nothing is copied)
+# start limits the search to data[start:] (still an mmap search, nothing is copied). concurrent releases the GIL while
+# matching, so a long search in a TUI worker doesn't freeze the screen; safe because every mapping is read-only.
+# Reverse searches run from the pattern's END: start them with a literal and put trailing captures in a lookahead,
+# or the engine retries the tail (e.g. a number) at every match of it in the file
 def FindInMap(data, pattern: str, reverse: bool = False, ignoreCase: bool = False, start: int = 0) -> regex.Match | None:
     flags = 0
     if reverse:
         flags |= regex.REVERSE
     if ignoreCase:
         flags |= regex.IGNORECASE
-    return regex.search(pattern.encode(), data, flags, pos=start)
+    return regex.search(pattern.encode(), data, flags, pos=start, concurrent=True)
 
 # Properly handle line-skipping in extractions
 def SkipInMap(data, match, skipLines: int = 0, fromStart: bool = False) -> None:
@@ -248,8 +251,9 @@ def ExtractResources(data, extensionType: str) -> tuple[int, int]:
 
 def ExtractSpinContamination(data) -> float | None:
     """Return the LAST reported <S**2> in a Gaussian or ORCA output, or None if the file reports none."""
-    for pattern in (r"S\*\*2 before annihilation\s+(-?[\d.]+)",           # Gaussian
-                    r"Expectation value of <S\*\*2>\s*:\s*(-?[\d.]+)"):    # ORCA
+    # Value in a lookahead: see FindInMap. Without it, a file with no <S**2> took ~0.14 s/MB for the ORCA pattern
+    for pattern in (r"S\*\*2 before annihilation(?=\s+(-?[\d.]+))",           # Gaussian
+                    r"Expectation value of <S\*\*2>(?=\s*:\s*(-?[\d.]+))"):    # ORCA
         spinMatch = FindInMap(data, pattern, reverse=True)
         if spinMatch:
             return float(spinMatch.group(1).decode())
