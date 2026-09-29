@@ -51,6 +51,8 @@ class CompUtilsApp(App):
     #body.stacked #left { width: 100%; height: auto; layout: horizontal; }
     #body.stacked #left Collapsible { width: 1fr; }
     .later { color: $text-muted; }
+    /* Home's file pane and Details while a screen item (Config) is highlighted in Actions */
+    .-dimmed { text-opacity: 45%; }
 
     /* The Builder's framed form: FrameRules draw the edges and section dividers, .side draws the sides */
     FrameRule { height: 1; width: 1fr; }
@@ -66,7 +68,7 @@ class CompUtilsApp(App):
 
     /* The config editor: the table takes the height the details strip leaves */
     #config-table { height: 1fr; }
-    #config-details { height: 3; }
+    #config-details { height: 4; }
     #config-edit { height: 1; border: none; }
 
     /* Even single spaces between footer hints; compact mode otherwise runs group labels into the next key */

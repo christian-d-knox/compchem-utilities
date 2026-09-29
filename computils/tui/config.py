@@ -11,7 +11,7 @@ from textual.widgets import DataTable, Input, Label, ListItem, ListView, Static
 
 from ..defaults import DELETE, Defaults, tomlValue, writeToml
 from ..project  import PROJECT_CONFIG, FindProjectRoot, ProjectFilePath, ReloadConfig, SaveProjectConfig
-from .common    import NAV_BINDINGS, ConfirmScreen, FrameRule, KeyHint, NavFooter
+from .common    import NAV_BINDINGS, FrameRule, KeyHint, NavFooter, Notice, Popup
 from .home      import TitleLine
 from .inspect   import Styled
 
@@ -19,24 +19,28 @@ from .inspect   import Styled
 SECTIONS = [("SLURM", "slurm.toml"), ("Programs", "programs.toml"), ("Benchmark Suite", None),
             ("Extensions", "extensions.toml"), ("Notifications", "notifications.toml"),
             ("Quality of Life", "qol.toml"), ("Paths", "paths.toml")]
-# Set by first-time setup only (the TUI opens only once it has run)
-HIDDEN = {"hpcType", "submissionList"}
-READ_ONLY = {"binDirectory", "projectMarker", "gaussianNonVariant", "orcaNonVariant", "benchmarkMethods",
+# Set by first-time setup only (the TUI opens only once it has run), or power-user edits made by hand in the file
+HIDDEN = {"hpcType", "submissionList", "gaussianNonVariant", "orcaNonVariant"}
+READ_ONLY = {"binDirectory", "projectMarker", "benchmarkMethods",
              "botToken", "chatID", "broadcastGroupChatID", "broadcastThreshold"}
-MASKED = {"botToken"}
+MASKED = {"botToken", "chatID", "broadcastGroupChatID"}
 # Keys with a fixed set of values: ␣ cycles through them
 CHOICES = {"openShellReference": ["U", "RO"], "colorMode": ["lowColor", "hexCode"]}
 TYPE_NAMES = {int: "a whole number", float: "a number", str: "text", bool: "true or false",
               list: 'a list, e.g. ["a", "b"]'}
 GLOBAL, PROJECT = 1, 2          # table columns (0 is the key)
-SHOWN_WIDTH = 30                # longer values are cut with …
 
 
-def Shown(value) -> str:
+def Cut(text: str, width: int) -> str:
+    return text if len(text) <= width else text[:max(0, width - 1)] + "…"
+
+
+def Shown(value, masked: bool = False) -> str:
     if value is DELETE:
         return "—"
-    text = tomlValue(value) if isinstance(value, (bool, list)) else str(value)
-    return text if len(text) <= SHOWN_WIDTH else text[:SHOWN_WIDTH - 1] + "…"
+    if masked and value:
+        return "••••"
+    return tomlValue(value) if isinstance(value, (bool, list)) else str(value)
 
 
 def ParseValue(key: str, text: str):
@@ -98,6 +102,8 @@ class ConfigScreen(Screen):
         self.pending: dict[tuple[int, str], object] = {}   # (column, key) -> unsaved value (DELETE: follow global)
         self.regenerate: set[str] = set()           # files to regenerate whole on save (R)
         self.editing: tuple[int, str] | None = None
+        self.saved = False                          # anything written (Home re-lists its files)
+        self.valueWidth = 14
 
     def compose(self) -> ComposeResult:
         project = f"project: {self.root.name}" if self.root else "no project"
@@ -111,9 +117,7 @@ class ConfigScreen(Screen):
                 yield SectionList(*items, id="sections")
             with Vertical(id="right"):
                 yield FrameRule("┌┐", id="config-top")
-                table = ConfigTable(id="config-table", classes="side", cursor_type="cell", zebra_stripes=False)
-                table.add_columns("Key", "Global", "Project")
-                yield table
+                yield ConfigTable(id="config-table", classes="side", cursor_type="cell", zebra_stripes=False)
                 yield FrameRule("├┤", id="config-rule")
                 yield Static(id="config-details", classes="side")
                 yield EditInput(id="config-edit", classes="side")
@@ -123,6 +127,10 @@ class ConfigScreen(Screen):
     def on_mount(self) -> None:
         self.query_one("#config-edit").display = False
         self.ShowSection(0)
+
+    def on_resize(self, event) -> None:
+        # Column widths follow the table's width
+        self.call_after_refresh(self.Redraw)
 
     # ─── State ────────────────────────────────────────────────────────
 
@@ -170,29 +178,44 @@ class ConfigScreen(Screen):
         if column == PROJECT and self.root is None:
             return Text("no project", "dim")
         value = self.Value(column, key)
-        text = "••••" if key in MASKED and value else Shown(value)
-        cell = Text(f"[{text}]" if (column, key) in self.pending else text, "dim" if key in READ_ONLY else "")
-        # • marks a project value, which is the one in force
-        if column == PROJECT and value is not DELETE:
+        pending, marked = (column, key) in self.pending, column == PROJECT and value is not DELETE
+        # Cut to the column, leaving room for the [unsaved] brackets and the • of a project value (the one in force)
+        text = Cut(Shown(value, key in MASKED), self.valueWidth - 2 * pending - marked)
+        cell = Text(f"[{text}]" if pending else text, "dim" if key in READ_ONLY else "")
+        if marked:
             cell.append("•", "bold")
         return cell
+
+    def SetColumns(self, keyTexts: list[str]) -> None:
+        """Fixed widths: Key fits its longest entry, Global and Project share the rest. A DataTable's columns otherwise
+        grow with their widest value (and never shrink), pushing the table past its pane."""
+        table = self.query_one("#config-table", ConfigTable)
+        keyWidth = max(map(len, keyTexts))
+        # One cell of padding either side of each column, and room for the vertical scrollbar
+        available = table.content_region.width - 3 * 2 * table.cell_padding - 2
+        self.valueWidth = max(8, (available - keyWidth) // 2)
+        table.clear(columns=True)
+        table.add_column("Key", width=keyWidth)
+        table.add_column("Global", width=self.valueWidth)
+        table.add_column("Project", width=self.valueWidth)
 
     def ShowSection(self, index: int) -> None:
         self.section = index
         label, filename = SECTIONS[index]
         table = self.query_one("#config-table", ConfigTable)
         row, column = table.cursor_row, max(table.cursor_column, GLOBAL)
-        table.clear()
         if filename is None:
             # Benchmark Suite: one row per entry, read-only for now
             globalList, projectList = Defaults.GlobalValue("benchmarkMethods"), Defaults._projectValues.get("benchmarkMethods")
             self.keys = ["benchmarkMethods"] * max(len(globalList), len(projectList or []))
+            self.SetColumns([str(len(self.keys))])
             for entry in range(len(self.keys)):
                 cells = [globalList[entry] if entry < len(globalList) else "",
                          (projectList[entry] if entry < len(projectList) else "") if projectList else "—"]
-                table.add_row(str(entry), *(Text(cell, "dim") for cell in cells))
+                table.add_row(str(entry), *(Text(Cut(cell, self.valueWidth), "dim") for cell in cells))
         else:
             self.keys = [key for key in Defaults._FILE_GROUPS[filename] if key not in HIDDEN and key != "benchmarkMethods"]
+            self.SetColumns(self.keys)
             for key in self.keys:
                 table.add_row(key, self.Cell(GLOBAL, key), self.Cell(PROJECT, key))
         table.move_cursor(row=min(row, len(self.keys) - 1), column=column, animate=False)
@@ -209,11 +232,15 @@ class ConfigScreen(Screen):
         else:
             column, key = current
             comments = Defaults.ProjectComments() if column == PROJECT else Defaults._COMMENTS
+            width = details.content_region.width
             default = "" if key in MASKED else f" · default {Shown(Defaults.DefaultValue(key))}"
             note = ("Editing comes with the Benchmark Suite editor." if key == "benchmarkMethods"
                     else "Read-only here." if key in READ_ONLY else "")
-            lines = [Text(comments.get(key, "").split("\n# ")[0]),
-                     Text.assemble(f"{TYPE_NAMES[Defaults._TYPES[key]].capitalize()}{default}. ", Styled(note, "info"))]
+            # The whole value (the table cuts it to its column), then what kind of value it is
+            value = self.Value(column, key) if column == GLOBAL or key in Defaults._PROJECT_KEYS else DELETE
+            lines = [Text(Cut(comments.get(key, "").split("\n# ")[0], width)),
+                     Text(Cut(f"Value: {Shown(value, key in MASKED)}", width)),
+                     Text.assemble(Cut(f"{TYPE_NAMES[Defaults._TYPES[key]].capitalize()}{default}. ", width), Styled(note, "info"))]
             if problem:
                 lines.append(Styled(problem, "error"))
             details.update(Text("\n").join(lines))
@@ -269,7 +296,7 @@ class ConfigScreen(Screen):
         column, key = current
         if not self.Editable(column, key):
             if column == PROJECT and key in Defaults._PROJECT_KEYS and self.root is None:
-                self.notify("Not inside a project: `cu -init` creates one.", severity="warning")
+                Notice(self.app, "No project", "Not inside a project: `cu -init` creates one.", "warning")
             return
         value = self.Value(column, key)
         # An empty project cell starts its override from the global value
@@ -334,20 +361,48 @@ class ConfigScreen(Screen):
                     if self.Editable(GLOBAL, key) and key not in HIDDEN:
                         self.SetPending(GLOBAL, key, Defaults.DefaultValue(key))
             self.Redraw()
-        self.app.push_screen(ConfirmScreen(message, [("y", "Reset", "reset")]), Apply)
+        self.app.push_screen(Popup("Reset file", message, [("y", "Reset", "reset")], "warning"), Apply)
 
-    def Problem(self) -> str:
+    def MethodMismatch(self) -> str:
+        """Why methodNames and targetProgram don't pair up, or "". The Catalog zips them, dropping the extras."""
         names, programs = self.Value(GLOBAL, "methodNames"), self.Value(GLOBAL, "targetProgram")
-        if len(names) != len(programs):
-            return f"methodNames has {len(names)} entries but targetProgram has {len(programs)}; they must match."
-        return ""
+        if len(names) == len(programs):
+            return ""
+        extras, lacking = (names[len(programs):], "no program") if len(names) > len(programs) else (programs[len(names):], "no method")
+        return (f"methodNames has {len(names)} entries, targetProgram {len(programs)}: "
+                f"{', '.join(repr(extra) for extra in extras)} {'has' if len(extras) == 1 else 'have'} {lacking}.\n"
+                "Jobs ignore entries without a partner. Trim them and save,\nor keep editing to add the missing ones.")
 
-    def Save(self) -> bool:
-        """Write every unsaved change, then reload the config. False (screen stays open) if a file could not be written."""
-        problem = self.Problem()
-        if problem:
-            self.notify(problem, severity="error")
-            return False
+    def TrimMethods(self) -> None:
+        names, programs = self.Value(GLOBAL, "methodNames"), self.Value(GLOBAL, "targetProgram")
+        count = min(len(names), len(programs))
+        self.SetPending(GLOBAL, "methodNames", names[:count])
+        self.SetPending(GLOBAL, "targetProgram", programs[:count])
+
+    def Save(self, then) -> None:
+        """Write every unsaved change, reload the config, say what was saved, then run then(). A method-list mismatch
+        asks first; a file that can't be written is reported and the editor stays open."""
+        mismatch = self.MethodMismatch()
+        if mismatch:
+            def Chosen(result: str) -> None:
+                if result == "trim":
+                    self.TrimMethods()
+                    self.Save(then)
+            self.app.push_screen(Popup("Method list mismatch", mismatch, [("t", "Trim & Save", "trim")], "warning",
+                                       cancel="Keep editing"), Chosen)
+            return
+        written, failed = self.WriteFiles()
+        if failed:
+            Notice(self.app, "Save failed", f"Could not save {', '.join(failed)}; left unchanged.", "error")
+            self.Redraw()
+            return
+        self.saved = True
+        # Trimming (or undoing edits by hand) can leave nothing that differs from the files
+        Notice(self.app, "Saved", f"Saved {', '.join(written)}." if written else "Nothing to save: the files already match.",
+               then=then)
+
+    def WriteFiles(self) -> tuple[list[str], list[str]]:
+        """Write the pending changes and reload the config. (files written, files that failed)."""
         binDirectory = Path(Defaults.binDirectory)
         written, failed = [], []
         for filename, fileKeys in Defaults._FILE_GROUPS.items():
@@ -375,12 +430,9 @@ class ConfigScreen(Screen):
             self.pending = {cell: value for cell, value in self.pending.items()
                             if self.FileOf(*cell) in failed and value != self.SavedValue(*cell)}
             self.regenerate &= set(failed)
-            self.notify(f"Could not save {', '.join(failed)}; left unchanged.", severity="error")
-            self.Redraw()
-            return False
+            return written, failed
         self.pending, self.regenerate = {}, set()
-        self.notify(f"Saved {', '.join(written)}." if written else "Nothing to save.")
-        return True
+        return written, failed
 
     def FileOf(self, column: int, key: str) -> str:
         if column == PROJECT:
@@ -388,9 +440,9 @@ class ConfigScreen(Screen):
         return next(filename for filename, keys in Defaults._FILE_GROUPS.items() if key in keys)
 
     def action_save(self) -> None:
-        if self.Unsaved() and self.Save():
-            # Home re-lists its files, since extensions and the project config may have changed
-            self.dismiss(True)
+        # Back to Home, which re-lists its files (extensions and the project config may have changed)
+        if self.Unsaved():
+            self.Save(lambda: self.dismiss(True))
 
     def check_action(self, action: str, parameters) -> bool | None:
         # ⏎ Save shows dimmed while there is nothing to save
@@ -403,16 +455,20 @@ class ConfigScreen(Screen):
             return
 
         def Chosen(result: str) -> None:
-            if result == "discard" or (result == "save" and self.Save()):
+            if result == "discard":
                 leave()
-        self.app.push_screen(ConfirmScreen(f"{self.Unsaved()} unsaved change(s).",
-                                           [("s", "Save", "save"), ("d", "Discard", "discard")]), Chosen)
+            elif result == "save":
+                self.Save(leave)
+        files = sorted({self.FileOf(*cell) for cell in self.pending} | self.regenerate)
+        count = self.Unsaved()
+        self.app.push_screen(Popup("Unsaved changes", f"{count} unsaved change{'s' if count != 1 else ''} in {', '.join(files)}.",
+                                   [("s", "Save", "save"), ("d", "Discard", "discard")], "warning"), Chosen)
 
     def action_back(self) -> None:
-        saved = bool(self.Unsaved())
-        self.ConfirmLeave(lambda: self.dismiss(saved and not self.Unsaved()))
+        self.ConfirmLeave(lambda: self.dismiss(self.saved))
 
     def action_help(self) -> None:
-        self.notify("↑/↓ move between keys · ←/→ Global or Project · space edit (toggles true/false, cycles choices) · "
-                    "r reset the value to its default (Project: follow global) · R reset the whole file · "
-                    "enter save and return home · esc back · ctrl+q quit", title="Help")
+        Notice(self.app, "Help", "\n".join([
+            "↑/↓ move between keys", "←/→ Global or Project", "space edit (toggles true/false, cycles choices)",
+            "r reset the value to its default (Project: follow global)", "R reset the whole file",
+            "enter save and return home", "esc back", "ctrl+q quit"]))
