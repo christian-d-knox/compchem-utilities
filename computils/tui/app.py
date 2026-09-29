@@ -40,28 +40,25 @@ class CompUtilsApp(App):
     #folders-panel.-collapsed { height: auto; }
     #folders { height: 1fr; min-height: 4; }
     #right { width: 1fr; }
-    #files-pane { height: 1fr; border: round $secondary; }
+    /* Every titled box on every screen (P2), square-cornered (house style); the focused one takes the focus colour */
+    .pane { border: solid $secondary; padding: 0 1; height: auto; }
+    .pane:focus, .pane:focus-within { border: solid $border; }
+    #files-pane { height: 1fr; padding: 0; }
     #files { height: 1fr; border: none; }
     #glob { border: none; height: 1; }
-    #details { height: 6; border: round $secondary; padding: 0 1; }
+    #details { height: 6; }
     #body.stacked { layout: vertical; }
     #body.stacked #left { width: 100%; height: auto; layout: horizontal; }
     #body.stacked #left Collapsible { width: 1fr; }
     .later { color: $text-muted; }
 
     #form { padding: 0 1; }
-    #form .row { height: auto; }
-    #form .heading { margin-top: 1; text-style: bold; }
     #form Checkbox { margin-right: 2; }
     #form .nest { width: auto; }
     /* Stalk ( [ ] Loop ): a checkbox label already carries one space either side */
     #form Checkbox#stalk, #form Checkbox#loop { margin-right: 0; }
-    #file-line { width: 1fr; }
-    #methods { height: auto; max-height: 10; }
+    #methods { height: auto; max-height: 12; }
     #range { width: 24; height: 1; border: none; }
-    #preview { border: round $secondary; padding: 0 1; margin-top: 1; height: auto; }
-    #errors { height: auto; margin-top: 1; }
-    #submit-row { height: auto; align-horizontal: right; }
 
     /* Even single spaces between footer hints; compact mode otherwise runs group labels into the next key */
     NavFooter FooterKey.-grouped { margin: 0 1 0 0; }
@@ -69,7 +66,7 @@ class CompUtilsApp(App):
     NavFooter KeyGroup.-compact { padding-left: 0; }
     NavFooter KeyGroup.-compact FooterKey.-grouped { margin: 0; }
 
-    #too-small { text-align: center; padding: 1 2; border: round $warning; width: auto; }
+    #too-small { text-align: center; padding: 1 2; border: solid $warning; width: auto; }
     """
 
     def on_mount(self) -> None:

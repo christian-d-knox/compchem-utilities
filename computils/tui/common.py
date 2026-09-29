@@ -1,14 +1,16 @@
 """Pieces every TUI screen shares, so navigation looks and works the same everywhere (TUI_DESIGN.md P2)."""
 from textual.binding import Binding
 from textual.containers import Horizontal
-from textual.widgets import Checkbox, Footer
+from textual.widgets import Checkbox, Footer, Static
 from textual.widgets._footer import FooterKey
 
-# Every screen puts these in its BINDINGS and yields NavFooter, so the footer always shows how to move around
+# Every screen puts these at the end of its BINDINGS (so Quit is the footer's last hint) and yields NavFooter, so the footer always shows how to move around
 _PANE = Binding.Group("Pane", compact=False)
 NAV_BINDINGS = [
     Binding("tab", "app.focus_next", "Next Pane", group=_PANE),
-    Binding("shift+tab", "app.focus_previous", "Prev Pane", group=_PANE),
+    Binding("shift+tab", "app.focus_previous", "Prev Pane", key_display="⇧tab", group=_PANE),
+    # Textual's own ctrl+q is a hidden priority binding, which would replace a non-priority one here in the footer
+    Binding("ctrl+q", "app.quit", "Quit", key_display="^q", priority=True),
 ]
 
 
@@ -43,7 +45,7 @@ class OptionRow(Horizontal, can_focus=True, can_focus_children=False):
     BINDINGS = [
         Binding("left", "move(-1)", "Option", group=_OPTION),
         Binding("right", "move(1)", "Option", group=_OPTION),
-        Binding("space", "toggle", "Toggle"),
+        Binding("space", "toggle", "Toggle", key_display="␣"),
     ]
 
     def __init__(self, *children, **kwargs) -> None:
@@ -96,3 +98,16 @@ class OptionRow(Horizontal, can_focus=True, can_focus_children=False):
         boxes = self.boxes
         if boxes and boxes[self.highlighted].disabled:
             self.action_move(-1)
+
+
+class ActionPane(Static, can_focus=True):
+    """A focusable pane that runs one screen action on enter or click: the TUI's stand-in for a button (P2).
+    Subclasses set TARGET (the screen action) and an enter binding whose description is the footer hint."""
+    TARGET = ""
+
+    async def action_press(self) -> None:
+        await self.screen.run_action(self.TARGET)
+
+    async def on_click(self) -> None:
+        self.focus()
+        await self.action_press()

@@ -6,13 +6,13 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Button, Checkbox, Input, Label, OptionList, Static
+from textual.widgets import Checkbox, Input, Label, OptionList, Static
 
 from ..actions  import Action, CubeOption
 from ..catalog  import Catalog
 from ..defaults import Defaults
 from ..intent   import IntentDraft
-from .common    import NAV_BINDINGS, NavFooter, OptionRow
+from .common    import NAV_BINDINGS, ActionPane, NavFooter, OptionRow
 from .home      import ACTION_LABELS, TitleLine
 from .inspect   import MethodIndices, PreviewMolecule, PreviewRowFor, ProgramName, Styled
 
@@ -22,12 +22,28 @@ USES_METHODS = (Action.SINGLE_POINT, Action.BENCHMARK)
 USES_GENERATION = (Action.SINGLE_POINT, Action.BENCHMARK, Action.RERUN)
 
 
+class FilesPane(ActionPane):
+    TARGET = "back"
+    BINDINGS = [Binding("enter", "press", "Change")]
+
+
+class SubmitPane(ActionPane):
+    TARGET = "submit"
+    BINDINGS = [Binding("enter", "press", "Submit")]
+
+    def check_action(self, action: str, parameters) -> bool | None:
+        # None shows the hint dimmed while nothing can be submitted
+        return None if action == "press" and not self.screen.ready else True
+
+
 class BuilderScreen(Screen):
+    # Start on the first real input: the method list, or the options for actions without one
+    AUTO_FOCUS = "#methods, #options"
     BINDINGS = [
-        *NAV_BINDINGS,
         Binding("escape", "back", "Back"),
         Binding("ctrl+s", "submit", "Submit"),
         Binding("question_mark", "help", "Help"),
+        *NAV_BINDINGS,
     ]
 
     def __init__(self, action: Action, files: list[Path]) -> None:
@@ -37,21 +53,24 @@ class BuilderScreen(Screen):
         self.previewIndex = 0         # the highlighted method row
         self.molecules = {}
         self.rows = {}                # (method index, file name) -> PreviewRow
+        self.ready = False            # the draft is valid and at least one job would run
 
     def compose(self) -> ComposeResult:
         yield Static(TitleLine(ACTION_LABELS[self.action]), id="title")
         with VerticalScroll(id="form"):
-            with Horizontal(classes="row"):
-                names = ", ".join(path.name for path in self.files)
-                yield Label(f"Files ({len(self.files)}): {names}", id="file-line")
-                yield Button("Change…", id="back", compact=True)
+            # Every section is a titled pane (P2): boxes show which values belong together
+            names = ", ".join(path.name for path in self.files)
+            filesPane = FilesPane(Text.assemble(names, ("   enter change", "dim")), id="files-summary", classes="pane")
+            filesPane.border_title = f"Files ({len(self.files)})"
+            yield filesPane
             if self.action in USES_METHODS:
                 hint = "enter chooses where the benchmark starts" if self.action == Action.BENCHMARK else "enter chooses the method"
-                yield Label(f"Methods (benchmarkMethods) · {hint}", classes="heading")
-                yield OptionList(*self.MethodPrompts(), id="methods")
-            yield Label("Options:", classes="heading")
+                methods = OptionList(*self.MethodPrompts(), id="methods", classes="pane")
+                methods.border_title = f"Methods (benchmarkMethods) · {hint}"
+                yield methods
             # One tab stop per row: ←/→ move between the checkboxes (OptionRow)
-            with Horizontal(classes="row"):
+            with Horizontal(id="options-pane", classes="pane") as optionsPane:
+                optionsPane.border_title = "Options"
                 if self.action == Action.CUBE:
                     with OptionRow(id="options"):
                         for option in CubeOption:
@@ -68,19 +87,23 @@ class BuilderScreen(Screen):
                         yield Checkbox("Loop", id="loop", disabled=True, compact=True)
                         yield Label(")", classes="nest")
             if self.action != Action.RUN:
-                yield Label("Resources:", classes="heading")
-                yield Static(self.ResourceLine(), id="resources")
+                resources = Static(self.ResourceLine(), id="resources", classes="pane")
+                resources.border_title = "Resources"
+                yield resources
             if self.action in USES_GENERATION:
-                yield Static(id="preview")
-            yield Static(id="errors")
-            with Horizontal(id="submit-row"):
-                yield Button("Submit", id="submit", variant="primary")
+                yield Static(id="preview", classes="pane")
+            submit = SubmitPane(id="submit", classes="pane")
+            submit.border_title = "Submit"
+            yield submit
         yield NavFooter()
 
     def on_mount(self) -> None:
         if self.action in USES_GENERATION:
             self.molecules = {path.name: PreviewMolecule(path) for path in self.files}
         self.Refresh()
+        # Auto-focus scrolls the form when it's taller than the screen; always open at the top (the Files pane)
+        form = self.query_one("#form", VerticalScroll)
+        self.call_after_refresh(form.scroll_home, animate=False)
 
     # ─── Content ──────────────────────────────────────────────────────
 
@@ -168,10 +191,10 @@ class BuilderScreen(Screen):
         if count == 0 and not errors:
             errors = ["No job would be submitted."]
         skippedNote = f" ({skipped} skipped)" if skipped else ""
-        self.query_one("#errors", Static).update(Styled("\n".join(errors), "error") if errors else "")
-        submit = self.query_one("#submit", Button)
-        submit.label = f"Submit {count} Job{'s' if count != 1 else ''}{skippedNote}"
-        submit.disabled = bool(errors)
+        self.ready = not errors
+        summary = f"{count} job{'s' if count != 1 else ''} ready{skippedNote} · ctrl+s or enter"
+        self.query_one("#submit", SubmitPane).update(Styled("\n".join(errors), "error") if errors else Styled(summary, "good"))
+        self.refresh_bindings()
 
     # ─── Events ───────────────────────────────────────────────────────
 
@@ -197,24 +220,22 @@ class BuilderScreen(Screen):
     def on_input_changed(self, event: Input.Changed) -> None:
         self.Refresh()
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back":
-            self.action_back()
-        elif event.button.id == "submit":
-            self.action_submit()
-
     # ─── Actions ──────────────────────────────────────────────────────
 
     def action_back(self) -> None:
         # Home keeps its selection, since it was never unmounted
         self.app.pop_screen()
 
+    def check_action(self, action: str, parameters) -> bool | None:
+        # ^s Submit shows dimmed in the footer while nothing can be submitted
+        return None if action == "submit" and not self.ready else True
+
     def action_submit(self) -> None:
-        if self.query_one("#submit", Button).disabled:
+        if not self.ready:
             return
         self.app.exit(self.Draft().Finalize())
 
     def action_help(self) -> None:
         self.notify("tab / shift+tab move between fields · ↑/↓ move in the method list · ←/→ move between options · "
                     "space toggles an option · enter picks the highlighted method · ctrl+s submits · "
-                    "esc goes back to the file list", title="Help")
+                    "esc goes back to the file list · ctrl+q quits", title="Help")

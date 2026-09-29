@@ -25,13 +25,14 @@ ACTION_LABELS = {
 # Listed so the layout matches the design; their screens come after v1
 LATER_SCREENS = ["Queue Monitor", "GoodVibes", "Config", "Project Files"]
 _COLLAPSE = Binding.Group("Collapse")
+_ALL_NONE = Binding.Group("All/None")
 STATUS_STYLES = {"normal": "good", "error": "error", "unknown": "warning"}
 
 HELP = {
     "actions": "↑/↓ choose the action · enter go to the file list · 1 collapse",
     "folders": "↑/↓ move · enter open folder (becomes the working directory) · 2 collapse",
     "glob":    "Type a pattern to select matching files · enter or esc returns to the file list",
-    "files":   "space toggle · a all · n none · / glob · enter continue to the builder",
+    "files":   "space select · a all · n none · / glob · enter continue to the builder",
 }
 
 
@@ -86,22 +87,26 @@ class FolderTree(DirectoryTree):
 
 
 class FileList(SelectionList):
-    # enter continues to the builder instead of toggling (space still toggles)
-    BINDINGS = [Binding("enter", "screen.continue", "Continue")]
+    # enter continues to the builder instead of toggling (space still toggles). These keys only mean something here,
+    # so they're bound here and the footer shows them only while the list is focused (keeps it within 84 columns)
+    BINDINGS = [
+        Binding("space", "select", "Select", key_display="␣"),
+        Binding("enter", "screen.continue", "Continue"),
+        Binding("a", "screen.select_all", "All", group=_ALL_NONE),
+        Binding("n", "screen.select_none", "None", group=_ALL_NONE),
+    ]
 
 
 class HomeScreen(Screen):
     BINDINGS = [
-        *NAV_BINDINGS,
         # Grouped as "1 2 Collapse" so the footer fits in 84 columns
         Binding("1", "toggle_panel('actions')", "Actions", group=_COLLAPSE),
         Binding("2", "toggle_panel('folders')", "Folders", group=_COLLAPSE),
-        Binding("/", "focus_glob", "Glob"),
-        Binding("a", "select_all", "All"),
-        Binding("n", "select_none", "None"),
+        # Not in the footer (no room at 84 columns): the glob box's placeholder says "/ to focus"
+        Binding("/", "focus_glob", "Glob", show=False),
         Binding("escape", "leave_glob", show=False),
         Binding("question_mark", "help", "Help"),
-        Binding("q", "app.exit", "Quit"),
+        *NAV_BINDINGS,
     ]
 
     def __init__(self) -> None:
@@ -123,10 +128,10 @@ class HomeScreen(Screen):
                 with Collapsible(title="Folders", collapsed=False, id="folders-panel"):
                     yield FolderTree(FindProjectRoot() or Path.cwd(), id="folders")
             with Vertical(id="right"):
-                with Vertical(id="files-pane"):
+                with Vertical(id="files-pane", classes="pane"):
                     yield Input(placeholder="Glob, e.g. *_failed*  (/ to focus)", id="glob")
                     yield FileList(id="files")
-                yield Static(id="details")
+                yield Static(id="details", classes="pane")
         yield NavFooter()
 
     def on_mount(self) -> None:
@@ -289,7 +294,7 @@ class HomeScreen(Screen):
 
     def action_help(self) -> None:
         focused = self.focused.id if self.focused else None
-        self.notify(HELP.get(focused, "tab / shift+tab move between panes · ↑/↓ move · 1/2 collapse panels · q quit"),
+        self.notify(HELP.get(focused, "tab / shift+tab move between panes · ↑/↓ move · 1/2 collapse panels · ctrl+q quit"),
                     title="Help")
 
     def action_continue(self) -> None:
