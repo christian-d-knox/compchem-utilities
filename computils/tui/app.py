@@ -53,12 +53,21 @@ class CompUtilsApp(App):
     #form .row { height: auto; }
     #form .heading { margin-top: 1; text-style: bold; }
     #form Checkbox { margin-right: 2; }
+    #form .nest { width: auto; }
+    /* Stalk ( [ ] Loop ): a checkbox label already carries one space either side */
+    #form Checkbox#stalk, #form Checkbox#loop { margin-right: 0; }
     #file-line { width: 1fr; }
     #methods { height: auto; max-height: 10; }
     #range { width: 24; height: 1; border: none; }
     #preview { border: round $secondary; padding: 0 1; margin-top: 1; height: auto; }
     #errors { height: auto; margin-top: 1; }
     #submit-row { height: auto; align-horizontal: right; }
+
+    /* Even single spaces between footer hints; compact mode otherwise runs group labels into the next key */
+    NavFooter FooterKey.-grouped { margin: 0 1 0 0; }
+    NavFooter FooterLabel { margin: 0 1 0 0; }
+    NavFooter KeyGroup.-compact { padding-left: 0; }
+    NavFooter KeyGroup.-compact FooterKey.-grouped { margin: 0; }
 
     #too-small { text-align: center; padding: 1 2; border: round $warning; width: auto; }
     """

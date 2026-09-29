@@ -8,13 +8,14 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Collapsible, DirectoryTree, Footer, Input, Label, ListItem, ListView, SelectionList, Static
+from textual.widgets import Collapsible, DirectoryTree, Input, Label, ListItem, ListView, SelectionList, Static
 from textual.widgets.selection_list import Selection
 from textual.worker import get_current_worker
 
 from ..actions  import Action
 from ..intent   import FormCheckIntent
 from ..project  import ChangeDirectory, FindProjectRoot
+from .common    import NAV_BINDINGS, NavFooter
 from .inspect   import BATCH_ACTIONS, ActionExtensions, FileDetails, FileStatus, Styled
 
 ACTION_LABELS = {
@@ -23,6 +24,7 @@ ACTION_LABELS = {
 }
 # Listed so the layout matches the design; their screens come after v1
 LATER_SCREENS = ["Queue Monitor", "GoodVibes", "Config", "Project Files"]
+_COLLAPSE = Binding.Group("Collapse")
 STATUS_STYLES = {"normal": "good", "error": "error", "unknown": "warning"}
 
 HELP = {
@@ -90,8 +92,10 @@ class FileList(SelectionList):
 
 class HomeScreen(Screen):
     BINDINGS = [
-        Binding("1", "toggle_panel('actions')", "Actions"),
-        Binding("2", "toggle_panel('folders')", "Folders"),
+        *NAV_BINDINGS,
+        # Grouped as "1 2 Collapse" so the footer fits in 84 columns
+        Binding("1", "toggle_panel('actions')", "Actions", group=_COLLAPSE),
+        Binding("2", "toggle_panel('folders')", "Folders", group=_COLLAPSE),
         Binding("/", "focus_glob", "Glob"),
         Binding("a", "select_all", "All"),
         Binding("n", "select_none", "None"),
@@ -123,7 +127,7 @@ class HomeScreen(Screen):
                     yield Input(placeholder="Glob, e.g. *_failed*  (/ to focus)", id="glob")
                     yield FileList(id="files")
                 yield Static(id="details")
-        yield Footer()
+        yield NavFooter()
 
     def on_mount(self) -> None:
         self.RefreshFiles()
@@ -285,7 +289,8 @@ class HomeScreen(Screen):
 
     def action_help(self) -> None:
         focused = self.focused.id if self.focused else None
-        self.notify(HELP.get(focused, "tab moves between panes · 1/2 collapse panels · q quit"), title="Help")
+        self.notify(HELP.get(focused, "tab / shift+tab move between panes · ↑/↓ move · 1/2 collapse panels · q quit"),
+                    title="Help")
 
     def action_continue(self) -> None:
         files = self.SelectedFiles()

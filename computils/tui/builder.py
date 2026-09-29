@@ -6,12 +6,13 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Button, Checkbox, Footer, Input, Label, OptionList, Static
+from textual.widgets import Button, Checkbox, Input, Label, OptionList, Static
 
 from ..actions  import Action, CubeOption
 from ..catalog  import Catalog
 from ..defaults import Defaults
 from ..intent   import IntentDraft
+from .common    import NAV_BINDINGS, NavFooter, OptionRow
 from .home      import ACTION_LABELS, TitleLine
 from .inspect   import MethodIndices, PreviewMolecule, PreviewRowFor, ProgramName, Styled
 
@@ -23,6 +24,7 @@ USES_GENERATION = (Action.SINGLE_POINT, Action.BENCHMARK, Action.RERUN)
 
 class BuilderScreen(Screen):
     BINDINGS = [
+        *NAV_BINDINGS,
         Binding("escape", "back", "Back"),
         Binding("ctrl+s", "submit", "Submit"),
         Binding("question_mark", "help", "Help"),
@@ -48,17 +50,23 @@ class BuilderScreen(Screen):
                 yield Label(f"Methods (benchmarkMethods) · {hint}", classes="heading")
                 yield OptionList(*self.MethodPrompts(), id="methods")
             yield Label("Options:", classes="heading")
+            # One tab stop per row: ←/→ move between the checkboxes (OptionRow)
             with Horizontal(classes="row"):
                 if self.action == Action.CUBE:
-                    for option in CubeOption:
-                        yield Checkbox(option.value, id=f"cube-{option.value}", compact=True)
+                    with OptionRow(id="options"):
+                        for option in CubeOption:
+                            yield Checkbox(option.value, id=f"cube-{option.value}", compact=True)
                     yield Input(placeholder="MO range, e.g. 10-15", id="range", disabled=True)
                 else:
-                    if self.action in USES_GENERATION:
-                        yield Checkbox("Checkpoint", id="checkpoint", compact=True)
-                        yield Checkbox("NBO", id="nbo", compact=True)
-                    yield Checkbox("Stalk", id="stalk", compact=True)
-                    yield Checkbox("Loop", id="loop", disabled=True, compact=True)
+                    with OptionRow(id="options"):
+                        if self.action in USES_GENERATION:
+                            yield Checkbox("Checkpoint", id="checkpoint", compact=True)
+                            yield Checkbox("NBO", id="nbo", compact=True)
+                        yield Checkbox("Stalk", id="stalk", compact=True)
+                        # Loop is a sub-flag of Stalk (mock-up 4.2): Stalk ( [ ] Loop )
+                        yield Label("( ", classes="nest")
+                        yield Checkbox("Loop", id="loop", disabled=True, compact=True)
+                        yield Label(")", classes="nest")
             if self.action != Action.RUN:
                 yield Label("Resources:", classes="heading")
                 yield Static(self.ResourceLine(), id="resources")
@@ -67,7 +75,7 @@ class BuilderScreen(Screen):
             yield Static(id="errors")
             with Horizontal(id="submit-row"):
                 yield Button("Submit", id="submit", variant="primary")
-        yield Footer()
+        yield NavFooter()
 
     def on_mount(self) -> None:
         if self.action in USES_GENERATION:
@@ -207,5 +215,6 @@ class BuilderScreen(Screen):
         self.app.exit(self.Draft().Finalize())
 
     def action_help(self) -> None:
-        self.notify("tab moves between fields · space toggles a checkbox · enter picks the highlighted method · "
-                    "ctrl+s submits · esc goes back to the file list", title="Help")
+        self.notify("tab / shift+tab move between fields · ↑/↓ move in the method list · ←/→ move between options · "
+                    "space toggles an option · enter picks the highlighted method · ctrl+s submits · "
+                    "esc goes back to the file list", title="Help")
