@@ -1,10 +1,12 @@
 import regex, subprocess
 from contextlib import closing, contextmanager
+from dataclasses import dataclass
 from mmap import mmap, ACCESS_READ
 from pathlib import Path
 from typing import Any
 
 from .console  import console
+from rich.markup import escape
 from .defaults import Defaults
 from .catalog  import Catalog
 from .molecule import Molecule
@@ -270,6 +272,133 @@ def ExtractOrcaBlocks(data) -> dict[str, str]:
     CloseBlock()
     return blocks
 
+# Atomic number -> symbol, 1-103. Shared by getCoords() and the mixed basis element checks
+ATOMIC_SYMBOLS = dict(enumerate((
+    "H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr "
+    "Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb "
+    "Lu Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf Es Fm Md No Lr"
+).split(), start=1))
+ELEMENT_SET = set(ATOMIC_SYMBOLS.values())
+
+@dataclass
+class BasisEntry:
+    tokens: list[str]   # element tokens as written (e.g. "-C"), or center numbers when byCenter
+    body: str           # everything after the element line ('****' included for basis groups)
+    byCenter: bool = False
+
+    @property
+    def elements(self) -> list[str]:
+        return [] if self.byCenter else [NormalizeElement(token) for token in self.tokens]
+
+@dataclass
+class MixedBasis:
+    basis: list[BasisEntry]
+    ecp: list[BasisEntry]
+
+def NormalizeElement(token: str) -> str:
+    return token.lstrip("-").capitalize()
+
+def _ElementLine(line: str) -> tuple[list[str], bool] | None:
+    """'C H N O 0' -> (tokens, False); '1 2 3 0' -> (tokens, True); anything else -> None."""
+    lineMatch = regex.match(r"\s*((?:-?\w+\s+)+)0\s*$", line)
+    if lineMatch is None:
+        return None
+    tokens = lineMatch.group(1).split()
+    if all(regex.fullmatch(r"-?\d+", token) for token in tokens):
+        return tokens, True
+    if all(regex.fullmatch(r"-?[A-Za-z]{1,2}", token) and NormalizeElement(token) in ELEMENT_SET for token in tokens):
+        return tokens, False
+    return None
+
+def ExtractMixedBasis(data) -> MixedBasis:
+    """Parse a Gaussian Gen/GenECP section (mixedbasis.txt) from an mmap data stream.
+
+    Basis groups run from an element line ('C H N O 0') to '****'; the first blank line after a group ends the basis
+    section. ECP entries run from an element line to the next element line or blank line. An element listed in two
+    groups of the same section is kept only in the first.
+    """
+    data.seek(0)
+    lines = [rawLine.decode().replace("\r\n", "\n").rstrip() for rawLine in iter(data.readline, b"")]
+    basis, ecp = [], []
+    index = 0
+
+    def SkipBlank() -> None:
+        nonlocal index
+        while index < len(lines) and not lines[index].strip():
+            index += 1
+
+    # Basis section: element line, body, ****
+    SkipBlank()
+    while index < len(lines) and lines[index].strip():
+        header = _ElementLine(lines[index])
+        if header is None:
+            console.print(f"[warning]mixedbasis.txt line {index + 1}: expected an element line like 'C H N O 0', "
+                          f"got '{escape(lines[index])}'. Ignoring the rest of the file.[/warning]")
+            return MixedBasis(basis, ecp)
+        index += 1
+        body = []
+        while index < len(lines) and lines[index].strip() != "****":
+            body.append(lines[index])
+            index += 1
+        body.append("****")
+        index += 1
+        basis.append(BasisEntry(header[0], "\n".join(body) + "\n", header[1]))
+
+    # ECP section: element line, body until the next element line or blank line
+    SkipBlank()
+    while index < len(lines) and lines[index].strip():
+        header = _ElementLine(lines[index])
+        if header is None:
+            console.print(f"[warning]mixedbasis.txt line {index + 1}: expected an ECP element line like 'Co 0', "
+                          f"got '{escape(lines[index])}'. Ignoring the rest of the file.[/warning]")
+            break
+        index += 1
+        body = []
+        # Only an element line ends an entry: explicit ECP data can contain all-numeric lines ending in 0
+        while index < len(lines) and lines[index].strip():
+            nextHeader = _ElementLine(lines[index])
+            if nextHeader and not nextHeader[1]:
+                break
+            body.append(lines[index])
+            index += 1
+        ecp.append(BasisEntry(header[0], "\n".join(body) + "\n", header[1]))
+
+    for sectionName, entries in (("basis", basis), ("ECP", ecp)):
+        seen = set()
+        for entry in entries:
+            if entry.byCenter:
+                console.print(f"[warning]mixedbasis.txt: {sectionName} group '{' '.join(entry.tokens)} 0' addresses atoms "
+                              "by center number and can't be filtered by element. It is written to every job as-is.[/warning]")
+                continue
+            duplicates = [token for token in entry.tokens if NormalizeElement(token) in seen]
+            if duplicates:
+                console.print(f"[warning]mixedbasis.txt: {', '.join(NormalizeElement(t) for t in duplicates)} already has "
+                              f"a {sectionName} entry. Keeping the first one.[/warning]")
+                entry.tokens = [token for token in entry.tokens if token not in duplicates]
+            seen.update(entry.elements)
+    return MixedBasis([entry for entry in basis if entry.tokens], [entry for entry in ecp if entry.tokens])
+
+def MoleculeElements(coordinateList: list[str]) -> set[str]:
+    """Element symbols in a coordinate list. Handles atomic numbers, 'C(Fragment=1)', 'C-Bq' (ghost atoms still carry
+    basis functions), 'C1' labels; drops bare 'Bq' and dummy 'X' atoms."""
+    elements = set()
+    for line in coordinateList:
+        fields = line.split()
+        if not fields:
+            continue
+        token = fields[0]
+        if token.isdigit():
+            symbol = ATOMIC_SYMBOLS.get(int(token), token)
+        else:
+            symbolMatch = regex.match(r"[A-Za-z]{1,2}", token)
+            if symbolMatch is None:
+                continue
+            symbol = symbolMatch.group(0).capitalize()
+        # Bq and X are not in the table, so ghost-only and dummy atoms are dropped here
+        if symbol in ELEMENT_SET:
+            elements.add(symbol)
+    return elements
+
 # Finally handle filename creation in one place to stop the infinite copypasta
 def fileCreation(baseName: str, extensionType: str, extra: str = "") -> Path:
     if extra:
@@ -285,16 +414,7 @@ def formCheck(molecule: Molecule) -> None:
 # A new fully pythonic solution to coordinate scraping, agnostic of the PERL bullshit on LOCAL_CLUSTER
 def getCoords(fileName: Path, outputFileName: Path) -> list:
     coordinateList = []
-    atSymbol = {
-        1: 'H', 2: 'He', 3: 'Li', 4: 'Be', 5: 'B', 6: 'C', 7: 'N', 8: 'O', 9: 'F', 10: 'Ne',
-        11: 'Na', 12: 'Mg', 13: 'Al', 14: 'Si', 15: 'P', 16: 'S', 17: 'Cl', 18: 'Ar', 19: 'K',
-        20: 'Ca', 21: 'Sc', 22: 'Ti', 23: 'V', 24: 'Cr', 25: 'Mn', 26: 'Fe', 27: 'Co', 28: 'Ni',
-        29: 'Cu', 30: 'Zn', 31: 'Ga', 32: 'Ge', 33: 'As', 34: 'Se', 35: 'Br', 36: 'Kr',
-
-        42: 'Mo', 44: 'Ru', 45: 'Rh', 46: 'Pd', 47: 'Ag', 48: 'Cd', 50: 'Sn', 51: 'Sb',
-        53: 'I', 54: 'Xe', 77: 'Ir', 78: 'Pt', 79: 'Au', 80: 'Hg', 81: 'Tl', 82: 'Pb',
-        83: 'Bi'
-    }
+    atSymbol = ATOMIC_SYMBOLS
 
     # Initialize local empty lists
     with MapFile(fileName) as inFile:
