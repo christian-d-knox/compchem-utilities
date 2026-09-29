@@ -93,6 +93,18 @@ def ExtractRouteLine(data, extensionType: str) -> str:
     then reads the full line. For output files or unknown extensions, tries both.
     Returns the route card with the leading marker stripped.
     """
+    # Gaussian outputs echo the route between two dashed lines, wrapped mid-word at a fixed width:
+    #  -------------------------------------------------------------
+    #  #p opt freq=noraman b3lyp genecp scrf=(smd,solvent=water) 5d empiricald
+    #  ispersion=gd3bj
+    #  -------------------------------------------------------------
+    if extensionType != Defaults.orcaExtension:
+        blockMatch = FindInMap(data, r"(?m)^ *-{20,}\r?\n( *#[^\r\n]*\r?\n(?:[^\r\n]*\r?\n){0,20}?) *-{20,}\r?$")
+        if blockMatch:
+            # Each echoed line has one leading space; the rest is the route verbatim, so rejoin without a separator
+            wrappedLines = blockMatch.group(1).decode().splitlines()
+            routeLine = "".join(line[1:] if line.startswith(" ") else line for line in wrappedLines).strip()
+            return _StripRouteMarker(routeLine)
     match extensionType:
         case Defaults.gaussianExtension:
             routeMatch = FindInMap(data, r"#")
@@ -105,11 +117,12 @@ def ExtractRouteLine(data, extensionType: str) -> str:
     if routeMatch is None:
         return ""
     data.seek(routeMatch.start())
-    routeLine = data.readline().decode().strip()
-    # Strip only the leading marker ('#', '!', or a '#p'/'#n'/'#t' print-level flag). The flag letter must be followed by
-    # whitespace, so method names starting with P/N/T (e.g. '#p PBEPBE', '#PBEPBE', '! PBE0') survive intact
-    routeLine = regex.sub(r"^(?:#[pPnNtT](?=\s|$)|#|!)\s*", "", routeLine).strip()
-    return routeLine
+    return _StripRouteMarker(data.readline().decode())
+
+# Strip only the leading marker ('#', '!', or a '#p'/'#n'/'#t' print-level flag). The flag letter must be followed by
+# whitespace, so method names starting with P/N/T (e.g. '#p PBEPBE', '#PBEPBE', '! PBE0') survive intact
+def _StripRouteMarker(routeLine: str) -> str:
+    return regex.sub(r"^(?:#[pPnNtT](?=\s|$)|#|!)\s*", "", routeLine.strip()).strip()
 
 
 def IdentifyMethod(routeLine: str) -> str:
