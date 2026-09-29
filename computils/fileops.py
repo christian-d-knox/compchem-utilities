@@ -40,7 +40,8 @@ def SkipInMap(data, match, skipLines: int = 0, fromStart: bool = False) -> None:
 
 # Begin individual return methods for mmap extraction
 def ExtractCoords(data) -> tuple[list[int], list[str], list[str], list[str]]:
-    tableLocation = FindInMap(data, "Standard orientation:", True)
+    # Jobs run with nosymm only print the Input orientation. With symmetry on, the last table printed is Standard
+    tableLocation = FindInMap(data, r"(?:Standard|Input) orientation:", True)
     if tableLocation is None:
         return [], [], [], []
 
@@ -143,6 +144,25 @@ def IdentifyMethod(routeLine: str) -> str:
                     return method
     return ""
 
+# Common basis-set name stems. Only needed for ORCA-style routes, where the basis is its own token
+BASIS_PATTERN = r"(?i)^(?:ma-|aug-|jun-)?(?:def2|cc-p|6-31|3-21|sto-|lanl|sdd|genecp$|gen$)"
+
+def SplitRoute(routeLine: str) -> tuple[str, str, str]:
+    """Split a route card into (method, basis, remaining keywords) for display. Empty strings where not found."""
+    method, basis, keys = IdentifyMethod(routeLine), "", []
+    methodTaken = False
+    for token in routeLine.split():
+        methodPart, _, slashBasis = token.partition("/")
+        # The method token itself (possibly U/RO-prefixed), with Gaussian's '/basis' half if present
+        if method and not methodTaken and IdentifyMethod(methodPart) == method:
+            methodTaken, basis = True, basis or slashBasis
+            continue
+        if not basis and regex.match(BASIS_PATTERN, token):
+            basis = token
+            continue
+        keys.append(token)
+    return method, basis, " ".join(keys)
+
 def ExtractStalking(data, extractType: str) -> Any:
     match extractType:
         case "stability":
@@ -165,7 +185,6 @@ def ExtractStalking(data, extractType: str) -> Any:
                     convergeMet = []
                     for index in range(4):
                         convergeLine = data.readline().decode()
-                        print(convergeLine)
                         convergeMet.append(convergeLine.split()[4])
                         convergeCriteria = convergeMet.count("YES")
                     return convergeCriteria

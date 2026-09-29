@@ -4,7 +4,7 @@ A project root is any directory containing a marker directory (Defaults.projectM
 CompUtils walks upward from the CWD to the nearest marker, the same way git finds `.git/`. Shareable reference files
 (e.g. mixedbasis.txt) live inside the marker so every subdirectory of the project can find them.
 """
-import functools, shutil
+import functools, os, shutil
 import tomllib as tom
 from pathlib import Path
 
@@ -91,6 +91,25 @@ def LoadProjectConfig() -> None:
     # Only real deviations are reported, so a freshly generated snapshot is silent
     if overridden:
         console.print(f"[info]Project config ({configPath}) overrides: {', '.join(overridden)}[/info]")
+
+
+def ChangeDirectory(target: Path) -> bool:
+    """Move the CWD mid-run (TUI navigation). Returns True if the nearest project root changed.
+
+    The root/file lookups are re-walked on every move, since a subfolder can hold its own CWD copy of a project file.
+    project.toml and the Catalog are only reloaded when the root itself changes.
+    """
+    from .catalog import Catalog
+    previousRoot = FindProjectRoot()
+    os.chdir(target)
+    FindProjectRoot.cache_clear()
+    ResolveProjectFile.cache_clear()
+    if FindProjectRoot() == previousRoot:
+        return False
+    Defaults.ResetProjectOverrides()
+    LoadProjectConfig()
+    Catalog.Load()
+    return True
 
 
 def PromptCreateProject(missingFile: str) -> Path | None:

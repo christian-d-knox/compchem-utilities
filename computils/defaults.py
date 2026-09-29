@@ -123,6 +123,7 @@ class Defaults:
     broadcastThreshold = 30
     needsFirstTimeSetup = False
     colorMode = ""
+    bareCommandOpensTUI = False
 
     # What files contain what keys
     _FILE_GROUPS: dict[str, list[str]] = {
@@ -156,7 +157,7 @@ class Defaults:
             "broadcastThreshold",
         ],
         "qol.toml": [
-            "colorMode",
+            "colorMode", "bareCommandOpensTUI",
         ]
     }
 
@@ -229,7 +230,8 @@ class Defaults:
         "chatID": "Your personal Telegram chat ID (auto-detected during setup).",
         "broadcastGroupChatID": "Telegram group chat ID for broadcast queue alerts.",
         "broadcastThreshold": "Minimum jobs in a single submission to trigger a broadcast alert.",
-        "colorMode": "Determined the level of color accuracy used in terminal output."
+        "colorMode": "Determined the level of color accuracy used in terminal output.",
+        "bareCommandOpensTUI": "Set to true to open the TUI when `cu` is run with no arguments. `cu -tui` always opens it.",
     }
 
     # Expected Python type for each config key. Used by _ApplySection to validate
@@ -278,6 +280,7 @@ class Defaults:
         "broadcastGroupChatID": str,
         "broadcastThreshold": int,
         "colorMode": str,
+        "bareCommandOpensTUI": bool,
     }
 
     # Keys listed here get the _warningBox comment block inserted immediately above them in the generated TOML,
@@ -479,6 +482,15 @@ class Defaults:
         for key in applied:
             cls._projectValues[key] = getattr(cls, key)
         return [key for key in applied if cls._projectValues[key] != cls._globalValues[key]]
+
+
+    @classmethod
+    def ResetProjectOverrides(cls) -> None:
+        """Undo ApplyProjectOverrides, restoring the global values (e.g. before switching to another project)."""
+        for key, value in cls._globalValues.items():
+            setattr(cls, key, value)
+        cls._globalValues.clear()
+        cls._projectValues.clear()
 
 
     @classmethod
