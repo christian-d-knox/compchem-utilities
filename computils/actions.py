@@ -22,6 +22,9 @@ class Action(Enum):
     UPDATE           = "update"     # -up
     INIT_PROJECT     = "init"       # -init
 
+# Actions that take a batch of files (IntentDraft.Validate, and the TUI's Continue)
+FILE_ACTIONS = (Action.RUN, Action.SINGLE_POINT, Action.BENCHMARK, Action.CUBE, Action.RERUN, Action.FORM_CHECK)
+
 # Spin-state class of a molecule, set once in dispatch by spin.ClassifySpin()
 class SpinState(Enum):
     """CSS = closed-shell singlet, OSS = open-shell (broken-symmetry) singlet, OPEN = multiplicity > 1."""

@@ -1,7 +1,7 @@
 """
 Single execution path for all Intents.
 
-CLI argparse (and eventually TUI screens) build typed Intents which arrive
+The CLI (argparse) and the TUI both build typed Intents, which arrive
 here. Dispatch() routes to the per-action handler based on intent type.
 """
 import subprocess
@@ -18,6 +18,7 @@ from .intent    import (
 )
 from .fileops   import grabPaths, gaussianChargeFinder, formCheck, getCoords, fileCreation
 from .jobs      import runJob
+from .          import jobs
 from .workflows import genBench, genSinglePoint, genReRun, gimmeCubes
 from .analysis  import goodVibesProcessor
 from .notify    import CheckAndBroadcast
@@ -62,74 +63,65 @@ def _LoadMolecule(jobPath, coordExtra: str = "") -> Molecule | None:
     return molecule
 
 
-def _DispatchRun(intent: RunIntent) -> None:
-    CheckAndBroadcast(len(intent.files))
+# Run, Cube and FormChk use their files as-is: no coordinates (coordinateList=0 sentinel). Missing files are skipped
+def _FileMolecules(files: list):
+    for jobPath in files:
+        baseName, extension = grabPaths(jobPath)
+        if baseName is not None:
+            yield Molecule(jobPath, baseName, 0, 0, 0, extension, baseName)
+
+
+def _AfterSubmission(intent, stalkingSet: set) -> None:
+    # Broadcast before stalking (which can take hours). Every job went through jobs.SubmitJob, so this is the total
+    CheckAndBroadcast(jobs.submittedJobs)
+    if intent.stalk and stalkingSet:
+        jobStalking(stalkingSet, Defaults.stalkDuration, Defaults.stalkFrequency, intent.stalkLoop)
+
+
+# SP, Benchmark and Re-run: load each file's molecule (skipping unusable ones), generate and submit, then broadcast/stalk
+def _GenerateBatch(intent, workflow, coordExtra: str = "") -> None:
     stalkingSet: set = set()
     for jobPath in intent.files:
-        baseName, extension = grabPaths(jobPath)
-        if baseName is None:
-            continue
-        molecule = Molecule(jobPath, baseName, 0, 0, 0, extension, baseName)
+        molecule = _LoadMolecule(jobPath, coordExtra)
+        if molecule is not None:
+            workflow(molecule, intent, stalkingSet)
+    _AfterSubmission(intent, stalkingSet)
+
+
+def _DispatchRun(intent: RunIntent) -> None:
+    stalkingSet: set = set()
+    for molecule in _FileMolecules(intent.files):
         runJob(molecule, intent, stalkingSet)
-    if intent.stalk:
-        jobStalking(stalkingSet, Defaults.stalkDuration, Defaults.stalkFrequency, intent.stalkLoop)
+    _AfterSubmission(intent, stalkingSet)
 
 
 def _DispatchSinglePoint(intent: SinglePointIntent) -> None:
-    stalkingSet: set = set()
-    for jobPath in intent.files:
-        molecule = _LoadMolecule(jobPath)
-        if molecule is None:
-            continue
-        genSinglePoint(molecule, intent, stalkingSet)
-    if intent.stalk:
-        jobStalking(stalkingSet, Defaults.stalkDuration, Defaults.stalkFrequency, intent.stalkLoop)
+    _GenerateBatch(intent, genSinglePoint)
 
 
 def _DispatchBenchmark(intent: BenchmarkIntent) -> None:
     if not Catalog.canBench:
         console.print("[error]Notice: Benchmarking requires at least 2 entries in benchmarkMethods (programs.toml).[/error]")
         return
-    stalkingSet: set = set()
-    for jobPath in intent.files:
-        molecule = _LoadMolecule(jobPath)
-        if molecule is None:
-            continue
-        genBench(molecule, intent, stalkingSet)
-    if intent.stalk:
-        jobStalking(stalkingSet, Defaults.stalkDuration, Defaults.stalkFrequency, intent.stalkLoop)
+    _GenerateBatch(intent, genBench)
 
 
 def _DispatchReRun(intent: ReRunIntent) -> None:
-    stalkingSet: set = set()
-    for jobPath in intent.files:
-        molecule = _LoadMolecule(jobPath, "_failed")
-        if molecule is None:
-            continue
-        genReRun(molecule, intent, stalkingSet)
-    if intent.stalk:
-        jobStalking(stalkingSet, Defaults.stalkDuration, Defaults.stalkFrequency, intent.stalkLoop)
+    _GenerateBatch(intent, genReRun, "_failed")
 
 
 def _DispatchCube(intent: CubeIntent) -> None:
-    for jobPath in intent.files:
-        baseName, extension = grabPaths(jobPath)
-        if baseName is None:
-            continue
-        molecule = Molecule(jobPath, baseName, 0, 0, 0, extension, baseName)
-        if extension == ".chk":
+    for molecule in _FileMolecules(intent.files):
+        if molecule.extensionType == ".chk":
             formCheck(molecule)
         gimmeCubes(molecule, intent)
+    _AfterSubmission(intent, set())
 
 
 # ─── Non-SLURM dispatchers ────────────────────────────────────────────
 
 def _DispatchFormCheck(intent: FormCheckIntent) -> None:
-    for jobPath in intent.files:
-        baseName, extension = grabPaths(jobPath)
-        if baseName is None:
-            continue
-        molecule = Molecule(jobPath, baseName, 0, 0, 0, extension, baseName)
+    for molecule in _FileMolecules(intent.files):
         formCheck(molecule)
 
 

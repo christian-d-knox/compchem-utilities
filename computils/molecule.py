@@ -16,3 +16,7 @@ class Molecule:
         self.rootName = rootName
         # Set by spin.ClassifySpin() in dispatch; read by catalog.RenderRoute()
         self.spinState = spinState
+        # The file this molecule was loaded from. Never mutated, unlike fullPath (the twin of rootName)
+        self.sourcePath = fullPath
+        # The RouteTemplate genFile renders for the current job. Set with every job by fileops.Retarget()
+        self.template = None

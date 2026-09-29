@@ -1,59 +1,42 @@
-import os, time, regex, subprocess
+import time, regex
 
 from .console  import console
 from .defaults import Defaults
-from .catalog  import Catalog, RenderRoute, RouteTemplate
-from .fileops import extensionGetter, fileCreation, MapFile, ExtractRouteLine, IdentifyMethod, IncrementSuffix
-from .intent import BenchmarkIntent, SinglePointIntent, ReRunIntent, CubeIntent
-from .jobs     import genFile, runJob, slurmHandler
+from .catalog  import Catalog, MatchTemplate, RouteTemplate
+from .fileops import extensionGetter, fileCreation, ExtractFrom, ExtractRouteLine, IdentifyMethod, IncrementSuffix, Retarget
+from .actions  import CubeOption
+from .intent import JobIntent, BenchmarkIntent, ReRunIntent, CubeIntent
+from .jobs     import genFile, runJob, slurmHandler, SubmitJob
 from .molecule import Molecule
 from .prompts import AskStr
 
-def genSinglePoint(molecule: Molecule, intent: SinglePointIntent, stalkingSet: set) -> None:
+# Also runs the first job of a benchmark, which passes its BenchmarkIntent (same fields)
+def genSinglePoint(molecule: Molecule, intent: JobIntent, stalkingSet: set) -> None:
     startTime = time.monotonic()
 
-    # Resolve the method index first so extensionGetter uses the correct method
-    if intent.indexOverride != 0:
-        index = intent.indexOverride
-    else:
-        index = 0
-
-    # Update molecule properties
-    molecule.extensionType = extensionGetter(Catalog.methodLine[index])
-    inputFile = fileCreation(molecule.baseName, molecule.extensionType, Defaults.singlePointExtra)
-    molecule.fullPath = inputFile
-    molecule.baseName = molecule.baseName + Defaults.singlePointExtra
+    # The job's name, route template and program, from the method chosen by -ovr
+    Retarget(molecule, molecule.baseName + Defaults.singlePointExtra, Catalog.templates[intent.indexOverride])
 
     # Calls the separate file generation method, feeds directly into runJob. Skip this job if generation failed
-    if genFile(molecule, index, intent):
+    if genFile(molecule, intent):
         runJob(molecule, intent, stalkingSet)
     endTime = time.monotonic()
     totalTime = round(endTime - startTime,2)
     console.print(f"[operation]Total single point time is {totalTime} seconds.[/operation]")
 
 def genBench(molecule: Molecule, intent: BenchmarkIntent, stalkingSet: set) -> None:
-    spIntent = SinglePointIntent(files=intent.files, stalk=intent.stalk, stalkLoop=intent.stalkLoop,
-                                 checkpoint=intent.checkpoint, nbo7=intent.nbo7, indexOverride=intent.indexOverride)
     # First, make the original Single Point
-    genSinglePoint(molecule, spIntent, stalkingSet)
+    genSinglePoint(molecule, intent, stalkingSet)
     # Since methodFile is defined globally, no need to iterate a line to catch-up after genSinglePoint
     startTime = time.monotonic()
-    if intent.indexOverride != 0:
-        indexShift = intent.indexOverride + 1
-    else:
-        indexShift = 1
-    for index in range(indexShift, len(Catalog.methodLine)):
-        molecule.extensionType = extensionGetter(Catalog.methodLine[index])
-        isSMD = regex.search("smd", Catalog.fullMethodLine[index], regex.IGNORECASE)
-        if isSMD:
-            filemaskExtra = f"-{index}-" + str(Catalog.methodLine[index].replace("(", "").replace(")", "")) + f"SMD{Defaults.singlePointExtra}"
-        else:
-            filemaskExtra = f"-{index}-" + str(Catalog.methodLine[index].replace("(", "").replace(")", "")) + f"{Defaults.singlePointExtra}"
-        inputFile = fileCreation(molecule.rootName, molecule.extensionType, filemaskExtra)
-        molecule.fullPath = inputFile
-        molecule.baseName = (molecule.rootName + filemaskExtra)
+    for index in range(intent.indexOverride + 1, len(Catalog.templates)):
+        template = Catalog.templates[index]
+        isSMD = regex.search("smd", template.base, regex.IGNORECASE)
+        methodName = template.method.replace("(", "").replace(")", "")
+        filemaskExtra = f"-{index}-{methodName}{'SMD' if isSMD else ''}{Defaults.singlePointExtra}"
+        Retarget(molecule, molecule.rootName + filemaskExtra, template)
         # Only this benchmark variant is skipped on failure; the molecule's other methods still run
-        if not genFile(molecule, index, intent):
+        if not genFile(molecule, intent):
             continue
         runJob(molecule, intent, stalkingSet)
     endTime = time.monotonic()
@@ -62,51 +45,39 @@ def genBench(molecule: Molecule, intent: BenchmarkIntent, stalkingSet: set) -> N
 
 # Better, interactive implementation of my own gimmeCubesv3
 def gimmeCubes(molecule: Molecule, intent: CubeIntent) -> None:
-    keyWord, queueName, outputName = "", "", ""
+    # cubegen keyword for each cube label (the labels come from programs.toml)
+    keyWords = {Defaults.spinCube: "Spin=SCF", Defaults.denCube: "Density=SCF", Defaults.potCube: "Potential=SCF",
+                Defaults.valenceCube: "MO=Valence"}
     for cubeOption in intent.cubeOptions:
-        match cubeOption.value: # Taken from its Enum
-            case Defaults.spinCube:
-                outputName = fileCreation(molecule.baseName, Defaults.cubeExtension, cubeOption.value)
-                queueName = fileCreation(molecule.baseName, Defaults.queueExtension, cubeOption.value)
-                keyWord = "Spin=SCF"
-            case Defaults.denCube:
-                outputName = fileCreation(molecule.baseName, Defaults.cubeExtension, cubeOption.value)
-                queueName = fileCreation(molecule.baseName, Defaults.queueExtension, cubeOption.value)
-                keyWord = "Density=SCF"
-            case Defaults.potCube:
-                outputName = fileCreation(molecule.baseName, Defaults.cubeExtension, cubeOption.value)
-                queueName = fileCreation(molecule.baseName, Defaults.queueExtension, cubeOption.value)
-                keyWord = "Potential=SCF"
-            case Defaults.valenceCube:
-                outputName = fileCreation(molecule.baseName, Defaults.cubeExtension, cubeOption.value)
-                queueName = fileCreation(molecule.baseName, Defaults.queueExtension, cubeOption.value)
-                keyWord = "MO=Valence"
-            case "Range":
-                if not intent.orbitalRange:
-                    intent.orbitalRange = AskStr("Enter the range of MOs you want printed (e.g. 10-15)")
-                outputName = fileCreation(molecule.baseName, Defaults.cubeExtension, cubeOption.value + intent.orbitalRange)
-                queueName = fileCreation(molecule.baseName, Defaults.queueExtension, cubeOption.value + intent.orbitalRange)
-                keyWord = f"MO={intent.orbitalRange}"
-            case _:
-                console.print(f"[error]Error: Unknown keyword found in keylist for {molecule.baseName} : {cubeOption.value}[/error]")
+        label = cubeOption.value # Taken from its Enum
+        if cubeOption == CubeOption.RANGE:
+            if not intent.orbitalRange:
+                intent.orbitalRange = AskStr("Enter the range of MOs you want printed (e.g. 10-15)")
+            label += intent.orbitalRange
+            keyWord = f"MO={intent.orbitalRange}"
+        elif label in keyWords:
+            keyWord = keyWords[label]
+        else:
+            # e.g. a label renamed in programs.toml no longer matches its CubeOption: skip it rather than crash
+            console.print(f"[error]Error: Unknown keyword found in keylist for {molecule.baseName} : {label}[/error]")
+            continue
+        outputName = fileCreation(molecule.baseName, Defaults.cubeExtension, label)
+        queueName = fileCreation(molecule.baseName, Defaults.queueExtension, label)
 
-        slurmHandler(molecule, queueName, outputName, Defaults.CPU, Defaults.CPU * Defaults.memoryRatio + Defaults.memoryBuffer)
+        slurmHandler(molecule, queueName, outputName, Defaults.CPU,
+                     int(Defaults.CPU * Defaults.memoryRatio + Defaults.memoryBuffer))
 
         with open(queueName,"a") as queueFile:
-            for nonVariantLine in Defaults.gaussianNonVariant:
-                queueFile.write(nonVariantLine)
-
+            queueFile.writelines(Defaults.gaussianNonVariant)
             # Writes the specifics for running the Density Cube
             queueFile.write(f"cubegen 1 {keyWord} {molecule.fullPath} {outputName} 0\n\n")
 
-        subprocess.run(["sbatch", queueName], check=True)
-        #os.remove(queueName)
+        SubmitJob(queueName)
         console.print(f"[good]Submitted cube job {molecule.baseName} {cubeOption.value} to the cluster.[/good]")
 
 # Because jobs don't always work the first time
 def genReRun(molecule: Molecule, intent: ReRunIntent, stalkingSet: set) -> None:
-    with MapFile(molecule.fullPath) as inFile:
-        routeLine = ExtractRouteLine(inFile, molecule.extensionType)
+    routeLine = ExtractFrom(molecule.sourcePath, ExtractRouteLine, molecule.extensionType, empty="")
 
     if not routeLine:
         console.print(f"[error]Could not find route card in {molecule.baseName}. Skipping re-run.[/error]")
@@ -117,32 +88,21 @@ def genReRun(molecule: Molecule, intent: ReRunIntent, stalkingSet: set) -> None:
         console.print(f"[error]Could not identify method in route card for {molecule.baseName}. Skipping re-run.[/error]")
         return
 
+    # The program must be known before matching: the U/RO reference step differs between Gaussian and ORCA
     molecule.extensionType = extensionGetter(methodName)
     # Extracted route cards are already rendered (no tags/groups). Find the benchmark entry that renders to the same
-    # route for THIS molecule's spin state, so its orcablocks tags carry over (before index 0 is overwritten)
-    extractedTokens = routeLine.upper().split()
-    matchedTemplate = next((template for index, template in enumerate(Catalog.templates)
-                            if RenderRoute(index, molecule)[0].upper().split() == extractedTokens), None)
-    if matchedTemplate is None:
+    # route for THIS molecule's spin state, so its orcablocks tags carry over
+    template = MatchTemplate(routeLine, molecule)
+    if template is None:
         # Use the route verbatim. RenderRoute's reference step is idempotent, so no double U prefix
-        matchedTemplate = RouteTemplate(routeLine)
+        template = RouteTemplate(routeLine, method=methodName)
         if molecule.extensionType == Defaults.orcaExtension:
             console.print(f"[info]No benchmarkMethods entry matches the route card of {molecule.baseName}, so no "
                           f"orcablocks.txt blocks will be added to its re-run.[/info]")
-    # Slot 0 is borrowed for this molecule only; restored afterwards so the next molecule in the batch can still
-    # match the original benchmarkMethods[0]
-    originalSlot = (Catalog.templates[0], Catalog.fullMethodLine[0], Catalog.methodLine[0])
-    Catalog.templates[0] = matchedTemplate
-    Catalog.fullMethodLine[0] = matchedTemplate.base
-    Catalog.methodLine[0] = methodName
-    # A re-run of a re-run increments instead of stacking: mol_re -> mol_re2, not mol_re_re
-    molecule.baseName = IncrementSuffix(molecule.baseName, Defaults.reRunExtra)
-    molecule.fullPath = fileCreation(molecule.baseName, molecule.extensionType)
+    # A re-run of a re-run increments instead of stacking: mol_re -> mol_re2, not mol_re_re. The program comes from
+    # the identified method, which a verbatim route's first token may not be
+    Retarget(molecule, IncrementSuffix(molecule.baseName, Defaults.reRunExtra), template, molecule.extensionType)
 
     # Calls the separate file generation method, feeds directly into runJob. Skip this job if generation failed
-    try:
-        generated = genFile(molecule, 0, intent)
-    finally:
-        Catalog.templates[0], Catalog.fullMethodLine[0], Catalog.methodLine[0] = originalSlot
-    if generated:
+    if genFile(molecule, intent):
         runJob(molecule, intent, stalkingSet)

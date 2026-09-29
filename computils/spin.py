@@ -14,10 +14,10 @@ from pathlib import Path
 import regex
 
 from .actions  import SpinState
-from .catalog  import IsKnownMethod
+from .catalog  import MethodKey, SplitReference
 from .console  import console
 from .defaults import Defaults
-from .fileops  import MapFile, FindInMap, ExtractRouteLine, ExtractSpinContamination, HasRestrictedInstability
+from .fileops  import MapFile, HasContent, FindInMap, ExtractRouteLine, ExtractSpinContamination, HasRestrictedInstability
 from .project  import ResolveProjectFile
 
 # Only CSS/OSS can be forced; high-spin states come from the multiplicity
@@ -49,8 +49,8 @@ def _RouteDeclaresBrokenSymmetry(data, extensionType: str) -> str:
         if upperToken in ("UKS", "UHF"):
             return f"route has {token}"
         # Gaussian: U-prefixed known method (e.g. UB3LYP/6-31G(d)), or guess=mix
-        methodPart = upperToken.split("/")[0].replace("(", "").replace(")", "")
-        if methodPart.startswith("U") and IsKnownMethod(methodPart[1:]):
+        found = SplitReference(MethodKey(token))
+        if found and found[0] == "U":
             return f"route has {token.split('/')[0]}"
         if regex.match(r"GUESS[=(]+\(?\s*MIX", upperToken):
             return f"route has {token}"
@@ -85,7 +85,7 @@ def ClassifySpin(sourcePath: Path, rootName: str, multiplicity, extensionType: s
         return SpinState.OPEN, f"multiplicity {multiplicityValue}"
 
     # mmap can't map an empty file; nothing more to learn from it anyway
-    if not sourcePath.is_file() or sourcePath.stat().st_size == 0:
+    if not HasContent(sourcePath):
         return SpinState.CSS, "multiplicity 1"
 
     with MapFile(sourcePath) as data:

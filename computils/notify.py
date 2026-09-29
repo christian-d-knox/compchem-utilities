@@ -83,8 +83,7 @@ def NotifyBroadcast(message: str) -> None:
 
 
 def CheckAndBroadcast(jobCount: int) -> None:
-    if not Defaults.isNotifications:
-        return
+    # NotifyBroadcast checks whether notifications are enabled
     if jobCount >= Defaults.broadcastThreshold:
         NotifyBroadcast(
             f"{jobCount} jobs were just submitted to the queue. "

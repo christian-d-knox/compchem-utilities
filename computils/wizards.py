@@ -12,12 +12,16 @@ def NotificationSetup() -> None:
     console.print("[info]CompUtils can send you Telegram notifications when your jobs finish, and alerts the group when "
                   "someone submits a large batch of jobs to the queue using its utilities.[/info]")
 
+    # Every early exit saves what was set so far, then closes the section
+    def StopSetup(*lines: str) -> None:
+        Defaults._SaveSection("notifications.toml")
+        for line in lines:
+            print(line)
+        print("=" * 55)
+
     choice = AskBool("  Enable notifications?", "Y")
     if not choice:
-        Defaults._SaveSection("notifications.toml")
-        print("  Notifications disabled.")
-        print("  Re-run setup or edit notifications.toml to enable later.")
-        print("=" * 55)
+        StopSetup("  Notifications disabled.", "  Re-run setup or edit notifications.toml to enable later.")
         return
 
     Defaults.isNotifications = True
@@ -27,16 +31,12 @@ def NotificationSetup() -> None:
     botToken = input("  Bot token: ").strip()
 
     if botToken.lower() == "q":
-        Defaults._SaveSection("notifications.toml")
-        print("  Setup paused. Access later by calling with the --first flag.")
-        print("=" * 55)
+        StopSetup("  Setup paused. Access later by calling with the --first flag.")
         return
     if ":" not in botToken:
         console.print("[warning]  Warning: that doesn't look like a valid bot token[/warning]")
         print("  (expected format: 123456789:ABCdef...).")
-        Defaults._SaveSection("notifications.toml")
-        print("  Setup cancelled. Access later by calling with the --first flag.")
-        print("=" * 55)
+        StopSetup("  Setup cancelled. Access later by calling with the --first flag.")
         return
 
     Defaults.botToken = botToken
@@ -82,13 +82,10 @@ def ColorSetup() -> None:
     console.print(Panel("For Windows users, this means high color is unavailable in PuTTY. Consider swapping "
                         "to something that supports truecolor, like Windows Terminal.", style="warning"))
     hexColor = AskBool("Would you like to operate in high color mode?", "Y")
-    if  not hexColor:
-        Defaults.colorMode = "lowColor"
-        Defaults._SaveSection("qol.toml")
-        return
-
-    Defaults.colorMode = "hexCode"
+    Defaults.colorMode = "hexCode" if hexColor else "lowColor"
     Defaults._SaveSection("qol.toml")
+    if not hexColor:
+        return
     if os.environ.get("COLORTERM","").lower() in ("truecolor", "24bit"):
         console.print("[good]High color environment variable already detected! Enjoy![/good]")
     else:
@@ -103,22 +100,17 @@ def ColorSetup() -> None:
 
 def firstTimeSetup() -> None:
     systemType = AskStr("Enter the name of the HPC cluster you are using (LOCAL_CLUSTER, Expanse, Bridges2, Stampede3)")
-    match systemType:
-        case "LOCAL_CLUSTER":
-            Defaults.hpcType, Defaults.partition, Defaults.cluster = "LOCAL_CLUSTER", "REDACTED", "smp"
-            Defaults.submissionList = LOCAL_CLUSTERSubmission.submissionList
-        case "Bridges2":
-            Defaults.hpcType, Defaults.partition = "Bridges2", "RM-shared"
-            Defaults.submissionList = Bridges2Submission.submissionList
-            Defaults.memoryRatio, Defaults.memoryBuffer, Defaults.highMemoryRatio = 2, 0, 2
-        case "Expanse":
-            console.print("[error]CompUtils is not supported on the Expanse architecture due to being outdated and messy. Have a good day.[/error]")
-        case "Stampede3":
-            Defaults.hpcType, Defaults.partition = "Stampede3", "icx"
-            Defaults.CPU, Defaults.memoryRatio, Defaults.memoryBuffer, Defaults.highMemoryRatio = 80, 200/80, 0, 200/80
-            Defaults.submissionList = Stampede3Submission.submissionList
-        case _:
-            console.print("[error]Unknown HPC architecture input. Aborting.[/error]")
-            return
+    if systemType == "Expanse":
+        console.print("[error]CompUtils is not supported on the Expanse architecture due to being outdated and messy. Have a good day.[/error]")
+        return
+    # Each cluster's header and settings live on its Submission class (defaults.py)
+    submission = next((option for option in (LOCAL_CLUSTERSubmission, Bridges2Submission, Stampede3Submission)
+                       if option.hpcType == systemType), None)
+    if submission is None:
+        console.print("[error]Unknown HPC architecture input. Aborting.[/error]")
+        return
+    Defaults.hpcType, Defaults.submissionList = submission.hpcType, submission.submissionList
+    for key, value in submission.settings.items():
+        setattr(Defaults, key, value)
     Defaults._SaveSection("slurm.toml")
     NotificationSetup()
