@@ -3,7 +3,7 @@ import os, time, regex, subprocess
 from .console  import console
 from .defaults import Defaults
 from .catalog  import Catalog, RenderRoute, RouteTemplate
-from .fileops import extensionGetter, fileCreation, MapFile, ExtractRouteLine, IdentifyMethod
+from .fileops import extensionGetter, fileCreation, MapFile, ExtractRouteLine, IdentifyMethod, IncrementSuffix
 from .intent import BenchmarkIntent, SinglePointIntent, ReRunIntent, CubeIntent
 from .jobs     import genFile, runJob, slurmHandler
 from .molecule import Molecule
@@ -132,9 +132,9 @@ def genReRun(molecule: Molecule, intent: ReRunIntent, stalkingSet: set) -> None:
     Catalog.templates[0] = matchedTemplate
     Catalog.fullMethodLine[0] = matchedTemplate.base
     Catalog.methodLine[0] = methodName
-    inputFile = fileCreation(molecule.baseName, molecule.extensionType, Defaults.reRunExtra)
-    molecule.fullPath = inputFile
-    molecule.baseName = molecule.baseName + Defaults.reRunExtra
+    # A re-run of a re-run increments instead of stacking: mol_re -> mol_re2, not mol_re_re
+    molecule.baseName = IncrementSuffix(molecule.baseName, Defaults.reRunExtra)
+    molecule.fullPath = fileCreation(molecule.baseName, molecule.extensionType)
 
     # Calls the separate file generation method, feeds directly into runJob. Skip this job if generation failed
     if genFile(molecule, 0, intent):
