@@ -24,6 +24,7 @@ def BuildParser() -> argparse.ArgumentParser:
     actionGroup.add_argument('-gv', '--goodvibes', action='store_true', help="Run GoodVibes interactively, then convert to xlsx.")
     actionGroup.add_argument('-first','--first', action='store_true', help="Re-run first-time setup.")
     actionGroup.add_argument('-up', '--update', action='store_true', help="Update CompUtils from GitHub.")
+    actionGroup.add_argument('-init', '--init', action='store_true', help="Mark the CWD as a project root.")
 
     # Modifiers (apply to whichever action was chosen, where relevant)
     parser.add_argument('-st', '--stalk', action='store_true', help="Enable job stalking.")
@@ -56,6 +57,7 @@ def ParseCLI(argv: list[str]) -> Intent:
     elif args.goodvibes:   draft.action = Action.GOODVIBES
     elif args.first:       draft.action = Action.FIRST_TIME_SETUP
     elif args.update:      draft.action = Action.UPDATE
+    elif args.init:        draft.action = Action.INIT_PROJECT
     else:
         console.print("[error]No action specified. Run `cu --help` for usage.[/error]")
         raise SystemExit(2)

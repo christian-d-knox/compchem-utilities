@@ -104,8 +104,9 @@ def ExtractRouteLine(data, extensionType: str) -> str:
         return ""
     data.seek(routeMatch.start())
     routeLine = data.readline().decode().strip()
-    # Strip the leading marker (e.g. '#p', '#', '!')
-    routeLine = routeLine.lstrip("#pPnN! ").strip()
+    # Strip only the leading marker ('#', '!', or a '#p'/'#n'/'#t' print-level flag). The flag letter must be followed by
+    # whitespace, so method names starting with P/N/T (e.g. '#p PBEPBE', '#PBEPBE', '! PBE0') survive intact
+    routeLine = regex.sub(r"^(?:#[pPnNtT](?=\s|$)|#|!)\s*", "", routeLine).strip()
     return routeLine
 
 
@@ -115,12 +116,16 @@ def IdentifyMethod(routeLine: str) -> str:
     Returns the method name if found, or empty string if no match.
     """
     for token in routeLine.split():
+        # Gaussian joins method and basis as 'method/basis' (e.g. PBEPBE/6-31G(d)); only the method part can match
+        methodPart = token.split("/")[0]
         # Strip parentheses for matching — e.g. DLPNO-CCSD(T) may appear with basis set syntax
-        cleanToken = token.replace("(", "").replace(")", "")
-        for method in Catalog.methodList:
-            cleanMethod = method.replace("(", "").replace(")", "")
-            if cleanToken.upper() == cleanMethod.upper():
-                return method
+        cleanToken = methodPart.replace("(", "").replace(")", "").upper()
+        # Exact name first, then with a Gaussian reference prefix removed (UB3LYP, ROB3LYP, RB3LYP -> B3LYP)
+        candidates = [cleanToken] + [cleanToken[len(prefix):] for prefix in ("RO", "U", "R") if cleanToken.startswith(prefix)]
+        for candidate in candidates:
+            for method in Catalog.methodList:
+                if candidate == method.replace("(", "").replace(")", "").upper():
+                    return method
     return ""
 
 def ExtractStalking(data, extractType: str) -> Any:
@@ -205,6 +210,65 @@ def ExtractResources(data, extensionType: str) -> tuple[int, int]:
             jobRam = cpus * Defaults.memoryRatio + Defaults.memoryBuffer
 
     return cpus, jobRam
+
+def ExtractSpinContamination(data) -> float | None:
+    """Return the LAST reported <S**2> in a Gaussian or ORCA output, or None if the file reports none."""
+    for pattern in (r"S\*\*2 before annihilation\s+(-?[\d.]+)",           # Gaussian
+                    r"Expectation value of <S\*\*2>\s*:\s*(-?[\d.]+)"):    # ORCA
+        spinMatch = FindInMap(data, pattern, reverse=True)
+        if spinMatch:
+            return float(spinMatch.group(1).decode())
+    return None
+
+def HasRestrictedInstability(data) -> bool:
+    """Gaussian stable= output: 'The wavefunction has an RHF -> UHF instability.'"""
+    return FindInMap(data, r"R\w*\s*->\s*U\w*\s+instability", ignoreCase=True) is not None
+
+# CompUtils writes these itself in genFile(), so user copies would conflict
+RESERVED_ORCA_BLOCKS = {"pal", "maxcore"}
+
+def ExtractOrcaBlocks(data) -> dict[str, str]:
+    """Extract tagged %blocks from an orcablocks.txt mmap data stream.
+
+    A block starts at a column-0 '%' line and runs until the next column-0 '%' line, '# @tag' directive, or EOF.
+    Its tag is the preceding '# @tag NAME' directive if present, else the block name. Tags are lowercased.
+    Trailing blank/comment lines are trimmed. No 'end' counting, so nested ends (e.g. %geom constraints) are safe.
+    """
+    blocks: dict[str, str] = {}
+    pendingTag = ""
+    currentTag, currentLines = "", []
+
+    def CloseBlock() -> None:
+        while currentLines and (not currentLines[-1].strip() or currentLines[-1].lstrip().startswith("#")):
+            currentLines.pop()
+        if not currentTag:
+            return
+        if currentTag in blocks:
+            console.print(f"[error]Duplicate tag '{currentTag}' in orcablocks.txt. Keeping the first definition.[/error]")
+            return
+        blocks[currentTag] = "".join(currentLines)
+
+    data.seek(0)
+    for rawLine in iter(data.readline, b""):
+        line = rawLine.decode().replace("\r\n", "\n")
+        tagMatch = regex.match(r"#\s*@tag\s+([\w-]+)", line)
+        if tagMatch or line.startswith("%"):
+            CloseBlock()
+            currentTag, currentLines = "", []
+        if tagMatch:
+            pendingTag = tagMatch.group(1).lower()
+            continue
+        if line.startswith("%"):
+            blockName = regex.match(r"%(\w*)", line).group(1).lower()
+            if blockName in RESERVED_ORCA_BLOCKS:
+                console.print(f"[warning]orcablocks.txt: %{blockName} is written by CompUtils. Ignoring this block.[/warning]")
+                pendingTag = ""
+                continue
+            currentTag, pendingTag = pendingTag or blockName, ""
+        if currentTag:
+            currentLines.append(line)
+    CloseBlock()
+    return blocks
 
 # Finally handle filename creation in one place to stop the infinite copypasta
 def fileCreation(baseName: str, extensionType: str, extra: str = "") -> Path:

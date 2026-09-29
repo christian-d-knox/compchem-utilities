@@ -2,8 +2,11 @@
 # This allows for file name, extension, charge, multiplicity, and coordinate list to be edited and stored on a per-complex basis
 from pathlib import Path
 
+from .actions import SpinState
+
 class Molecule:
-    def __init__(self, fullPath: Path, baseName: str, charge: str|int, multiplicity: str|int, coordinateList: list[str]|int, extensionType: str, rootName: str):
+    def __init__(self, fullPath: Path, baseName: str, charge: str|int, multiplicity: str|int, coordinateList: list[str]|int, extensionType: str, rootName: str,
+                 spinState: SpinState = SpinState.CSS):
         self.fullPath = fullPath
         self.baseName = baseName
         self.charge = charge
@@ -11,3 +14,5 @@ class Molecule:
         self.coordinateList = coordinateList
         self.extensionType = extensionType
         self.rootName = rootName
+        # Set by spin.ClassifySpin() in dispatch; read by catalog.RenderRoute()
+        self.spinState = spinState

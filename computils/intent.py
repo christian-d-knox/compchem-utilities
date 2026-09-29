@@ -127,6 +127,12 @@ class UpdateIntent(Intent):
     branch: str = "main"
 
 
+@dataclass
+class InitProjectIntent(Intent):
+    """`cu -init` — mark the CWD as a project root."""
+    pass
+
+
 # ─── Mutable draft (TUI assembles this progressively) ──────────────────
 # Draft containing ALL options. This is what a parser will add arguments to, before Validating and Finalizing
 # to a specific Intent type as shown above
@@ -241,6 +247,8 @@ class IntentDraft:
                 return FirstTimeSetupIntent()
             case Action.UPDATE:
                 return UpdateIntent(branch=self.updateBranch)
+            case Action.INIT_PROJECT:
+                return InitProjectIntent()
             case _:
                 raise ValueError(f"Unknown action: {self.action}")
 
@@ -319,6 +327,15 @@ if __name__ == "__main__":
     assert intent.quasiharmonic is True
     assert intent.freqCutoff == 100.0
     print("Test 6 (GOODVIBES with options): PASS")
+
+    # Test 7: Init project intent needs no files
+    draft = IntentDraft()
+    draft.action = Action.INIT_PROJECT
+    errors = draft.Validate()
+    assert errors == [], f"Test 7 errors: {errors}"
+    intent = draft.Finalize()
+    assert isinstance(intent, InitProjectIntent)
+    print("Test 7 (INIT_PROJECT intent): PASS")
 
     print("=" * 50)
     print("All smoke tests passed.")

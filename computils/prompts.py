@@ -55,3 +55,17 @@ def AskStr(prompt: str, default = None, style: str = "prompt") -> str:
             console.print("[warning]Please provide an integer.[/warning]")
             continue
         return response
+
+def AskChoice(prompt: str, options: list[str], default: int = 0, style: str = "prompt") -> int | None:
+    """Ask the user to pick one option from a numbered list. Returns its index, or None if they enter q."""
+    for index, option in enumerate(options):
+        console.print(f"  [{style}]\\[{index}][/{style}] {escape(option)}")
+    while True:
+        response = console.input(f"[{style}]{prompt} ({default}, q to cancel): [/{style}]").strip().lower()
+        if response == "":
+            return default
+        if response == "q":
+            return None
+        if response.isdigit() and int(response) < len(options):
+            return int(response)
+        console.print(f"[warning]Please enter a number from 0 to {len(options) - 1}, or q.[/warning]")
