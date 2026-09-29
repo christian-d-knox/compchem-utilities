@@ -45,10 +45,21 @@ def Dispatch(intent: Intent) -> None:
 
 # ─── SLURM-submitting dispatchers ─────────────────────────────────────
 
-# Spin state is classified once per molecule, from its source file, before any route is rendered
-def _ClassifyMolecule(molecule: Molecule, jobPath, extension: str) -> None:
+# Shared by the dispatchers that generate new inputs. Returns None (skip this file) if it has no usable geometry
+def _LoadMolecule(jobPath, coordExtra: str = "") -> Molecule | None:
+    baseName, extension = grabPaths(jobPath)
+    if baseName is None:
+        return None
+    charge, multiplicity = gaussianChargeFinder(jobPath)
+    coordList = getCoords(jobPath, fileCreation(baseName, Defaults.coordExtension, coordExtra))
+    if not coordList:
+        console.print(f"[error]No coordinates found in {jobPath}. Skipping {baseName}.[/error]")
+        return None
+    molecule = Molecule(jobPath, baseName, charge, multiplicity, coordList, extension, baseName)
+    # Spin state is classified once per molecule, from its source file, before any route is rendered
     molecule.spinState, reason = ClassifySpin(jobPath, molecule.rootName, molecule.multiplicity, extension)
     console.print(f"[info]{molecule.rootName}: {molecule.spinState.name} ({reason})[/info]")
+    return molecule
 
 
 def _DispatchRun(intent: RunIntent) -> None:
@@ -67,13 +78,9 @@ def _DispatchRun(intent: RunIntent) -> None:
 def _DispatchSinglePoint(intent: SinglePointIntent) -> None:
     stalkingSet: set = set()
     for jobPath in intent.files:
-        baseName, extension = grabPaths(jobPath)
-        if baseName is None:
+        molecule = _LoadMolecule(jobPath)
+        if molecule is None:
             continue
-        charge, multiplicity = gaussianChargeFinder(jobPath)
-        coordList = getCoords(jobPath, fileCreation(baseName, Defaults.coordExtension))
-        molecule = Molecule(jobPath, baseName, charge, multiplicity, coordList, extension, baseName)
-        _ClassifyMolecule(molecule, jobPath, extension)
         genSinglePoint(molecule, intent, stalkingSet)
     if intent.stalk:
         jobStalking(stalkingSet, Defaults.stalkDuration, Defaults.stalkFrequency, intent.stalkLoop)
@@ -85,13 +92,9 @@ def _DispatchBenchmark(intent: BenchmarkIntent) -> None:
         return
     stalkingSet: set = set()
     for jobPath in intent.files:
-        baseName, extension = grabPaths(jobPath)
-        if baseName is None:
+        molecule = _LoadMolecule(jobPath)
+        if molecule is None:
             continue
-        charge, multiplicity = gaussianChargeFinder(jobPath)
-        coordList = getCoords(jobPath, fileCreation(baseName, Defaults.coordExtension))
-        molecule = Molecule(jobPath, baseName, charge, multiplicity, coordList, extension, baseName)
-        _ClassifyMolecule(molecule, jobPath, extension)
         genBench(molecule, intent, stalkingSet)
     if intent.stalk:
         jobStalking(stalkingSet, Defaults.stalkDuration, Defaults.stalkFrequency, intent.stalkLoop)
@@ -100,13 +103,9 @@ def _DispatchBenchmark(intent: BenchmarkIntent) -> None:
 def _DispatchReRun(intent: ReRunIntent) -> None:
     stalkingSet: set = set()
     for jobPath in intent.files:
-        baseName, extension = grabPaths(jobPath)
-        if baseName is None:
+        molecule = _LoadMolecule(jobPath, "_failed")
+        if molecule is None:
             continue
-        charge, multiplicity = gaussianChargeFinder(jobPath)
-        coordList = getCoords(jobPath, fileCreation(baseName, Defaults.coordExtension, "_failed"))
-        molecule = Molecule(jobPath, baseName, charge, multiplicity, coordList, extension, baseName)
-        _ClassifyMolecule(molecule, jobPath, extension)
         genReRun(molecule, intent, stalkingSet)
     if intent.stalk:
         jobStalking(stalkingSet, Defaults.stalkDuration, Defaults.stalkFrequency, intent.stalkLoop)

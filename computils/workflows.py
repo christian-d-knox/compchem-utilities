@@ -129,6 +129,9 @@ def genReRun(molecule: Molecule, intent: ReRunIntent, stalkingSet: set) -> None:
         if molecule.extensionType == Defaults.orcaExtension:
             console.print(f"[info]No benchmarkMethods entry matches the route card of {molecule.baseName}, so no "
                           f"orcablocks.txt blocks will be added to its re-run.[/info]")
+    # Slot 0 is borrowed for this molecule only; restored afterwards so the next molecule in the batch can still
+    # match the original benchmarkMethods[0]
+    originalSlot = (Catalog.templates[0], Catalog.fullMethodLine[0], Catalog.methodLine[0])
     Catalog.templates[0] = matchedTemplate
     Catalog.fullMethodLine[0] = matchedTemplate.base
     Catalog.methodLine[0] = methodName
@@ -137,5 +140,9 @@ def genReRun(molecule: Molecule, intent: ReRunIntent, stalkingSet: set) -> None:
     molecule.fullPath = fileCreation(molecule.baseName, molecule.extensionType)
 
     # Calls the separate file generation method, feeds directly into runJob. Skip this job if generation failed
-    if genFile(molecule, 0, intent):
+    try:
+        generated = genFile(molecule, 0, intent)
+    finally:
+        Catalog.templates[0], Catalog.fullMethodLine[0], Catalog.methodLine[0] = originalSlot
+    if generated:
         runJob(molecule, intent, stalkingSet)

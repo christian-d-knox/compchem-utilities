@@ -2,7 +2,7 @@
 import sys
 from .defaults import Defaults
 from .catalog  import Catalog
-from .console  import ApplyTheme
+from .console  import ApplyTheme, console
 from .project  import LoadProjectConfig
 
 
@@ -27,7 +27,18 @@ def Main() -> None:
     from .cli   import ParseCLI
     from .dispatch import Dispatch
 
-    intent = ParseCLI(sys.argv[1:])
+    argv = sys.argv[1:]
+    if argv in (["-tui"], ["--tui"]) or (not argv and Defaults.bareCommandOpensTUI):
+        # The TUI only builds the Intent; it then runs here exactly as a CLI invocation would
+        from .tui import RunTUI
+        intent = RunTUI()
+        if intent is None:
+            return
+    elif "-tui" in argv or "--tui" in argv:
+        console.print("[error]-tui cannot be combined with any other flag.[/error]")
+        raise SystemExit(2)
+    else:
+        intent = ParseCLI(argv)
     Dispatch(intent)
 
 

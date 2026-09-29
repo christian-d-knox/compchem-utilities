@@ -25,6 +25,8 @@ def BuildParser() -> argparse.ArgumentParser:
     actionGroup.add_argument('-first','--first', action='store_true', help="Re-run first-time setup.")
     actionGroup.add_argument('-up', '--update', action='store_true', help="Update CompUtils from GitHub.")
     actionGroup.add_argument('-init', '--init', action='store_true', help="Mark the CWD as a project root.")
+    # Handled in Main() before parsing; listed here for --help and so argparse rejects it alongside another action
+    actionGroup.add_argument('-tui', '--tui', action='store_true', help="Open the TUI. Cannot be combined with any other flag.")
 
     # Modifiers (apply to whichever action was chosen, where relevant)
     parser.add_argument('-st', '--stalk', action='store_true', help="Enable job stalking.")
