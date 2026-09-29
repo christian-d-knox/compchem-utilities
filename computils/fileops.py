@@ -418,6 +418,14 @@ def fileCreation(baseName: str, extensionType: str, extra: str = "") -> Path:
         return Path(baseName + extra + extensionType)
     return Path(baseName + extensionType)
 
+# Appends a suffix, or bumps its counter if the name already ends in it: mol -> mol_re -> mol_re2 -> mol_re3
+def IncrementSuffix(baseName: str, extra: str) -> str:
+    suffixMatch = regex.fullmatch(rf"(.*){regex.escape(extra)}(\d*)", baseName)
+    if suffixMatch is None:
+        return baseName + extra
+    count = int(suffixMatch.group(2) or 1) + 1
+    return f"{suffixMatch.group(1)}{extra}{count}"
+
 # Formats checkpoints automatically
 def formCheck(molecule: Molecule) -> None:
     subprocess.run(["bash", "-l", "-c", f"module load gaussian && formchk {molecule.fullPath}"], check=True)
