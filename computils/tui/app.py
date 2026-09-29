@@ -33,8 +33,12 @@ class CompUtilsApp(App):
     #body { height: 1fr; }
     #left { width: 26; }
     #left Collapsible { padding: 0; }
-    #actions { height: auto; max-height: 14; }
-    #folders { height: auto; max-height: 12; }
+    #actions { height: auto; }
+    /* Folders takes whatever height Actions leaves (all of it when Actions is collapsed) */
+    #folders-panel { height: 1fr; }
+    #folders-panel > Contents { height: 1fr; }
+    #folders-panel.-collapsed { height: auto; }
+    #folders { height: 1fr; min-height: 4; }
     #right { width: 1fr; }
     #files-pane { height: 1fr; border: round $secondary; }
     #files { height: 1fr; border: none; }
