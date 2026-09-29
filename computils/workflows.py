@@ -2,7 +2,7 @@ import os, time, regex, subprocess
 
 from .console  import console
 from .defaults import Defaults
-from .catalog  import Catalog
+from .catalog  import Catalog, RenderRoute, RouteTemplate
 from .fileops import extensionGetter, fileCreation, MapFile, ExtractRouteLine, IdentifyMethod
 from .intent import BenchmarkIntent, SinglePointIntent, ReRunIntent, CubeIntent
 from .jobs     import genFile, runJob, slurmHandler
@@ -24,9 +24,9 @@ def genSinglePoint(molecule: Molecule, intent: SinglePointIntent, stalkingSet: s
     molecule.fullPath = inputFile
     molecule.baseName = molecule.baseName + Defaults.singlePointExtra
 
-    # Calls the separate file generation method, feeds directly into runJob
-    genFile(molecule, index, intent)
-    runJob(molecule, intent, stalkingSet)
+    # Calls the separate file generation method, feeds directly into runJob. Skip this job if generation failed
+    if genFile(molecule, index, intent):
+        runJob(molecule, intent, stalkingSet)
     endTime = time.monotonic()
     totalTime = round(endTime - startTime,2)
     console.print(f"[operation]Total single point time is {totalTime} seconds.[/operation]")
@@ -52,7 +52,9 @@ def genBench(molecule: Molecule, intent: BenchmarkIntent, stalkingSet: set) -> N
         inputFile = fileCreation(molecule.rootName, molecule.extensionType, filemaskExtra)
         molecule.fullPath = inputFile
         molecule.baseName = (molecule.rootName + filemaskExtra)
-        genFile(molecule, index, intent)
+        # Only this benchmark variant is skipped on failure; the molecule's other methods still run
+        if not genFile(molecule, index, intent):
+            continue
         runJob(molecule, intent, stalkingSet)
     endTime = time.monotonic()
     totalTime = round(endTime - startTime,2)
@@ -115,13 +117,25 @@ def genReRun(molecule: Molecule, intent: ReRunIntent, stalkingSet: set) -> None:
         console.print(f"[error]Could not identify method in route card for {molecule.baseName}. Skipping re-run.[/error]")
         return
 
-    Catalog.fullMethodLine[0] = routeLine
-    Catalog.methodLine[0] = methodName
     molecule.extensionType = extensionGetter(methodName)
+    # Extracted route cards are already rendered (no tags/groups). Find the benchmark entry that renders to the same
+    # route for THIS molecule's spin state, so its orcablocks tags carry over (before index 0 is overwritten)
+    extractedTokens = routeLine.upper().split()
+    matchedTemplate = next((template for index, template in enumerate(Catalog.templates)
+                            if RenderRoute(index, molecule)[0].upper().split() == extractedTokens), None)
+    if matchedTemplate is None:
+        # Use the route verbatim. RenderRoute's reference step is idempotent, so no double U prefix
+        matchedTemplate = RouteTemplate(routeLine)
+        if molecule.extensionType == Defaults.orcaExtension:
+            console.print(f"[info]No benchmarkMethods entry matches the route card of {molecule.baseName}, so no "
+                          f"orcablocks.txt blocks will be added to its re-run.[/info]")
+    Catalog.templates[0] = matchedTemplate
+    Catalog.fullMethodLine[0] = matchedTemplate.base
+    Catalog.methodLine[0] = methodName
     inputFile = fileCreation(molecule.baseName, molecule.extensionType, Defaults.reRunExtra)
     molecule.fullPath = inputFile
     molecule.baseName = molecule.baseName + Defaults.reRunExtra
 
-    # Calls the separate file generation method, feeds directly into runJob
-    genFile(molecule, 0, intent)
-    runJob(molecule, intent, stalkingSet)
+    # Calls the separate file generation method, feeds directly into runJob. Skip this job if generation failed
+    if genFile(molecule, 0, intent):
+        runJob(molecule, intent, stalkingSet)

@@ -65,6 +65,7 @@ def writeToml(configDir: Path, filename: str, content: str) -> None:
 
 class Defaults:
     binDirectory = Path("~/bin").expanduser()
+    projectMarker = ".computils"
     # Ordinary job defaults
     CPU = 12
     memoryRatio = 2
@@ -87,6 +88,9 @@ class Defaults:
     targetProgram = ["G16","G16","G16","G16","G16","G16","O","G16"]
     # Benchmark suite route cards (one complete route card per entry)
     benchmarkMethods = ["M062X 6-311+G(d,p)"]
+    # Open-shell handling
+    openShellReference = "U"
+    ossSpinThreshold = 0.1
     # Optional job keylist data
     nboKeylist = "$NBO STERIC PLOT"
     mixedBasisVariants = ["Gen", "GenECP", "gen", "genecp"]
@@ -123,7 +127,7 @@ class Defaults:
     # What files contain what keys
     _FILE_GROUPS: dict[str, list[str]] = {
         "paths.toml": [
-            "binDirectory",
+            "binDirectory", "projectMarker",
         ],
         "slurm.toml": [
             "CPU", "memoryRatio", "highMemoryRatio", "memoryBuffer",
@@ -133,6 +137,7 @@ class Defaults:
         "programs.toml": [
             "methodNames", "targetProgram",
             "benchmarkMethods",
+            "openShellReference", "ossSpinThreshold",
             "nboKeylist", "mixedBasisVariants",
             "potCube", "denCube", "valenceCube", "spinCube",
             "coreLineVariants", "ramLineVariants", "terminationVariants",
@@ -178,6 +183,8 @@ class Defaults:
     # Keys without an entry here get no comment.
     _COMMENTS: dict[str, str] = {
         "binDirectory": "Directory containing CompUtils executables and config files.",
+        "projectMarker": "Name of the directory that marks a project root; CompUtils searches upward from the CWD for it."
+            "\n# Renaming this orphans existing markers until they are renamed to match.",
         "CPU": "Number of CPU cores to request per job.",
         "memoryRatio": "Memory-to-CPU ratio for standard jobs (GB per core).",
         "highMemoryRatio": "Memory-to-CPU ratio for high-memory jobs, e.g. DLPNO (GB per core).",
@@ -191,7 +198,13 @@ class Defaults:
         "submissionList": "SLURM header lines for job submission. Set automatically by hpcType.",
         "methodNames": "Ordered list of known method names. Index must match targetProgram.",
         "targetProgram": "Program that runs methodNames[i]. Must be the same length as methodNames.",
-        "benchmarkMethods": "Benchmark suite: each entry is a COMPLETE route card (method + basis + keywords).\n# Entry 0 is also the default for -sp. Add one entry per line you want benchmarked.",
+        "benchmarkMethods": "Benchmark suite: each entry is a COMPLETE route card (method + basis + keywords).\n# Entry 0 is also the default for -sp. Add one entry per line you want benchmarked."
+            "\n# ORCA only: {tag} tokens (e.g. {cpcm} {tddft}) pull matching %blocks from the project's orcablocks.txt."
+            "\n# Tags are removed from the route card before it is written to the input file."
+            "\n# Spin groups: [selectors: keywords {tags}] apply only to matching molecules, on top of the base route."
+            "\n# Selectors: css, oss, open (oss or multiplicity > 1), doublet..septet, m2..m7. e.g. [oss: guess=mix stable=opt]",
+        "openShellReference": "Reference for open-shell species: \"U\" (default) or \"RO\". OSS (broken-symmetry singlets) always use U.",
+        "ossSpinThreshold": "<S**2> above which a multiplicity-1 output is classified as an open-shell singlet (OSS).",
         "nboKeylist": "NBO keylist string appended to relevant Gaussian16 jobs.",
         "mixedBasisVariants": "Basis set keylist indicating a mixed/custom basis is in use.",
         "potCube": "Cube file label for electrostatic potential.",
@@ -223,6 +236,7 @@ class Defaults:
     # and coerce values loaded from user-editable TOML files.
     _TYPES: dict[str, type] = {
         "binDirectory": str,
+        "projectMarker": str,
         "CPU": int,
         "memoryRatio": int,
         "highMemoryRatio": int,
@@ -237,6 +251,8 @@ class Defaults:
         "methodNames": list,
         "targetProgram": list,
         "benchmarkMethods": list,
+        "openShellReference": str,
+        "ossSpinThreshold": float,
         "nboKeylist": str,
         "mixedBasisVariants": list,
         "potCube": str,
@@ -399,6 +415,11 @@ class Defaults:
 
     @classmethod
     def _Validate(cls) -> None:
+        if cls.openShellReference.upper() not in ("U", "RO"):
+            console.print(f"[warning]\\[config] openShellReference must be \"U\" or \"RO\", got {cls.openShellReference!r}. "
+                          "Falling back to \"U\".[/warning]")
+            cls.openShellReference = "U"
+        cls.openShellReference = cls.openShellReference.upper()
         if len(cls.hpcType) == 0:
             #firstTimeSetup()
             cls.needsFirstTimeSetup = True

@@ -14,7 +14,7 @@ from .intent    import (
     Intent,
     RunIntent, SinglePointIntent, BenchmarkIntent, ReRunIntent,
     CubeIntent, FormCheckIntent, ExcelIntent, GoodVibesIntent,
-    FirstTimeSetupIntent, UpdateIntent,
+    FirstTimeSetupIntent, UpdateIntent, InitProjectIntent,
 )
 from .fileops   import grabPaths, gaussianChargeFinder, formCheck, getCoords, fileCreation
 from .jobs      import runJob
@@ -22,6 +22,7 @@ from .workflows import genBench, genSinglePoint, genReRun, gimmeCubes
 from .analysis  import goodVibesProcessor
 from .notify    import CheckAndBroadcast
 from .stalk     import jobStalking
+from .spin      import ClassifySpin
 
 
 def Dispatch(intent: Intent) -> None:
@@ -37,11 +38,18 @@ def Dispatch(intent: Intent) -> None:
         case GoodVibesIntent():       _DispatchGoodVibes(intent)
         case FirstTimeSetupIntent():  _DispatchFirstTimeSetup(intent)
         case UpdateIntent():          _DispatchUpdate(intent)
+        case InitProjectIntent():     _DispatchInitProject(intent)
         case _:
             raise ValueError(f"Unknown intent: {type(intent).__name__}")
 
 
 # ─── SLURM-submitting dispatchers ─────────────────────────────────────
+
+# Spin state is classified once per molecule, from its source file, before any route is rendered
+def _ClassifyMolecule(molecule: Molecule, jobPath, extension: str) -> None:
+    molecule.spinState, reason = ClassifySpin(jobPath, molecule.rootName, molecule.multiplicity, extension)
+    console.print(f"[info]{molecule.rootName}: {molecule.spinState.name} ({reason})[/info]")
+
 
 def _DispatchRun(intent: RunIntent) -> None:
     CheckAndBroadcast(len(intent.files))
@@ -65,6 +73,7 @@ def _DispatchSinglePoint(intent: SinglePointIntent) -> None:
         charge, multiplicity = gaussianChargeFinder(jobPath)
         coordList = getCoords(jobPath, fileCreation(baseName, Defaults.coordExtension))
         molecule = Molecule(jobPath, baseName, charge, multiplicity, coordList, extension, baseName)
+        _ClassifyMolecule(molecule, jobPath, extension)
         genSinglePoint(molecule, intent, stalkingSet)
     if intent.stalk:
         jobStalking(stalkingSet, Defaults.stalkDuration, Defaults.stalkFrequency, intent.stalkLoop)
@@ -82,6 +91,7 @@ def _DispatchBenchmark(intent: BenchmarkIntent) -> None:
         charge, multiplicity = gaussianChargeFinder(jobPath)
         coordList = getCoords(jobPath, fileCreation(baseName, Defaults.coordExtension))
         molecule = Molecule(jobPath, baseName, charge, multiplicity, coordList, extension, baseName)
+        _ClassifyMolecule(molecule, jobPath, extension)
         genBench(molecule, intent, stalkingSet)
     if intent.stalk:
         jobStalking(stalkingSet, Defaults.stalkDuration, Defaults.stalkFrequency, intent.stalkLoop)
@@ -96,6 +106,7 @@ def _DispatchReRun(intent: ReRunIntent) -> None:
         charge, multiplicity = gaussianChargeFinder(jobPath)
         coordList = getCoords(jobPath, fileCreation(baseName, Defaults.coordExtension, "_failed"))
         molecule = Molecule(jobPath, baseName, charge, multiplicity, coordList, extension, baseName)
+        _ClassifyMolecule(molecule, jobPath, extension)
         genReRun(molecule, intent, stalkingSet)
     if intent.stalk:
         jobStalking(stalkingSet, Defaults.stalkDuration, Defaults.stalkFrequency, intent.stalkLoop)
@@ -166,3 +177,19 @@ def _DispatchUpdate(intent: UpdateIntent) -> None:
         console.print("[good]Update complete! Next launch of cu will use the new version.[/good]")
     else:
         console.print("[error]Update failed. See pip output.[/error]")
+
+
+def _DispatchInitProject(intent: InitProjectIntent) -> None:
+    from pathlib  import Path
+    from .prompts import AskBool
+    from .project import FindProjectRoot, CreateProjectRoot
+    here = Path.cwd().resolve()
+    root = FindProjectRoot()
+    if root == here:
+        console.print(f"[info]{here} is already a project root.[/info]")
+        return
+    if root is not None:
+        console.print(f"[warning]{here} is already inside project {root}.[/warning]")
+        if not AskBool("Create a nested project root here anyway?", "n"):
+            return
+    CreateProjectRoot(here)

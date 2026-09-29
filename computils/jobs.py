@@ -1,19 +1,52 @@
-import os, regex, subprocess
+import os, functools, regex, subprocess
 from pathlib import Path
 from .console  import console
+from rich.markup import escape
 from .defaults import Defaults
-from .catalog  import Catalog
-from .fileops  import fileCreation, MapFile, ExtractResources
+from .catalog  import Catalog, RenderRoute, ROUTE_LEAK_PATTERN
+from .fileops  import fileCreation, MapFile, ExtractResources, ExtractOrcaBlocks
 from .molecule import Molecule
+from .project  import ResolveProjectFile, FindProjectRoot, ProjectFilePath
 from .intent import JobIntent
 
-# Separate method for input file generation to improve code efficiency. No longer returns anything as path to input is
-# previously stored in molecule
-def genFile(molecule: Molecule, index: int, intent: JobIntent) -> None:
+# Parsed once per run, however many jobs use it
+@functools.cache
+def _LoadOrcaBlocks(blocksPath: Path) -> dict[str, str]:
+    # mmap can't map an empty file
+    if blocksPath.stat().st_size == 0:
+        return {}
+    with MapFile(blocksPath) as data:
+        return ExtractOrcaBlocks(data)
+
+# Shared error for a required project file that couldn't be found
+def _ReportMissingProjectFile(fileName: str, reason: str, molecule: Molecule) -> None:
+    root = FindProjectRoot()
+    projectLocation = ProjectFilePath(root, fileName) if root else "no project root"
+    console.print(f"[error]{reason} but {fileName} not found (checked CWD and {projectLocation}). "
+                  f"Skipping {molecule.baseName}.[/error]")
+
+# Separate method for input file generation to improve code efficiency. Path to input is previously stored in molecule.
+# Returns False if this job can't be generated (e.g. missing mixedbasis.txt), so the caller skips only this job.
+def genFile(molecule: Molecule, index: int, intent: JobIntent) -> bool:
     inputFile = molecule.fullPath
-    mixedBasis = False
+    # Route card rendered for this molecule's spin state: base + matching [spin groups] + U/RO reference
+    route, blockTags = RenderRoute(index, molecule)
+    # Guard: {tag} and [group] syntax is parsed out in Catalog.Load and must never reach an input file
+    if regex.search(ROUTE_LEAK_PATTERN, route):
+        console.print(f"[error]Unparsed tag/group syntax in route card '{escape(route)}'. Skipping {molecule.baseName}.[/error]")
+        return False
     match molecule.extensionType:
         case Defaults.gaussianExtension:
+            if blockTags:
+                console.print(f"[warning]Block tags {blockTags} only apply to ORCA jobs. Ignoring them for "
+                              f"{molecule.baseName}.[/warning]")
+            # Resolve required files BEFORE opening the input, so a failure never leaves a half-written file
+            basisPath = None
+            if any(keyWord in Defaults.mixedBasisVariants for keyWord in route.split()):
+                basisPath = ResolveProjectFile("mixedbasis.txt")
+                if basisPath is None:
+                    _ReportMissingProjectFile("mixedbasis.txt", "Mixed basis detected", molecule)
+                    return False
             # No longer accesses the XYZ file due to Molecule coordinateList property
             with open(inputFile, 'w') as jobInput:
                 # Sets the job's CPU and RAM
@@ -24,25 +57,17 @@ def genFile(molecule: Molecule, index: int, intent: JobIntent) -> None:
                 if intent.checkpoint:
                     jobInput.write(f"\n%chk={molecule.baseName}.chk")
                 # If the methodLine from benchmarking.txt is garbage, the calculation will fail. Not my fault.
-                jobInput.write("\n# " + Catalog.fullMethodLine[index].replace("\n","") + "\n\nUseless Comment line\n\n")
+                jobInput.write("\n# " + route + "\n\nUseless Comment line\n\n")
                 jobInput.write(f"{molecule.charge} {molecule.multiplicity}\n")
-                # New mixed basis checking
-                for keyWord in Catalog.fullMethodLine[index].split():
-                    if keyWord in Defaults.mixedBasisVariants:
-                        mixedBasis = True
-                        break
                 # Accessing the stored coordinate list is significantly faster in run-time than prior crappy implementation
                 for line in molecule.coordinateList:
                     jobInput.write(line)
-                # Adds in mixed basis info from local file
-                if Path("mixedbasis.txt").is_file() and mixedBasis:
+                # Adds in mixed basis info from the CWD, or the project root if the CWD has none
+                if basisPath:
                     jobInput.write("\n")
-                    with open("mixedbasis.txt") as mixedBasisFile:
+                    with open(basisPath) as mixedBasisFile:
                         for line in mixedBasisFile:
                             jobInput.write(line)
-                elif mixedBasis and not Path("mixedbasis.txt").is_file():
-                    console.print("[error]Mixed basis detected but requirements not found. Aborting.[/error]")
-                    return
                 jobInput.write("\n")
                 # New NBO7 section
                 if intent.nbo7:
@@ -51,23 +76,42 @@ def genFile(molecule: Molecule, index: int, intent: JobIntent) -> None:
                     jobInput.write("\n")
 
         case Defaults.orcaExtension:
+            # Resolve tagged blocks BEFORE opening the input, so a failure never leaves a half-written file
+            selectedBlocks = []
+            if blockTags:
+                blocksPath = ResolveProjectFile("orcablocks.txt")
+                if blocksPath is None:
+                    _ReportMissingProjectFile("orcablocks.txt", f"Block tags {blockTags} requested", molecule)
+                    return False
+                availableBlocks = _LoadOrcaBlocks(blocksPath)
+                missingTags = [tag for tag in blockTags if tag not in availableBlocks]
+                if missingTags:
+                    console.print(f"[error]Block tag(s) {missingTags} not found in {blocksPath}. "
+                                  f"Skipping {molecule.baseName}.[/error]")
+                    return False
+                selectedBlocks = [availableBlocks[tag] for tag in blockTags]
             # Opens the job file
             with open(inputFile, 'w') as jobInput:
                 # Sets the job's CPU and RAM
                 jobCPU = str(Defaults.CPU)
-                if "DLPNO" in Catalog.fullMethodLine[index]:
+                if "DLPNO" in route:
                     jobMem = str(Defaults.highMemoryRatio * 1000)
                 else:
                     jobMem = str(Defaults.memoryRatio * 1000)
                 # Writes the standard ORCA formatted opening
                 jobInput.write(f"%pal nprocs {jobCPU}\nend\n%maxcore {jobMem}")
                 # If the methodLine from benchmarking.txt is garbage, the calculation will fail. Not my fault.
-                jobInput.write("\n! " + Catalog.fullMethodLine[index].replace("\n","") + "\n\n")
+                jobInput.write("\n! " + route + "\n")
+                # Tagged blocks from orcablocks.txt, in route-card tag order
+                for block in selectedBlocks:
+                    jobInput.write(block if block.endswith("\n") else block + "\n")
+                jobInput.write("\n")
                 # ORCA is smart enough to read from an XYZ directly
                 jobInput.write(f"* xyz {molecule.charge} {molecule.multiplicity} \n")
                 for line in molecule.coordinateList:
                     jobInput.write(line)
                 jobInput.write("\n*")
+    return True
 
 # Reorganized! Now handles SLURM commands independently because of HPC cluster agnosticism
 def slurmHandler(molecule: Molecule, queueName: Path, outputName: Path, cpus: int, jobRam: int) -> None:

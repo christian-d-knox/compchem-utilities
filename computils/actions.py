@@ -20,6 +20,14 @@ class Action(Enum):
     GOODVIBES        = "goodvibes"  # -gv
     FIRST_TIME_SETUP = "first"      # -first
     UPDATE           = "update"     # -up
+    INIT_PROJECT     = "init"       # -init
+
+# Spin-state class of a molecule, set once in dispatch by spin.ClassifySpin()
+class SpinState(Enum):
+    """CSS = closed-shell singlet, OSS = open-shell (broken-symmetry) singlet, OPEN = multiplicity > 1."""
+    CSS  = "css"
+    OSS  = "oss"
+    OPEN = "open"
 
 # gimmeCubes() requires multiple selections at runtime
 class CubeOption(Enum):

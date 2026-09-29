@@ -1,4 +1,4 @@
-import subprocess, time
+import regex, subprocess, time
 from pathlib import Path
 
 from .console  import console
@@ -6,6 +6,13 @@ from .defaults import Defaults
 from .notify   import NotifyPersonal
 from .fileops import MapFile, ExtractStalking
 
+
+# Where stalked jobs run: jobs are submitted this same run by slurmHandler(), so its Defaults values are exact.
+# The cluster is only included when the submission header actually sends -M (LOCAL_CLUSTER); otherwise just the partition
+def jobLocation() -> str:
+    submitsCluster = any(regex.search("-M", line) for line in Defaults.submissionList)
+    parts = [Defaults.cluster if submitsCluster else "", Defaults.partition]
+    return " / ".join(part for part in parts if part)
 
 # Finally implemented in a way I can be proud of.
 def jobStalking(jobSet: set, duration: int, frequency: int, loop: bool) -> None:
@@ -70,7 +77,9 @@ def jobStalking(jobSet: set, duration: int, frequency: int, loop: bool) -> None:
                     hasTerminated, termination = ExtractStalking(inFile, "termination")
                 if hasTerminated:
                     finishedJobs.append((job[0], termination))
-                    NotifyPersonal(f"Job {job[0]} has finished via {termination}.")
+                    location = jobLocation()
+                    locationText = f" on {location}" if location else ""
+                    NotifyPersonal(f"Job {job[0]}{locationText} has finished via {termination}.")
                 jobSet.remove(job)
             elif job[0] in stalkStatus and Path(job[1]).is_file() and Path(job[1]).stat().st_size == 0:
                 console.print(f"[info]Job {job[0]} started running during stalk subroutine execution.[/info]")
