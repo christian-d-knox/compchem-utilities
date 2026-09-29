@@ -97,10 +97,17 @@ class OptionRow(Horizontal, can_focus=True, can_focus_children=False):
             self.action_move(-1)
 
 
+def KeyHint(app, key: str, description: str) -> Text:
+    """A key hint styled like the footer's (key, then description), for hints shown outside it."""
+    colors = app.theme_variables
+    return Text.assemble((key, f"bold {colors['footer-key-foreground']}"), " ",
+                         (description, colors["footer-description-foreground"]))
+
+
 class FrameRule(Static):
     """One edge of a framed form, drawn to its width: ┌─ label ───── right ─┐ (corners ┌┐, ├┤ or └┘).
     Textual's borders have no ├/┤ junctions, so a form's section dividers are drawn here (P2).
-    Setting label or right redraws the rule."""
+    label and right are text or Text; setting either redraws the rule."""
     label = reactive("")
     right = reactive("")
 
@@ -110,7 +117,7 @@ class FrameRule(Static):
 
     def render(self) -> Text:
         line = self.app.theme_variables["secondary"]
-        label = Text(f" {self.label} " if self.label else "")
+        label = Text.assemble(" ", self.label, " ") if self.label else Text()
         right = Text.assemble(" ", self.right, " ") if self.right else Text()
         fill = "─" * max(0, self.size.width - 4 - label.cell_len - right.cell_len)
         return Text.assemble((self.corners[0] + "─", line), label, (fill, line), right, ("─" + self.corners[1], line))

@@ -12,7 +12,7 @@ from ..actions  import Action, CubeOption
 from ..catalog  import Catalog
 from ..defaults import Defaults
 from ..intent   import IntentDraft
-from .common    import NAV_BINDINGS, FrameRule, NavFooter, OptionRow
+from .common    import NAV_BINDINGS, FrameRule, KeyHint, NavFooter, OptionRow
 from .home      import ACTION_LABELS, TitleLine
 from .inspect   import MethodIndices, PreviewMolecule, PreviewRowFor, ProgramName, Styled
 
@@ -23,17 +23,15 @@ USES_GENERATION = (Action.SINGLE_POINT, Action.BENCHMARK, Action.RERUN)
 SHOWN_NAMES = 6                  # the Files section lists this many names, then "… +N more"
 
 
-class FilesPane(Static, can_focus=True):
-    """The Files section: enter or a click goes back to Home to change the selection."""
-    BINDINGS = [Binding("enter", "screen.back", "Change")]
-
+class FilesPane(Static):
+    """The Files section: a click (or esc) goes back to Home to change the selection."""
     def on_click(self) -> None:
         self.screen.action_back()
 
 
 class MethodList(OptionList):
-    # Space chooses, like every other list (enter still works as OptionList's hidden default)
-    BINDINGS = [Binding("space", "select", "Choose", key_display="␣")]
+    # Space chooses, like every other list; enter submits, as it does from every Builder field
+    BINDINGS = [Binding("space", "select", "Choose", key_display="␣"), Binding("enter", "screen.submit", show=False)]
 
 
 class BuilderScreen(Screen):
@@ -41,7 +39,7 @@ class BuilderScreen(Screen):
     AUTO_FOCUS = "#methods, #options"
     BINDINGS = [
         Binding("escape", "back", "Back"),
-        Binding("ctrl+s", "submit", "Submit"),
+        Binding("enter", "submit", "Submit"),
         Binding("question_mark", "help", "Help"),
         *NAV_BINDINGS,
     ]
@@ -58,14 +56,13 @@ class BuilderScreen(Screen):
     def compose(self) -> ComposeResult:
         # One framed form (P2): Files on the top edge, a titled rule per section, Submit on the bottom edge
         yield Static(TitleLine(ACTION_LABELS[self.action]), id="title")
-        yield FrameRule("┌┐", f"Files ({len(self.files)}) · esc change")
+        yield FrameRule("┌┐", Text.assemble(f"Files ({len(self.files)}) · ", KeyHint(self.app, "esc", "Change")))
         with VerticalScroll(id="form"):
             names = ", ".join(path.name for path in self.files[:SHOWN_NAMES])
             more = len(self.files) - SHOWN_NAMES
             yield FilesPane(names + (f", … +{more} more" if more > 0 else ""), id="files-summary", classes="side")
             if self.action in USES_METHODS:
-                hint = "chooses where the benchmark starts" if self.action == Action.BENCHMARK else "chooses the method"
-                yield FrameRule("├┤", f"Methods (benchmarkMethods) · ␣ {hint}")
+                yield FrameRule("├┤", "Methods (benchmarkMethods)")
                 yield MethodList(*self.MethodPrompts(), id="methods", classes="side")
             yield FrameRule("├┤", "Options")
             # One tab stop per row: ←/→ move between the checkboxes (OptionRow)
@@ -194,10 +191,11 @@ class BuilderScreen(Screen):
             errors = ["No job would be submitted."]
         skippedNote = f" ({skipped} skipped)" if skipped else ""
         self.ready = not errors
-        # The bottom edge shows what ^s would do, or the first thing stopping it
+        # The bottom edge shows what enter would submit, or the first thing stopping it
         more = f" (+{len(errors) - 1} more)" if len(errors) > 1 else ""
         self.query_one("#submit", FrameRule).right = (Styled(errors[0] + more, "error") if errors
-            else Styled(f"{count} job{'s' if count != 1 else ''} ready{skippedNote} · ^s submit", "good"))
+            else Text.assemble(Styled(f"{count} job{'s' if count != 1 else ''} ready{skippedNote}", "good"), " · ",
+                               KeyHint(self.app, "⏎", "Submit")))
         self.refresh_bindings()
 
     # ─── Events ───────────────────────────────────────────────────────
@@ -224,6 +222,10 @@ class BuilderScreen(Screen):
     def on_input_changed(self, event: Input.Changed) -> None:
         self.Refresh()
 
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        # The MO range box takes enter itself; it submits like every other field
+        self.action_submit()
+
     # ─── Actions ──────────────────────────────────────────────────────
 
     def action_back(self) -> None:
@@ -231,7 +233,7 @@ class BuilderScreen(Screen):
         self.app.pop_screen()
 
     def check_action(self, action: str, parameters) -> bool | None:
-        # ^s Submit shows dimmed in the footer while nothing can be submitted
+        # ⏎ Submit shows dimmed in the footer while nothing can be submitted
         return None if action == "submit" and not self.ready else True
 
     def action_submit(self) -> None:
@@ -241,5 +243,5 @@ class BuilderScreen(Screen):
 
     def action_help(self) -> None:
         self.notify("tab / shift+tab move between fields · ↑/↓ move in the method list · ←/→ move between options · "
-                    "space toggles an option or chooses the highlighted method · ctrl+s submits · "
+                    "space toggles an option or chooses the highlighted method · enter submits · "
                     "esc goes back to the file list · ctrl+q quits", title="Help")

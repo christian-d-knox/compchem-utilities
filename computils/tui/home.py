@@ -26,11 +26,15 @@ ACTION_LABELS = {
 LATER_SCREENS = ["Queue Monitor", "GoodVibes", "Config", "Project Files"]
 _COLLAPSE = Binding.Group("Collapse")
 _ALL_NONE = Binding.Group("All/None")
+_FOLD = Binding.Group("Fold", compact=True)
+_TO_FILES = Binding.Group("Files", compact=True)
+# Every pane: ␣ acts on the highlighted item, ⏎ continues to the builder (the glob box, a text box, returns to the list)
+CONTINUE = Binding("enter", "screen.continue", "Continue")
 STATUS_STYLES = {"normal": "good", "error": "error", "unknown": "warning"}
 
 HELP = {
-    "actions": "↑/↓ choose the action · enter go to the file list · 1 collapse",
-    "folders": "↑/↓ move · enter open folder (becomes the working directory) · 2 collapse",
+    "actions": "↑/↓ choose the action · enter continue (to the file list until files are selected) · 1 collapse",
+    "folders": "↑/↓ move · space open folder (becomes the working directory) · ←/→ fold · enter continue · 2 collapse",
     "glob":    "Type a pattern to select matching files · enter or esc returns to the file list",
     "files":   "space select · a all · n none · / glob · enter continue to the builder",
 }
@@ -55,8 +59,25 @@ def TitleLine(label: str, *extra) -> Text:
     return line
 
 
+class ActionList(ListView):
+    BINDINGS = [CONTINUE]
+
+
+class GlobInput(Input):
+    # A text box: enter (Input's submit) and esc both return to the file list. Distinct actions, or the footer shows one
+    BINDINGS = [Binding("enter", "submit", "Files", group=_TO_FILES),
+                Binding("escape", "screen.leave_glob", "Files", group=_TO_FILES)]
+
+
 class FolderTree(DirectoryTree):
     """Folders only; the file list on the right shows the files."""
+    BINDINGS = [
+        Binding("space", "select_cursor", "Open", key_display="␣"),
+        Binding("left", "fold(False)", "Fold", group=_FOLD),
+        Binding("right", "fold(True)", "Fold", group=_FOLD),
+        CONTINUE,
+    ]
+
     # Plain glyphs: emoji folder icons render unreliably over SSH
     ICON_NODE, ICON_NODE_EXPANDED = "▸ ", "▾ "
     def filter_paths(self, paths):
@@ -85,13 +106,25 @@ class FolderTree(DirectoryTree):
         # Node line numbers are only recomputed on the next refresh after the expansions; before that they're -1
         self.call_after_refresh(self.move_cursor, node, animate=False)
 
+    def action_fold(self, expand: bool) -> None:
+        # → expands the highlighted folder, ← collapses it (or moves to its parent if it's already collapsed)
+        node = self.cursor_node
+        if node is None:
+            return
+        if expand:
+            node.expand()
+        elif node.is_expanded:
+            node.collapse()
+        else:
+            self.action_cursor_parent()
+
 
 class FileList(SelectionList):
     # enter continues to the builder instead of toggling (space still toggles). These keys only mean something here,
     # so they're bound here and the footer shows them only while the list is focused (keeps it within 84 columns)
     BINDINGS = [
         Binding("space", "select", "Select", key_display="␣"),
-        Binding("enter", "screen.continue", "Continue"),
+        CONTINUE,
         Binding("a", "screen.select_all", "All", group=_ALL_NONE),
         Binding("n", "screen.select_none", "None", group=_ALL_NONE),
     ]
@@ -104,7 +137,6 @@ class HomeScreen(Screen):
         Binding("2", "toggle_panel('folders')", "Folders", group=_COLLAPSE),
         # Not in the footer (no room at 84 columns): the glob box's placeholder says "/ to focus"
         Binding("/", "focus_glob", "Glob", show=False),
-        Binding("escape", "leave_glob", show=False),
         Binding("question_mark", "help", "Help"),
         *NAV_BINDINGS,
     ]
@@ -124,12 +156,12 @@ class HomeScreen(Screen):
                     items = [ListItem(Label(label), id=f"action-{action.value}") for action, label in ACTION_LABELS.items()]
                     items.append(ListItem(Label("──────────────"), disabled=True))
                     items += [ListItem(Label(f"{name} (later)"), disabled=True, classes="later") for name in LATER_SCREENS]
-                    yield ListView(*items, initial_index=1, id="actions")
+                    yield ActionList(*items, initial_index=1, id="actions")
                 with Collapsible(title="Folders", collapsed=False, id="folders-panel"):
                     yield FolderTree(FindProjectRoot() or Path.cwd(), id="folders")
             with Vertical(id="right"):
                 with Vertical(id="files-pane", classes="pane"):
-                    yield Input(placeholder="Glob, e.g. *_failed*  (/ to focus)", id="glob")
+                    yield GlobInput(placeholder="Glob, e.g. *_failed*  (/ to focus)", id="glob")
                     yield FileList(id="files")
                 yield Static(id="details", classes="pane")
         yield NavFooter()
@@ -257,7 +289,7 @@ class HomeScreen(Screen):
                 fileList.select(name)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        self.query_one("#files").focus()
+        self.action_leave_glob()
 
     def MoveTo(self, target: Path) -> None:
         ChangeDirectory(target)
@@ -299,7 +331,11 @@ class HomeScreen(Screen):
         if self.action not in FILE_ACTIONS:
             return
         if not files:
-            self.notify("Select at least one file first (space, a, or a glob).", severity="warning")
+            # From another pane, continuing without a selection just moves on to the file list
+            fileList = self.query_one("#files", FileList)
+            if fileList.has_focus:
+                self.notify("Select at least one file first (space, a, or a glob).", severity="warning")
+            fileList.focus()
             return
         # FormChk has no options, so it skips the builder (D22)
         if self.action == Action.FORM_CHECK:
