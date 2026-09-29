@@ -182,11 +182,13 @@ def _DispatchUpdate(intent: UpdateIntent) -> None:
 def _DispatchInitProject(intent: InitProjectIntent) -> None:
     from pathlib  import Path
     from .prompts import AskBool
-    from .project import FindProjectRoot, CreateProjectRoot
+    from .project import FindProjectRoot, CreateProjectRoot, EnsureProjectConfig
     here = Path.cwd().resolve()
     root = FindProjectRoot()
     if root == here:
         console.print(f"[info]{here} is already a project root.[/info]")
+        # Re-running -init repairs a missing or unparseable project.toml
+        EnsureProjectConfig(here)
         return
     if root is not None:
         console.print(f"[warning]{here} is already inside project {root}.[/warning]")

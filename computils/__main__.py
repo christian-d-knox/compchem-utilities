@@ -3,11 +3,14 @@ import sys
 from .defaults import Defaults
 from .catalog  import Catalog
 from .console  import ApplyTheme
+from .project  import LoadProjectConfig
 
 
 def Main() -> None:
     # Load configs and lookup data BEFORE handing control to the CLI.
     Defaults.Load()
+    # Project overrides must land before the Catalog derives route templates from benchmarkMethods
+    LoadProjectConfig()
     Catalog.Load()
 
     # If Defaults._Validate determined that first-time setup is needed,

@@ -290,6 +290,16 @@ class Defaults:
     # Keys whose list values should always render as multiline arrays for readability.
     _FORCE_MULTILINE: set[str] = {"benchmarkMethods"}
 
+    # Keys a project's <marker>/project.toml may override. Everything else is machine- or program-wide
+    _PROJECT_KEYS: list[str] = [
+        "CPU", "memoryRatio", "highMemoryRatio", "memoryBuffer", "wallTime", "cluster", "partition",
+        "benchmarkMethods", "openShellReference", "ossSpinThreshold", "nboKeylist",
+    ]
+    # Global values displaced by project overrides, and the project values that replaced them. Used so project values
+    # never leak into the global TOML files when a wizard re-saves a section
+    _globalValues: dict[str, Any] = {}
+    _projectValues: dict[str, Any] = {}
+
 
     @classmethod
     def Load(cls) -> None:
@@ -325,7 +335,7 @@ class Defaults:
         lines = [header, ""]
 
         for key in keys:
-            value = getattr(cls, key)
+            value = cls._PersistedValue(key)
             # Insert power-user warning block before flagged keys
             if key in cls._WARNINGS:
                 lines.append(cls._WARNINGS[key])
@@ -407,7 +417,7 @@ class Defaults:
                     commentText = cls._COMMENTS.get(key, "")
                     if commentText:
                         file.write(f"\n# {commentText}\n")
-                    file.write(f"{key} = {tomlValue(getattr(cls, key), forceMultiline=(key in cls._FORCE_MULTILINE))}\n")
+                    file.write(f"{key} = {tomlValue(cls._PersistedValue(key), forceMultiline=(key in cls._FORCE_MULTILINE))}\n")
             console.print(f"[warning]\\[config] Appended {len(missingKeys)} missing key(s) to {filename}.[/warning]")
         except OSError as error:
             console.print(f"[error]\\[config] Could not append missing keys to {filePath}: {error}[/error]")
@@ -415,15 +425,78 @@ class Defaults:
 
     @classmethod
     def _Validate(cls) -> None:
+        cls._ValidateReference()
+        if len(cls.hpcType) == 0:
+            #firstTimeSetup()
+            cls.needsFirstTimeSetup = True
+        pass
+
+
+    @classmethod
+    def _ValidateReference(cls) -> None:
         if cls.openShellReference.upper() not in ("U", "RO"):
             console.print(f"[warning]\\[config] openShellReference must be \"U\" or \"RO\", got {cls.openShellReference!r}. "
                           "Falling back to \"U\".[/warning]")
             cls.openShellReference = "U"
         cls.openShellReference = cls.openShellReference.upper()
-        if len(cls.hpcType) == 0:
-            #firstTimeSetup()
-            cls.needsFirstTimeSetup = True
-        pass
+
+
+    @classmethod
+    def GlobalValue(cls, key: str) -> Any:
+        """The value from the global TOML files, even while a project override is active."""
+        return cls._globalValues.get(key, getattr(cls, key))
+
+
+    @classmethod
+    def _PersistedValue(cls, key: str) -> Any:
+        # A still-active project override is written as the global value it displaced. A value changed after the
+        # overlay (e.g. by a setup wizard) is a deliberate global edit and is written as-is
+        value = getattr(cls, key)
+        if key in cls._projectValues and value == cls._projectValues[key]:
+            return cls._globalValues[key]
+        return value
+
+
+    @classmethod
+    def ApplyProjectOverrides(cls, data: dict, source: Path) -> list[str]:
+        """Overlay a project.toml onto the loaded globals. Returns the keys whose value differs from the global one."""
+        applied = []
+        for key, rawValue in data.items():
+            if key not in cls._PROJECT_KEYS:
+                console.print(f"[warning]\\[config] Key '{key}' in {source} is not project-overridable. Ignored.[/warning]")
+                continue
+            value = cls._CoerceValue(key, rawValue)
+            if value is None:
+                console.print(f"[warning]\\[config] Key '{key}' in {source} has invalid type "
+                              f"(expected {cls._TYPES[key].__name__}, got {type(rawValue).__name__}). "
+                              f"Keeping the global value: {cls.GlobalValue(key)!r}[/warning]")
+                continue
+            cls._globalValues.setdefault(key, getattr(cls, key))
+            setattr(cls, key, value)
+            applied.append(key)
+        cls._ValidateReference()
+        # Record the post-validation values so the leak guard compares like with like (e.g. "ro" -> "RO")
+        for key in applied:
+            cls._projectValues[key] = getattr(cls, key)
+        return [key for key in applied if cls._projectValues[key] != cls._globalValues[key]]
+
+
+    @classmethod
+    def BuildProjectContent(cls) -> str:
+        """A full project.toml snapshot of the current GLOBAL values of every project-overridable key."""
+        lines = ["# project.toml -- Project-level overrides of the global CompUtils config",
+                 "# Generated by `cu -init` as a snapshot of the global config at that time.",
+                 "# Every key here overrides the global value for jobs run anywhere inside this project.",
+                 "# Delete a key to follow the global value again. Only the keys below can be overridden.", ""]
+        # Global comments that don't hold for a project file
+        projectComments = {"cluster": "Cluster for jobs in this project.", "partition": "Partition for jobs in this project."}
+        for key in cls._PROJECT_KEYS:
+            commentText = projectComments.get(key, cls._COMMENTS.get(key, ""))
+            if commentText:
+                lines.append(f"# {commentText}")
+            lines.append(f"{key} = {tomlValue(cls.GlobalValue(key), forceMultiline=(key in cls._FORCE_MULTILINE))}")
+            lines.append("")
+        return "\n".join(lines)
 
 
 class Stampede3Submission:
