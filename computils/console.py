@@ -1,7 +1,15 @@
 """Shared Rich Console instance for use across the package."""
 from rich.console import Console
 from rich.theme import Theme
-from rich.panel import Panel
+from rich.box import Box, SQUARE
+from rich import panel
+
+
+class Panel(panel.Panel):
+    """Rich's Panel with square corners, the house style for boxes in the CLI and the TUI. Import Panel from here."""
+    def __init__(self, *args, box: Box = SQUARE, **kwargs) -> None:
+        super().__init__(*args, box=box, **kwargs)
+
 
 # Semantic style names used throughout the codebase.
 # Comments mark the original termcolor name each style replaces.

@@ -1,9 +1,7 @@
 import os
 from pathlib import Path
 
-from rich.panel import Panel
-
-from .console  import console
+from .console  import console, Panel
 from .defaults import Defaults, LOCAL_CLUSTERSubmission, Bridges2Submission, Stampede3Submission
 from .notify   import _SendTelegram, _DetectTelegramChatID
 from .prompts import AskBool, AskStr
