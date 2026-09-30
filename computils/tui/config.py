@@ -44,18 +44,55 @@ CHOICES = {"openShellReference": ["U", "RO"], "colorMode": ["lowColor", "hexCode
 METHOD_MAP = ("methodNames", "targetProgram")
 TYPE_NAMES = {int: "a whole number", float: "a number", str: "text", bool: "true or false", list: "a list"}
 FILE_NOTES = {
-    "mixedbasis.txt": "Gen/GenECP basis sets, then (after a blank line) ECPs, for mixed-basis Gaussian jobs.",
+    "mixedbasis.txt": "Gen/GenECP basis sets and ECPs for mixed-basis Gaussian jobs.",
     "orcablocks.txt": "ORCA %blocks, pulled into jobs by {tag} tokens in benchmarkMethods.",
     "spinstates.txt": "Per-molecule CSS/OSS overrides for singlets (glob  css|oss).",
 }
-# Shown under each project file's Check panel: the format, by example
+# The lower half of each project file's editor: the format, by example (lines fit its 33-column panel)
 FILE_EXAMPLES = {
-    "orcablocks.txt": "%cpcm\n    smd true\nend\n# @tag tddft10\n%tddft\n    nroots 10\nend\n"
-                      "Tag: %name, or # @tag above\nUse: {cpcm} {tddft10}",
-    # The blank line before the second "Fe Cu 0" starts the ECP section (FILE_NOTES says so; 9 lines fit half the column)
-    "mixedbasis.txt": "C H N O 0\n6-31G(d)\n****\nFe Cu 0\nSDD\n****\n\nFe Cu 0\nSDD",
-    "spinstates.txt": "Fe2S2_*    oss\nNi_sqpl_*  css   # a comment\n\n"
-                      "<name or glob>  css|oss, matched\nagainst the file name. First match\nwins; singlets only.",
+    "orcablocks.txt": """\
+%cpcm
+    smd true
+    SMDsolvent "water"
+end
+
+# @tag toluene
+%cpcm
+    smd true
+    SMDsolvent "toluene"
+end
+
+%tddft
+    nroots 10
+end
+Tag: its %name, or the # @tag
+line above it. Use them in
+routes: {cpcm} {toluene} {tddft}""",
+    "mixedbasis.txt": """\
+C H N O 0
+6-31G(d)
+****
+Fe Cu 0
+SDD
+****
+
+Fe Cu 0
+SDD
+
+Basis groups end with ****.
+The first blank line starts the
+ECP section. Each job keeps only
+the elements it contains.""",
+    "spinstates.txt": """\
+Fe2S2_*     oss
+Cu2O2_bis   oss
+Ni_sqpl_*   css   # a comment
+
+<name or glob>  css|oss
+Matched against the file name;
+the first match wins. Singlets
+only: higher spins come from
+the multiplicity.""",
 }
 # The Benchmark Suite's guide, in its own box while an entry is typed: (syntax, meaning) rows, then a closing line
 ROUTE_GUIDE_ROWS = [

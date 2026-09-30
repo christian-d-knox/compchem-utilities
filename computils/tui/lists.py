@@ -238,10 +238,11 @@ class TextEditor(ModalScreen):
     /* :focus too, or TextArea's own focus border (more specific) comes back */
     TextEditor TextArea, TextEditor TextArea:focus { width: 1fr; border: none; padding: 0; }
     TextEditor #editor-side { width: 34; border-left: solid $secondary; }
-    TextEditor #summary, TextEditor #example { border-top: solid $secondary; border-title-align: left; padding: 0 1; }
-    TextEditor #summary { height: 1fr; }
-    /* The example takes at most half the column, and scrolls within it rather than pushing past the frame */
-    TextEditor #example { height: auto; max-height: 50%; color: $text-muted; }
+    /* Left padding only: 32 columns of text beside the divider (the examples are written to that width) */
+    TextEditor #summary, TextEditor #example { border-top: solid $secondary; border-title-align: left; padding: 0 0 0 1; }
+    /* Check and Example split the column evenly; either scrolls within its half when its text is longer */
+    TextEditor #summary, TextEditor #example { height: 1fr; }
+    TextEditor #example { color: $text-muted; }
     """
     BINDINGS = [Binding("escape", "done"), Binding("ctrl+r", "revert")]
 
@@ -255,23 +256,25 @@ class TextEditor(ModalScreen):
             with Horizontal(id="editor-body"):
                 yield TextArea(self.original, id="text", soft_wrap=False)
                 with Vertical(id="editor-side"):
-                    yield Static(id="summary")
+                    with VerticalScroll(id="summary"):
+                        yield Static(id="summary-text")
                     if self.example:
                         with VerticalScroll(id="example"):
-                            yield Static(self.example)
+                            yield Static(Text(self.example))
             yield FrameRule("└┘", id="text-keys")
 
     def on_mount(self) -> None:
-        self.query_one("#summary").border_title = "Check"
+        # Padded like every FrameRule label: ─ Check ─
+        self.query_one("#summary").border_title = " Check "
         for example in self.query("#example"):
-            example.border_title = "Example"
+            example.border_title = " Example "
         self.query_one("#text-keys", FrameRule).right = Text("  ").join(
             [KeyHint(self.app, "esc", "Done"), KeyHint(self.app, "^r", "Revert")])
-        self.query_one("#summary", Static).update(self.summary(self.original))
+        self.query_one("#summary-text", Static).update(self.summary(self.original))
         self.query_one("#text", TextArea).focus()
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
-        self.query_one("#summary", Static).update(self.summary(event.text_area.text))
+        self.query_one("#summary-text", Static).update(self.summary(event.text_area.text))
 
     def action_done(self) -> None:
         self.dismiss(self.query_one("#text", TextArea).text)
