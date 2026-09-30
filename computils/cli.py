@@ -2,6 +2,7 @@ import argparse, glob
 from pathlib import Path
 
 from .console   import console
+from .defaults  import Defaults
 from .prompts import AskBool, AskStr
 from .intent import Intent, IntentDraft
 from .actions import CubeOption, Action, FILE_ACTIONS
@@ -28,7 +29,8 @@ def BuildParser() -> argparse.ArgumentParser:
     actionGroup.add_argument('-re', '--rerun', nargs='+', metavar="FILE", help="Regenerate a failed job and re-submit.")
     actionGroup.add_argument('-form', '--formcheck', nargs='+', metavar="FILE", help="Run formchk on Gaussian checkpoint files.")
     actionGroup.add_argument('-ex', '--excel', type=str, metavar="FILE", help="Convert GoodVibes output to xlsx.")
-    actionGroup.add_argument('-gv', '--goodvibes', action='store_true', help="Run GoodVibes interactively, then convert to xlsx.")
+    actionGroup.add_argument('-gv', '--goodvibes', nargs='*', metavar="FILE",
+                             help="Run GoodVibes interactively on the given outputs (default: every output here), then convert to xlsx.")
     actionGroup.add_argument('-first','--first', action='store_true', help="Re-run first-time setup.")
     actionGroup.add_argument('-up', '--update', action='store_true', help="Update CompUtils from GitHub.")
     actionGroup.add_argument('-init', '--init', action='store_true', help="Mark the CWD as a project root.")
@@ -55,7 +57,8 @@ def ParseCLI(argv: list[str]) -> Intent:
     draft = IntentDraft()
 
     # Set the action from whichever action flag was given
-    flag = next((dest for dest in ACTION_FLAGS if getattr(args, dest)), None)
+    # Given, not truthy: a bare -gv parses as []
+    flag = next((dest for dest in ACTION_FLAGS if getattr(args, dest) not in (None, False)), None)
     if flag is None:
         console.print("[error]No action specified. Run `cu --help` for usage.[/error]")
         raise SystemExit(2)
@@ -63,7 +66,8 @@ def ParseCLI(argv: list[str]) -> Intent:
 
     # File-bearing actions: expand globs if the shell didn't, collect all files
     if draft.action in FILE_ACTIONS:
-        for entry in getattr(args, flag):
+        # A bare -gv reads every output in the CWD, as GoodVibes itself is usually run
+        for entry in getattr(args, flag) or [f"*{Defaults.outputExtension}"]:
             if any(c in entry for c in ("*", "?", "[")):
                 draft.files.extend(Path(p) for p in glob.glob(entry))
             else:

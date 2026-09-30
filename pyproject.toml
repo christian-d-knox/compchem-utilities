@@ -17,7 +17,7 @@ dependencies = [
     "pandas",
     "regex",
     "xlsxwriter",
-    "goodvibes",
+    "goodvibes>=3.2,<4",   # 4.x renamed -t, its output file and its table rules
 ]
 
 [project.scripts]

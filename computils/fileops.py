@@ -113,12 +113,12 @@ def ExtractGoodVibes(data) -> list:
     tempSubs = line.decode().strip().split()
     outputData.append(tempSubs)
     data.readline()
-    line = data.readline().decode().strip()
-    while '*' not in line:
-        subLines = line.split()
-        subLines.pop(0)
-        outputData.append(subLines)
-        line = data.readline().decode().strip()
+    # Rows run to the closing **** rule; a truncated table ends at end of file (readline returns b"")
+    line = data.readline()
+    while line and b'*' not in line:
+        # Drops the leading "o" marker
+        outputData.append(line.decode().split()[1:])
+        line = data.readline()
     return outputData
 
 def ExtractRouteLine(data, extensionType: str) -> str:
