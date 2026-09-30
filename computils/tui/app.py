@@ -21,7 +21,7 @@ class TooSmallScreen(ModalScreen):
 
     def Update(self, size) -> None:
         self.query_one("#too-small", Static).update(
-            f"Terminal too small: {size.width}×{size.height}\nCompUtils needs at least {MIN_WIDTH}×{MIN_HEIGHT}.")
+            f"Terminal Too Small: {size.width}×{size.height}\nCompUtils needs at least {MIN_WIDTH}×{MIN_HEIGHT}.")
 
 
 class CompUtilsApp(App):

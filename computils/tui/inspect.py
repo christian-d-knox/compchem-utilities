@@ -50,13 +50,13 @@ def _Termination(path: Path) -> str:
 
 
 def FileStatus(path: Path) -> str:
-    """normal / error / unknown for output files, and '—' for anything else."""
+    """Normal / Error / Unknown for output files, and '—' for anything else."""
     if path.suffix not in OutputExtensions():
         return "—"
     termination = _Termination(path)
     if not termination:
-        return "unknown"
-    return "error" if termination == Defaults.terminationVariants[2] else "normal"
+        return "Unknown"
+    return "Error" if termination == Defaults.terminationVariants[2] else "Normal"
 
 
 def _Charge(path: Path) -> tuple[str, str]:
@@ -80,7 +80,7 @@ def FileDetails(path: Path) -> dict[str, str]:
     if not HasContent(path):
         return details
     if path.suffix in OutputExtensions():
-        details["Status"] = _Termination(path).capitalize() or "Unknown (no termination line)"
+        details["Status"] = _Termination(path).title() or "Unknown (No Termination Line)"
     charge, multiplicity = _Charge(path)
     if multiplicity:
         details["Charge"], details["Mult"] = charge, multiplicity
@@ -181,7 +181,7 @@ def PreviewRowFor(action: Action, molecule: Molecule, index: int) -> PreviewRow:
         routeLine = ExtractFrom(molecule.sourcePath, ExtractRouteLine, molecule.sourcePath.suffix, empty="")
         method = IdentifyMethod(routeLine) if routeLine else ""
         if not method:
-            row.problem = "No route card found" if not routeLine else "Method not recognised"
+            row.problem = "No Route Card Found" if not routeLine else "Method Not Recognised"
             return row
         molecule.extensionType = extensionGetter(method)
         # No matching entry: genReRun uses the route verbatim, so only the U/RO reference can be added
@@ -192,7 +192,7 @@ def PreviewRowFor(action: Action, molecule: Molecule, index: int) -> PreviewRow:
     if not molecule.coordinateList:
         # dispatch skips files with no geometry
         RenderedRow(row, template, molecule, set())
-        row.problem = "No coordinates found"
+        row.problem = "No Coordinates Found"
         return row
     # The same check genFile skips jobs with, without its prompt for a missing project file
     return RenderedRow(row, template, molecule, MoleculeElements(molecule.coordinateList))

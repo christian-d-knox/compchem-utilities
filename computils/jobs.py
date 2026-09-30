@@ -61,21 +61,21 @@ def JobFileProblem(route: str, tags: list[str], extensionType: str, elements: se
                    texts: dict[str, str] | None = None) -> str:
     # {tag} and [group] syntax is parsed out in Catalog.Load and must never reach an input file
     if regex.search(ROUTE_LEAK_PATTERN, route):
-        return "Malformed [ ] group in benchmarkMethods"
+        return "Malformed [ ] Group in benchmarkMethods"
     if extensionType == Defaults.gaussianExtension and _UsesMixedBasis(route):
         master = _ProjectData("mixedbasis.txt", ExtractMixedBasis, _LoadMixedBasis, MixedBasis([], []), required, texts)
         if master is None:
             return _MissingProjectFile("mixedbasis.txt")
         _, _, missing = _FilterMixedBasis(master, elements)
         if missing:
-            return f"mixedbasis.txt has no basis for {' '.join(sorted(missing))}"
+            return f"mixedbasis.txt Has No Basis for {' '.join(sorted(missing))}"
     if extensionType == Defaults.orcaExtension and tags:
         blocks = _ProjectData("orcablocks.txt", ExtractOrcaBlocks, _LoadOrcaBlocks, {}, required, texts)
         if blocks is None:
             return _MissingProjectFile("orcablocks.txt")
         missingTags = [tag for tag in tags if tag not in blocks]
         if missingTags:
-            return f"orcablocks.txt has no {', '.join(missingTags)}"
+            return f"orcablocks.txt Has No {', '.join(missingTags)}"
     return ""
 
 def _ProjectData(fileName: str, extractor, loader, empty, required: bool, texts: dict[str, str] | None):
@@ -87,7 +87,7 @@ def _ProjectData(fileName: str, extractor, loader, empty, required: bool, texts:
 
 def _MissingProjectFile(fileName: str) -> str:
     root = FindProjectRoot()
-    return f"{fileName} not found (checked CWD and {ProjectFilePath(root, fileName) if root else 'no project root'})"
+    return f"{fileName} Not Found (Checked CWD and {ProjectFilePath(root, fileName) if root else 'No Project Root'})"
 
 # Separate method for input file generation to improve code efficiency. Path to input and the route template are
 # previously stored in molecule (fileops.Retarget).
