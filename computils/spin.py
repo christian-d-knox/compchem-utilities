@@ -55,16 +55,16 @@ def _RouteDeclaresBrokenSymmetry(data, extensionType: str) -> str:
         upperToken = token.upper()
         # ORCA: explicit unrestricted reference on the ! line
         if upperToken in ("UKS", "UHF"):
-            return f"route has {token}"
+            return f"Route Has {token}"
         # Gaussian: U-prefixed known method (e.g. UB3LYP/6-31G(d)), or guess=mix
         found = SplitReference(MethodKey(token))
         if found and found[0] == "U":
-            return f"route has {token.split('/')[0]}"
+            return f"Route Has {token.split('/')[0]}"
         if regex.match(r"GUESS[=(]+\(?\s*MIX", upperToken):
-            return f"route has {token}"
+            return f"Route Has {token}"
     # ORCA broken-symmetry block
     if FindInMap(data, r"BrokenSym", ignoreCase=True):
-        return "input has BrokenSym"
+        return "Input Has BrokenSym"
     return ""
 
 
@@ -88,13 +88,13 @@ def ClassifySpin(sourcePath: Path, rootName: str, multiplicity, extensionType: s
 
     # 2. Multiplicity
     if multiplicityValue is None:
-        return SpinState.CSS, "multiplicity unknown, assuming closed-shell"
+        return SpinState.CSS, "Multiplicity Unknown, Assuming Closed-Shell"
     if multiplicityValue > 1:
-        return SpinState.OPEN, f"multiplicity {multiplicityValue}"
+        return SpinState.OPEN, f"Multiplicity {multiplicityValue}"
 
     # mmap can't map an empty file; nothing more to learn from it anyway
     if not HasContent(sourcePath):
-        return SpinState.CSS, "multiplicity 1"
+        return SpinState.CSS, "Multiplicity 1"
 
     with MapFile(sourcePath) as data:
         # 3. Previous route card (user-declared)
@@ -112,5 +112,5 @@ def ClassifySpin(sourcePath: Path, rootName: str, multiplicity, extensionType: s
             console.print(f"[warning]{rootName}: the output reports a restricted -> unrestricted instability, but it "
                           f"is being treated as closed-shell. Add '{rootName}  oss' to spinstates.txt if it is an "
                           f"open-shell singlet.[/warning]")
-    reason = "multiplicity 1" if spinSquared is None else f"<S**2>={spinSquared:.3f}"
+    reason = "Multiplicity 1" if spinSquared is None else f"<S**2>={spinSquared:.3f}"
     return SpinState.CSS, reason

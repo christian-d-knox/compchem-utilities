@@ -126,7 +126,7 @@ class ListEditor(ModalScreen):
             self.query_one("#preview", Static).update(self.preview(current) if current else "")
         problems = self.Problems()
         self.query_one("#status", Static).update(
-            ProblemText(problems) if problems else Styled(f"{len(self.rows)} entr{'y' if len(self.rows) == 1 else 'ies'}", "dim"))
+            ProblemText(problems) if problems else Styled(f"{len(self.rows)} Entr{'y' if len(self.rows) == 1 else 'ies'}", "dim"))
 
     def ShowEntry(self, shown: bool) -> None:
         for widget in ("#entry-rule", "#entry", "#guide-rule", "#guide"):
@@ -219,8 +219,8 @@ class ListEditor(ModalScreen):
         if self.rows == self.original:
             self.dismiss(None)
             return
-        self.app.push_screen(Popup("Discard changes?", "Your changes to this list will be lost.",
-                                   [("d", "Discard", "discard")], "warning", cancel="Keep editing"),
+        self.app.push_screen(Popup("Discard Changes?", "Your changes to this list will be lost.",
+                                   [("d", "Discard", "discard")], "warning", cancel="Keep Editing"),
                              lambda result: self.dismiss(None) if result == "discard" else None)
 
 

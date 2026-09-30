@@ -23,7 +23,7 @@ from .inspect   import MethodIndices, PreviewMolecule, PreviewRowFor, ProgramNam
 RESOURCE_KEYS = [("CPU", "CPU"), ("memoryRatio", "Memory Ratio"), ("wallTime", "WallTime"), ("partition", "Partition")]
 USES_METHODS = (Action.SINGLE_POINT, Action.BENCHMARK)
 USES_GENERATION = (Action.SINGLE_POINT, Action.BENCHMARK, Action.RERUN)
-SHOWN_NAMES = 6                  # the Files section lists this many names, then "… +N more"
+SHOWN_NAMES = 6                  # the Files section lists this many names, then "… +N More"
 _FILE = Binding.Group("File", compact=True)
 _CHOOSE = Binding.Group("Choose", compact=True)
 # The characters a typed value takes. A box that never takes a space leaves ␣ to turn its row on/off
@@ -32,7 +32,7 @@ NUMBER, NAME, TEXT = r"[\d.eE+-]", r"\w", None
 
 def NameList(paths: list[Path]) -> str:
     more = len(paths) - SHOWN_NAMES
-    return ", ".join(path.name for path in paths[:SHOWN_NAMES]) + (f", … +{more} more" if more > 0 else "")
+    return ", ".join(path.name for path in paths[:SHOWN_NAMES]) + (f", … +{more} More" if more > 0 else "")
 
 
 # ─── GoodVibes settings (mock-up 4.2, GoodVibes) ──────────────────────
@@ -324,7 +324,7 @@ class BuilderScreen(Screen):
                 with OptionRow(id="options"):
                     for option in CubeOption:
                         yield Checkbox(option.value, id=f"cube-{option.value}", compact=True)
-                yield Input(placeholder="MO range, e.g. 10-15", id="range", disabled=True)
+                yield Input(placeholder="MO Range, e.g. 10-15", id="range", disabled=True)
             else:
                 with OptionRow(id="options"):
                     if self.action in USES_GENERATION:
@@ -380,7 +380,7 @@ class BuilderScreen(Screen):
                      else value if value != "" else "—")
             parts += [f"{label} {shown}", ("•" if overridden else " ", "bold"), "   "]
         if anyOverride:
-            parts.append(Styled("• set by project.toml", "info"))
+            parts.append(Styled("• Set by project.toml", "info"))
         return Text.assemble(*parts)
 
     def Row(self, index: int, name: str):
@@ -416,9 +416,9 @@ class BuilderScreen(Screen):
     def PreviewLabel(self) -> str:
         if self.action == Action.BENCHMARK:
             name = self.files[self.previewFile].name
-            count = f" · file {self.previewFile + 1} of {len(self.files)}" if len(self.files) > 1 else ""
+            count = f" · File {self.previewFile + 1} of {len(self.files)}" if len(self.files) > 1 else ""
             return f"Route Preview: {name} ({self.Row(self.methodIndex, name).spin}){count}"
-        return f"Route Preview: method {self.previewIndex}" if self.action in USES_METHODS else "Route Preview (from each file)"
+        return f"Route Preview: Method {self.previewIndex}" if self.action in USES_METHODS else "Route Preview (From Each File)"
 
     def Structures(self) -> tuple[list[Path], list[Path], list[Path]]:
         """GoodVibes: (structures, their single point files, structures without one), as the run will see them."""
@@ -497,17 +497,17 @@ class BuilderScreen(Screen):
         if self.action == Action.GOODVIBES:
             errors += self.GoodVibesRefresh()
         if count == 0 and not errors:
-            errors = ["No job would be submitted."]
-        skippedNote = f" ({skipped} skipped)" if skipped else ""
+            errors = ["No Job Would Be Submitted"]
+        skippedNote = f" ({skipped} Skipped)" if skipped else ""
         self.ready = not errors
         # The bottom edge shows what enter would submit (or run), or the first thing stopping it
-        # GoodVibes' screen is in Title Case
-        unit, ready, key = (("Structure", "Ready", "Run") if self.action == Action.GOODVIBES else ("job", "ready", "Submit"))
+        unit, key = ("Structure", "Run") if self.action == Action.GOODVIBES else ("Job", "Submit")
         more = f" (+{len(errors) - 1} more)" if len(errors) > 1 else ""
         # A missing SP file is fixed by changing the selection
         change = [" · ", KeyHint(self.app, "esc", "Change")] if errors and errors[0] in self.selectionErrors else []
-        self.query_one("#submit", FrameRule).right = (Text.assemble(Styled(errors[0] + more, "error"), *change) if errors
-            else Text.assemble(Styled(f"{count} {unit}{'s' if count != 1 else ''} {ready}{skippedNote}", "good"), " · ",
+        # A status, so no full stop: Validate's errors are also CLI sentences
+        self.query_one("#submit", FrameRule).right = (Text.assemble(Styled(errors[0].rstrip(".") + more, "error"), *change) if errors
+            else Text.assemble(Styled(f"{count} {unit}{'s' if count != 1 else ''} Ready{skippedNote}", "good"), " · ",
                                KeyHint(self.app, "⏎", key)))
         self.refresh_bindings()
 
@@ -572,11 +572,11 @@ class BuilderScreen(Screen):
     def action_help(self) -> None:
         if self.action == Action.GOODVIBES:
             Notice(self.app, "Help", "\n".join([
-                "↑/↓ Move between settings", "space Turn the setting on or off, or select an entropy method",
-                "←/→ Switch the entropy method", "Type to change a value (typing turns its setting on)",
-                "enter Run GoodVibes", "esc Back to the file list", "ctrl+q Quit"]))
+                "↑/↓ Move Between Settings", "space Turn a Setting On/Off or Select a Method",
+                "←/→ Switch the Entropy Method", "Type to Change a Value (Turns Its Setting On)",
+                "enter Run GoodVibes", "esc Back to the File List", "ctrl+q Quit"]))
             return
         Notice(self.app, "Help", "\n".join([
-            "tab / shift+tab Move between fields", "↑/↓ Move in the method list", "←/→ Move between options",
-            "space Toggle an option, or choose the highlighted method", "←/→ Change the previewed file (Benchmark)",
-            "enter Submit", "esc Back to the file list", "ctrl+q Quit"]))
+            "tab / shift+tab Move Between Sections", "↑/↓ Move in the Method List", "←/→ Move Between Options",
+            "space Toggle an Option or Choose the Method", "←/→ Change the Previewed File (Benchmark)",
+            "enter Submit", "esc Back to the File List", "ctrl+q Quit"]))

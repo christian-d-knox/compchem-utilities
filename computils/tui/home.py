@@ -20,7 +20,7 @@ from .inspect   import ActionExtensions, FileDetails, FileStatus, Styled
 
 ACTION_LABELS = {
     Action.RUN: "Run as Written", Action.SINGLE_POINT: "Single Point", Action.BENCHMARK: "Benchmark",
-    Action.RERUN: "Re-run", Action.CUBE: "Cube Files", Action.FORM_CHECK: "FormChk", Action.GOODVIBES: "GoodVibes",
+    Action.RERUN: "Re-Run", Action.CUBE: "Cube Files", Action.FORM_CHECK: "FormChk", Action.GOODVIBES: "GoodVibes",
 }
 # Screens below the divider, opened with ␣, ⏎ or a click: item id -> (label, the Config section it opens).
 # The later ones are listed so the layout matches the design
@@ -32,13 +32,14 @@ _FOLD = Binding.Group("Fold", compact=True)
 _TO_FILES = Binding.Group("Files", compact=True)
 # Every pane: ␣ acts on the highlighted item, ⏎ continues to the builder (the glob box, a text box, returns to the list)
 CONTINUE = Binding("enter", "screen.continue", "Continue")
-STATUS_STYLES = {"normal": "good", "error": "error", "unknown": "warning"}
+STATUS_STYLES = {"Normal": "good", "Error": "error", "Unknown": "warning"}
 
+# Help lines are labels, so Title Case (round 31)
 HELP = {
-    "actions": "↑/↓ Choose the action · space Choose it and go to the folders · enter Continue (to the file list until files are selected) · space or enter on Config or Project Files: open the config editor there · 1 Collapse",
-    "folders": "↑/↓ Move · space Open the folder (it becomes the working directory) · ←/→ Fold · enter Continue · 2 Collapse",
-    "glob":    "Type a pattern to select matching files · enter or esc Return to the file list",
-    "files":   "space Select · a All · n None · / Glob · enter Continue to the builder",
+    "actions": "↑/↓ Highlight an Action · space Choose It and Go to the Folders · enter Continue to the File List · space / enter on Config or Project Files: Open the Config Editor · 1 Collapse Actions",
+    "folders": "↑/↓ Move · space Open the Folder (It Becomes the CWD) · ←/→ Fold · enter Continue · 2 Collapse Folders",
+    "glob":    "Type a Pattern to Select Matching Files · enter / esc Return to the File List",
+    "files":   "space Select · a All · n None · / Glob · enter Continue to the Builder",
 }
 
 
@@ -149,7 +150,7 @@ class HomeScreen(Screen):
         # Grouped as "1 2 Collapse" so the footer fits in 84 columns
         Binding("1", "toggle_panel('actions')", "Actions", group=_COLLAPSE),
         Binding("2", "toggle_panel('folders')", "Folders", group=_COLLAPSE),
-        # Not in the footer (no room at 84 columns): the glob box's placeholder says "/ to focus"
+        # Not in the footer (no room at 84 columns): the glob box's placeholder says "/ to Focus"
         Binding("/", "focus_glob", "Glob", show=False),
         Binding("question_mark", "help", "Help"),
         *NAV_BINDINGS,
@@ -167,20 +168,20 @@ class HomeScreen(Screen):
         with Horizontal(id="body"):
             with Vertical(id="left"):
                 # Panes like Files and Details: the title is on the border, so it is never a tab stop or a click target.
-                # 1 / 2 collapse a pane to its title and a "(collapsed)" line
+                # 1 / 2 collapse a pane to its title and a "(Collapsed)" line
                 with Vertical(id="actions-panel", classes="pane"):
                     items = [ListItem(Label(label), id=f"action-{action.value}") for action, label in ACTION_LABELS.items()]
                     items.append(ListItem(Label("──────────────"), disabled=True))
                     items += [ListItem(Label(label), id=itemId) for itemId, (label, _) in SCREEN_ITEMS.items()]
-                    items += [ListItem(Label(f"{name} (later)"), disabled=True, classes="later") for name in LATER_SCREENS]
+                    items += [ListItem(Label(f"{name} (Later)"), disabled=True, classes="later") for name in LATER_SCREENS]
                     yield ActionList(*items, initial_index=1, id="actions")
-                    yield Static("(collapsed)", classes="collapsed-note")
+                    yield Static("(Collapsed)", classes="collapsed-note")
                 with Vertical(id="folders-panel", classes="pane"):
                     yield FolderTree(FindProjectRoot() or Path.cwd(), id="folders")
-                    yield Static("(collapsed)", classes="collapsed-note")
+                    yield Static("(Collapsed)", classes="collapsed-note")
             with Vertical(id="right"):
                 with Vertical(id="files-pane", classes="pane"):
-                    yield GlobInput(placeholder="Glob, e.g. *_failed*  (/ to focus)", id="glob")
+                    yield GlobInput(placeholder="Glob, e.g. *_failed*  (/ to Focus)", id="glob")
                     yield FileList(id="files")
                 yield Static(id="details", classes="pane")
         yield NavFooter()
@@ -192,7 +193,7 @@ class HomeScreen(Screen):
 
     def RefreshHeader(self) -> None:
         root = FindProjectRoot()
-        project = f"Project: {root.name}" if root else "No project"
+        project = f"Project: {root.name}" if root else "No Project"
         self.query_one("#title", Static).update(TitleLine("CompUtils", Styled(project, "info")))
         self.query_one("#files-pane").border_title = f"{Path.cwd().name} · {' '.join(ActionExtensions(self.action))}"
         # A screen item (Config, Project Files) highlighted names itself, and dims the file pane it doesn't use (4.1)
@@ -237,7 +238,7 @@ class HomeScreen(Screen):
                 status = FileStatus(path)
             except (OSError, ValueError):
                 # Deleted or unreadable since the folder was listed
-                status = "unknown"
+                status = "Unknown"
             self.app.call_from_thread(self.SetStatus, index, path.name, status)
 
     def SetStatus(self, index: int, name: str, status: str) -> None:
@@ -364,7 +365,7 @@ class HomeScreen(Screen):
 
     def action_help(self) -> None:
         focused = self.focused.id if self.focused else None
-        Notice(self.app, "Help", HELP.get(focused, "tab / shift+tab Move between panes · ↑/↓ Move · 1/2 Collapse panels · "
+        Notice(self.app, "Help", HELP.get(focused, "tab / shift+tab Move Between Panes · ↑/↓ Move · 1 / 2 Collapse Panels · "
                                                     "ctrl+q Quit").replace(" · ", "\n"))
 
     def OpenConfig(self, section: str = "SLURM") -> None:
@@ -389,7 +390,7 @@ class HomeScreen(Screen):
             # From another pane, continuing without a selection just moves on to the file list
             fileList = self.query_one("#files", FileList)
             if fileList.has_focus:
-                Notice(self.app, "No files selected", "Select at least one file first (space, a, or a glob).", "warning")
+                Notice(self.app, "No Files Selected", "Select at least one file first (space, a, or a glob).", "warning")
             fileList.focus()
             return
         # FormChk has no options, so it skips the builder (D22)

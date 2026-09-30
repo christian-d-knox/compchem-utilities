@@ -42,7 +42,7 @@ MASKED = {"botToken", "chatID", "broadcastGroupChatID"}
 CHOICES = {"openShellReference": ["U", "RO"], "colorMode": ["lowColor", "hexCode"]}
 # methodNames and targetProgram are edited together, as one method -> program list
 METHOD_MAP = ("methodNames", "targetProgram")
-TYPE_NAMES = {int: "a whole number", float: "a number", str: "text", bool: "true or false", list: "a list"}
+TYPE_NAMES = {int: "A Whole Number", float: "A Number", str: "Text", bool: "True or False", list: "A List"}
 FILE_NOTES = {
     "mixedbasis.txt": "Gen/GenECP basis sets and ECPs for mixed-basis Gaussian jobs.",
     "orcablocks.txt": "ORCA %blocks, pulled into jobs by {tag} tokens in benchmarkMethods.",
@@ -197,7 +197,7 @@ class ConfigScreen(Screen):
         self.valueWidth = 14
 
     def compose(self) -> ComposeResult:
-        project = f"Project: {self.root.name}" if self.root else "No project"
+        project = f"Project: {self.root.name}" if self.root else "No Project"
         yield Static(TitleLine("Config", Styled(project, "info")), id="title")
         with Horizontal(id="body"):
             with Vertical(id="left", classes="pane") as left:
@@ -295,39 +295,39 @@ class ConfigScreen(Screen):
         if name == "orcablocks.txt":
             blocks = ExtractFromText(text, ExtractOrcaBlocks, empty={})
             used = self.UsedTags()
-            lines.append(Text(f"Tags: {', '.join(blocks) or 'none'}"))
+            lines.append(Text(f"Tags: {', '.join(blocks) or 'None'}"))
             if used:
-                lines.append(Text("benchmarkMethods uses:"))
-                lines += [Styled(f"  {tag} ✓", "good") if tag in blocks else Styled(f"  {tag} ✗ missing", "error") for tag in used]
+                lines.append(Text("benchmarkMethods Uses:"))
+                lines += [Styled(f"  {tag} ✓", "good") if tag in blocks else Styled(f"  {tag} ✗ Missing", "error") for tag in used]
             reserved = sorted({name.lower() for name in regex.findall(r"(?m)^%(\w+)", text)} & RESERVED_ORCA_BLOCKS)
             lines += [Styled(f"⚠ %{block} is written by CompUtils; ignored", "warning") for block in reserved]
-            short = f"{len(blocks)} tag{'s' if len(blocks) != 1 else ''}"
+            short = f"{len(blocks)} Tag{'s' if len(blocks) != 1 else ''}"
         elif name == "mixedbasis.txt":
             basis = ExtractFromText(text, ExtractMixedBasis, empty=MixedBasis([], []))
             elements = [element for entry in basis.basis for element in entry.elements]
             ecp = [element for entry in basis.ecp for element in entry.elements]
             byCenter = sum(entry.byCenter for entry in basis.basis + basis.ecp)
-            lines.append(Text(f"Basis: {' '.join(elements) or 'none'}"))
-            lines.append(Text(f"ECP: {' '.join(ecp) or 'none'}"))
+            lines.append(Text(f"Basis: {' '.join(elements) or 'None'}"))
+            lines.append(Text(f"ECP: {' '.join(ecp) or 'None'}"))
             if byCenter:
-                lines.append(Styled(f"{byCenter} group(s) by center number (written as-is)", "info"))
-            short = f"{len(elements)} elements · {len(ecp)} ECP"
+                lines.append(Styled(f"{byCenter} Group(s) by Center Number (Written As-Is)", "info"))
+            short = f"{len(elements)} Element{'s' if len(elements) != 1 else ''} · {len(ecp)} ECP"
         else:
             overrides, problems = ParseSpinOverrides(text)
-            lines += [Text(f"{glob} → {state.name}") for glob, state in overrides] or [Text("No overrides")]
+            lines += [Text(f"{glob} → {state.name}") for glob, state in overrides] or [Text("No Overrides")]
             lines += [Styled(f"✗ Line {number}: {line}", "error") for number, line in problems]
-            short = f"{len(overrides)} override{'s' if len(overrides) != 1 else ''}"
+            short = f"{len(overrides)} Override{'s' if len(overrides) != 1 else ''}"
             if problems:
-                short += f" · {len(problems)} bad"
+                short += f" · {len(problems)} Bad"
         return short, Text("\n").join(lines)
 
     # ─── Content ──────────────────────────────────────────────────────
 
     def Cell(self, column: int, key: str) -> Text:
         if column == PROJECT and key not in Defaults._PROJECT_KEYS:
-            return Text("(Global only)", "dim")
+            return Text("(Global Only)", "dim")
         if column == PROJECT and self.root is None:
-            return Text("No project", "dim")
+            return Text("No Project", "dim")
         value = self.Value(column, key)
         pending, marked = (column, key) in self.pending, column == PROJECT and value is not DELETE
         # Cut to the column, leaving room for the [unsaved] brackets and the • of a project value (the one in force)
@@ -376,7 +376,7 @@ class ConfigScreen(Screen):
         table.move_cursor(row=min(row, len(self.keys) - 1), column=column, animate=False)
         where = (f"{label} · {filename}" if filename not in (None, FILES_SECTION)
                  else f"{label} · benchmarkMethods" if filename is None
-                 else f"{label} · {self.root.name}/{Defaults.projectMarker}" if self.root else f"{label} · No project")
+                 else f"{label} · {self.root.name}/{Defaults.projectMarker}" if self.root else f"{label} · No Project")
         self.query_one("#config-top", FrameRule).label = where
         self.query_one("#config-top", FrameRule).right = f"Project: {self.root.name}" if self.root else ""
         self.RefreshDetails()
@@ -391,14 +391,14 @@ class ConfigScreen(Screen):
             name = current[1]
             path = self.FilePath(name)
             lines = [Text(Cut(FILE_NOTES[name], width)),
-                     Text(Cut(f"Path: {path if path is not None else 'none (not inside a project)'}", width)),
-                     Styled("␣ Edit the file · r Discard its unsaved edits", "info")]
+                     Text(Cut(f"Path: {path if path is not None else 'None (Not Inside a Project)'}", width)),
+                     Styled("␣ Edit the File · r Discard Its Unsaved Edits", "info")]
             details.update(Text("\n").join(lines))
             self.query_one("#config-rule", FrameRule).label = name
         else:
             column, key = current
             comments = Defaults.ProjectComments() if column == PROJECT else Defaults._COMMENTS
-            default = "" if key in MASKED else f" · default {Shown(Defaults.DefaultValue(key))}"
+            default = "" if key in MASKED else f" · Default {Shown(Defaults.DefaultValue(key))}"
             isList = Defaults._TYPES[key] is list
             note = ("Read-only here." if key in READ_ONLY else "␣ opens the Benchmark Suite editor." if key == "benchmarkMethods"
                     else "␣ opens the Method → Program editor." if key in METHOD_MAP
@@ -407,17 +407,17 @@ class ConfigScreen(Screen):
             value = self.Value(column, key) if column == GLOBAL or key in Defaults._PROJECT_KEYS else DELETE
             lines = [Text(Cut(comments.get(key, "").split("\n# ")[0], width)),
                      Text(Cut(f"Value: {Shown(value, key in MASKED)}", width)),
-                     Text.assemble(Cut(f"{TYPE_NAMES[Defaults._TYPES[key]].capitalize()}"
-                                       f"{'' if isList else default}. ", width), Styled(note, "info"))]
+                     Text.assemble(Cut(f"{TYPE_NAMES[Defaults._TYPES[key]]}{'' if isList else default}", width),
+                                   Styled(f" · {note}" if note else "", "info"))]
             if problem:
                 lines.append(Styled(problem, "error"))
             details.update(Text("\n").join(lines))
-            scope = "Project override" if column == PROJECT else "Global"
+            scope = "Project Override" if column == PROJECT else "Global"
             self.query_one("#config-rule", FrameRule).label = f"{key} · {scope}"
         count = self.Unsaved()
         self.query_one("#config-save", FrameRule).right = (
-            Text.assemble(Styled(f"{count} unsaved", "warning"), " · ", KeyHint(self.app, "⏎", "Save")) if count
-            else Styled("No changes", "dim"))
+            Text.assemble(Styled(f"{count} Unsaved", "warning"), " · ", KeyHint(self.app, "⏎", "Save")) if count
+            else Styled("No Changes", "dim"))
         self.refresh_bindings()
 
     def Redraw(self) -> None:
@@ -467,11 +467,11 @@ class ConfigScreen(Screen):
                 self.SetPending(column, key, [row[0].strip() for row in rows])
                 self.Redraw()
         if key == "benchmarkMethods":
-            self.app.push_screen(ListEditor(f"Benchmark Suite · {scope}", [("Route card", None)], [[entry] for entry in values],
-                                            start=table.cursor_row, previewTitle="Renders as",
+            self.app.push_screen(ListEditor(f"Benchmark Suite · {scope}", [("Route Card", None)], [[entry] for entry in values],
+                                            start=table.cursor_row, previewTitle="Renders As",
                                             check=lambda rows: EmptyEntries(rows) or ([] if rows else ["✗ The suite needs at least one entry"]),
                                             preview=lambda row: self.RendersAs(row[0]),
-                                            guide=RouteGuide(), guideTitle="How route cards work"), DoneList)
+                                            guide=RouteGuide(), guideTitle="How Route Cards Work"), DoneList)
         else:
             self.app.push_screen(ListEditor(f"{key} · {scope}", [(key, None)], [[entry] for entry in values],
                                             check=EmptyEntries), DoneList)
@@ -503,7 +503,7 @@ class ConfigScreen(Screen):
     def EditFile(self, name: str) -> None:
         path = self.FilePath(name)
         if path is None:
-            Notice(self.app, "No project", f"Not inside a project and no ./{name}: `cu -init` creates a project.", "warning")
+            Notice(self.app, "No Project", f"Not inside a project and no ./{name}: `cu -init` creates a project.", "warning")
             return
 
         def Done(text) -> None:
@@ -558,7 +558,7 @@ class ConfigScreen(Screen):
             return
         if not self.Editable(column, key):
             if column == PROJECT and key in Defaults._PROJECT_KEYS and self.root is None:
-                Notice(self.app, "No project", "Not inside a project: `cu -init` creates one.", "warning")
+                Notice(self.app, "No Project", "Not inside a project: `cu -init` creates one.", "warning")
             return
         if Defaults._TYPES[key] is list:
             self.EditList(column, key)
@@ -632,7 +632,7 @@ class ConfigScreen(Screen):
                     if self.Editable(GLOBAL, key) and key not in HIDDEN:
                         self.SetPending(GLOBAL, key, Defaults.DefaultValue(key))
             self.Redraw()
-        self.app.push_screen(Popup("Reset file", message, [("y", "Reset", "reset")], "warning"), Apply)
+        self.app.push_screen(Popup("Reset File", message, [("y", "Reset", "reset")], "warning"), Apply)
 
     def MethodMismatch(self) -> str:
         """Why methodNames and targetProgram don't pair up, or "". The Catalog zips them, dropping the extras.
@@ -660,12 +660,12 @@ class ConfigScreen(Screen):
                 if result == "trim":
                     self.TrimMethods()
                     self.Save(then)
-            self.app.push_screen(Popup("Method list mismatch", mismatch, [("t", "Trim & Save", "trim")], "warning",
-                                       cancel="Keep editing"), Chosen)
+            self.app.push_screen(Popup("Method List Mismatch", mismatch, [("t", "Trim & Save", "trim")], "warning",
+                                       cancel="Keep Editing"), Chosen)
             return
         written, failed = self.WriteFiles()
         if failed:
-            Notice(self.app, "Save failed", f"Could not save {', '.join(failed)}; left unchanged.", "error")
+            Notice(self.app, "Save Failed", f"Could not save {', '.join(failed)}; left unchanged.", "error")
             self.Redraw()
             return
         self.saved = True
@@ -739,7 +739,7 @@ class ConfigScreen(Screen):
                 self.Save(leave)
         files = sorted({self.FileOf(*cell) for cell in self.pending} | self.regenerate)
         count = self.Unsaved()
-        self.app.push_screen(Popup("Unsaved changes", f"{count} unsaved change{'s' if count != 1 else ''} in {', '.join(files)}.",
+        self.app.push_screen(Popup("Unsaved Changes", f"{count} unsaved change{'s' if count != 1 else ''} in {', '.join(files)}.",
                                    [("s", "Save", "save"), ("d", "Discard", "discard")], "warning"), Chosen)
 
     def action_back(self) -> None:
@@ -747,7 +747,7 @@ class ConfigScreen(Screen):
 
     def action_help(self) -> None:
         Notice(self.app, "Help", "\n".join([
-            "↑/↓ Move between keys", "←/→ Global or Project",
-            "space Edit: toggles true/false, cycles choices, opens lists and project files in a pop-up editor",
-            "r Reset the value to its default (Project: follow global; a project file: drop its edits)",
-            "R Reset the whole file", "enter Save and return home", "esc Back", "ctrl+q Quit"]))
+            "↑/↓ Move Between Keys", "←/→ Global or Project",
+            "space Edit (Toggle, Cycle, or Open an Editor)",
+            "r Reset to Default (Project: Follow Global; a File: Drop Its Edits)",
+            "R Reset the Whole File", "enter Save and Return Home", "esc Back", "ctrl+q Quit"]))
