@@ -44,7 +44,7 @@ CHOICES = {"openShellReference": ["U", "RO"], "colorMode": ["lowColor", "hexCode
 METHOD_MAP = ("methodNames", "targetProgram")
 TYPE_NAMES = {int: "a whole number", float: "a number", str: "text", bool: "true or false", list: "a list"}
 FILE_NOTES = {
-    "mixedbasis.txt": "Gen/GenECP basis sets and ECPs for mixed-basis Gaussian jobs.",
+    "mixedbasis.txt": "Gen/GenECP basis sets, then (after a blank line) ECPs, for mixed-basis Gaussian jobs.",
     "orcablocks.txt": "ORCA %blocks, pulled into jobs by {tag} tokens in benchmarkMethods.",
     "spinstates.txt": "Per-molecule CSS/OSS overrides for singlets (glob  css|oss).",
 }
@@ -52,8 +52,8 @@ FILE_NOTES = {
 FILE_EXAMPLES = {
     "orcablocks.txt": "%cpcm\n    smd true\nend\n# @tag tddft10\n%tddft\n    nroots 10\nend\n"
                       "Tag: %name, or # @tag above\nUse: {cpcm} {tddft10}",
-    "mixedbasis.txt": "C H N O 0\n6-31G(d)\n****\nFe Cu 0\nSDD\n****\n\nFe Cu 0\nSDD\n"
-                      "A blank line starts the ECPs",
+    # The blank line before the second "Fe Cu 0" starts the ECP section (FILE_NOTES says so; 9 lines fit half the column)
+    "mixedbasis.txt": "C H N O 0\n6-31G(d)\n****\nFe Cu 0\nSDD\n****\n\nFe Cu 0\nSDD",
     "spinstates.txt": "Fe2S2_*    oss\nNi_sqpl_*  css   # a comment\n\n"
                       "<name or glob>  css|oss, matched\nagainst the file name. First match\nwins; singlets only.",
 }
