@@ -61,7 +61,7 @@ def JobFileProblem(route: str, tags: list[str], extensionType: str, elements: se
                    texts: dict[str, str] | None = None) -> str:
     # {tag} and [group] syntax is parsed out in Catalog.Load and must never reach an input file
     if regex.search(ROUTE_LEAK_PATTERN, route):
-        return "malformed [ ] group in benchmarkMethods"
+        return "Malformed [ ] group in benchmarkMethods"
     if extensionType == Defaults.gaussianExtension and _UsesMixedBasis(route):
         master = _ProjectData("mixedbasis.txt", ExtractMixedBasis, _LoadMixedBasis, MixedBasis([], []), required, texts)
         if master is None:

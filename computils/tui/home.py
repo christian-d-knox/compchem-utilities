@@ -35,10 +35,10 @@ CONTINUE = Binding("enter", "screen.continue", "Continue")
 STATUS_STYLES = {"normal": "good", "error": "error", "unknown": "warning"}
 
 HELP = {
-    "actions": "↑/↓ choose the action · space choose it and go to the folders · enter continue (to the file list until files are selected) · space or enter on Config or Project Files opens the config editor there · 1 collapse",
-    "folders": "↑/↓ move · space open folder (becomes the working directory) · ←/→ fold · enter continue · 2 collapse",
-    "glob":    "Type a pattern to select matching files · enter or esc returns to the file list",
-    "files":   "space select · a all · n none · / glob · enter continue to the builder",
+    "actions": "↑/↓ Choose the action · space Choose it and go to the folders · enter Continue (to the file list until files are selected) · space or enter on Config or Project Files: open the config editor there · 1 Collapse",
+    "folders": "↑/↓ Move · space Open the folder (it becomes the working directory) · ←/→ Fold · enter Continue · 2 Collapse",
+    "glob":    "Type a pattern to select matching files · enter or esc Return to the file list",
+    "files":   "space Select · a All · n None · / Glob · enter Continue to the builder",
 }
 
 
@@ -177,7 +177,7 @@ class HomeScreen(Screen):
 
     def RefreshHeader(self) -> None:
         root = FindProjectRoot()
-        project = f"project: {root.name}" if root else "no project"
+        project = f"Project: {root.name}" if root else "No project"
         self.query_one("#title", Static).update(TitleLine("CompUtils", Styled(project, "info")))
         self.query_one("#files-pane").border_title = f"{Path.cwd().name} · {' '.join(ActionExtensions(self.action))}"
         # A screen item (Config, Project Files) highlighted names itself, and dims the file pane it doesn't use (4.1)
@@ -344,8 +344,8 @@ class HomeScreen(Screen):
 
     def action_help(self) -> None:
         focused = self.focused.id if self.focused else None
-        Notice(self.app, "Help", HELP.get(focused, "tab / shift+tab move between panes · ↑/↓ move · 1/2 collapse panels · "
-                                                    "ctrl+q quit").replace(" · ", "\n"))
+        Notice(self.app, "Help", HELP.get(focused, "tab / shift+tab Move between panes · ↑/↓ Move · 1/2 Collapse panels · "
+                                                    "ctrl+q Quit").replace(" · ", "\n"))
 
     def OpenConfig(self, section: str = "SLURM") -> None:
         from .config import ConfigScreen

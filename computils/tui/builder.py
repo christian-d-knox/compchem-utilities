@@ -260,6 +260,6 @@ class BuilderScreen(Screen):
 
     def action_help(self) -> None:
         Notice(self.app, "Help", "\n".join([
-            "tab / shift+tab move between fields", "↑/↓ move in the method list", "←/→ move between options",
-            "space toggles an option or chooses the highlighted method", "←/→ change the previewed file (Benchmark)",
-            "enter submits", "esc goes back to the file list", "ctrl+q quits"]))
+            "tab / shift+tab Move between fields", "↑/↓ Move in the method list", "←/→ Move between options",
+            "space Toggle an option, or choose the highlighted method", "←/→ Change the previewed file (Benchmark)",
+            "enter Submit", "esc Back to the file list", "ctrl+q Quit"]))

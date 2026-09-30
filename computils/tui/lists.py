@@ -1,7 +1,7 @@
 """Pop-up editors framed like Popup (TUI_DESIGN.md 4.4): lists edited as lists, and project files edited as text."""
 from rich.text import Text
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Input, Static, TextArea
 
@@ -64,7 +64,7 @@ class ListEditor(ModalScreen):
     MAX_WIDTH = 96
 
     def __init__(self, title: str, columns: list[tuple[str, list[str] | None]], rows: list[list[str]], start: int = 0,
-                 check=None, preview=None, previewTitle: str = "", guide: Text | None = None, guideTitle: str = "") -> None:
+                 check=None, preview=None, previewTitle: str = "", guide=None, guideTitle: str = "") -> None:
         super().__init__()
         self.title_, self.columns, self.check, self.preview, self.previewTitle = title, columns, check, preview, previewTitle
         self.guide, self.guideTitle = guide, guideTitle
@@ -230,14 +230,17 @@ class TextEditor(ModalScreen):
     reverts. Dismisses with the text."""
     DEFAULT_CSS = """
     TextEditor { align: center middle; }
+    /* Sized by CSS, so the frame follows the terminal when it is resized */
+    TextEditor > Vertical { width: 100%; max-width: 110; height: 100%; margin: 1 2; }
     TextEditor #editor-body { height: 1fr; }
     TextEditor TextArea { width: 1fr; border: none; padding: 0; }
     TextEditor #editor-side { width: 34; border-left: solid $secondary; }
-    TextEditor #summary { height: 1fr; min-height: 6; padding: 0 1; }
-    TextEditor #example { height: auto; padding: 0 1; color: $text-muted; }
+    TextEditor #summary, TextEditor #example { border-top: solid $secondary; border-title-align: left; padding: 0 1; }
+    TextEditor #summary { height: 1fr; }
+    /* The example takes at most half the column, and scrolls within it rather than pushing past the frame */
+    TextEditor #example { height: auto; max-height: 50%; color: $text-muted; }
     """
     BINDINGS = [Binding("escape", "done"), Binding("ctrl+r", "revert")]
-    MAX_WIDTH = 110
 
     def __init__(self, title: str, text: str, summary, example: str = "") -> None:
         super().__init__()
@@ -249,17 +252,16 @@ class TextEditor(ModalScreen):
             with Horizontal(id="editor-body", classes="side"):
                 yield TextArea(self.original, id="text", soft_wrap=False)
                 with Vertical(id="editor-side"):
-                    yield FrameRule("──", "Check")
                     yield Static(id="summary")
                     if self.example:
-                        yield FrameRule("──", "Example")
-                        yield Static(self.example, id="example")
+                        with VerticalScroll(id="example"):
+                            yield Static(self.example)
             yield FrameRule("└┘", id="text-keys")
 
     def on_mount(self) -> None:
-        frame = self.query(Vertical).first()
-        frame.styles.width = min(self.app.size.width - 4, self.MAX_WIDTH)
-        frame.styles.height = self.app.size.height - 2
+        self.query_one("#summary").border_title = "Check"
+        for example in self.query("#example"):
+            example.border_title = "Example"
         self.query_one("#text-keys", FrameRule).right = Text("  ").join(
             [KeyHint(self.app, "esc", "Done"), KeyHint(self.app, "^r", "Revert")])
         self.query_one("#summary", Static).update(self.summary(self.original))
