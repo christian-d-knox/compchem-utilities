@@ -31,14 +31,18 @@ class CompUtilsApp(App):
     CSS = """
     #title { height: 1; background: $panel; }
     #body { height: 1fr; }
-    #left { width: 26; }
-    #left Collapsible { padding: 0; }
-    #actions { height: auto; }
+    /* Fits the longest pane title, "Actions: Run as Written" (a border title shows width - 6 characters) */
+    #left { width: 29; }
+    #actions, #actions-panel { height: auto; }
+    #actions { border: none; }
     /* Folders takes whatever height Actions leaves (all of it when Actions is collapsed) */
     #folders-panel { height: 1fr; }
-    #folders-panel > Contents { height: 1fr; }
     #folders-panel.-collapsed { height: auto; }
     #folders { height: 1fr; min-height: 4; }
+    /* A collapsed pane (1 / 2) shows only its border title and this note */
+    .collapsed-note { display: none; color: $text-muted; }
+    .pane.-collapsed > .collapsed-note { display: block; }
+    .pane.-collapsed > #actions, .pane.-collapsed > #folders { display: none; }
     #right { width: 1fr; }
     /* Every titled box on every screen (P2), square-cornered (house style); the focused one takes the focus colour */
     .pane { border: solid $secondary; padding: 0 1; height: auto; }
@@ -49,7 +53,7 @@ class CompUtilsApp(App):
     #details { height: 6; }
     #body.stacked { layout: vertical; }
     #body.stacked #left { width: 100%; height: auto; layout: horizontal; }
-    #body.stacked #left Collapsible { width: 1fr; }
+    #body.stacked #left .pane { width: 1fr; }
     .later { color: $text-muted; }
     /* Home's file pane and Details while a screen item (Config) is highlighted in Actions */
     .-dimmed { text-opacity: 45%; }

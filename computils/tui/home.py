@@ -8,7 +8,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Collapsible, DirectoryTree, Input, Label, ListItem, ListView, SelectionList, Static
+from textual.widgets import DirectoryTree, Input, Label, ListItem, ListView, SelectionList, Static
 from textual.widgets.selection_list import Selection
 from textual.worker import get_current_worker
 
@@ -66,10 +66,21 @@ class ActionList(ListView):
     BINDINGS = [Binding("space", "select_cursor", "Choose", key_display="␣"), CONTINUE]
 
 
-class GlobInput(Input):
-    # A text box: enter (Input's submit) and esc both return to the file list. Distinct actions, or the footer shows one
+class GlobInput(Input, can_focus=False):
+    """A text box: enter (Input's submit) and esc both return to the file list. Distinct actions, or the footer shows one.
+    Not a tab stop, so Tab cycles only the panes; / (or a click) focuses it, and it stops being focusable on leaving."""
     BINDINGS = [Binding("enter", "submit", "Files", group=_TO_FILES),
                 Binding("escape", "screen.leave_glob", "Files", group=_TO_FILES)]
+
+    def Enter(self) -> None:
+        self.can_focus = True
+        self.focus()
+
+    def on_click(self) -> None:
+        self.Enter()
+
+    def on_blur(self) -> None:
+        self.can_focus = False
 
 
 class FolderTree(DirectoryTree):
@@ -155,14 +166,18 @@ class HomeScreen(Screen):
         yield Static(id="title")
         with Horizontal(id="body"):
             with Vertical(id="left"):
-                with Collapsible(title="Actions", collapsed=False, id="actions-panel"):
+                # Panes like Files and Details: the title is on the border, so it is never a tab stop or a click target.
+                # 1 / 2 collapse a pane to its title and a "(collapsed)" line
+                with Vertical(id="actions-panel", classes="pane"):
                     items = [ListItem(Label(label), id=f"action-{action.value}") for action, label in ACTION_LABELS.items()]
                     items.append(ListItem(Label("──────────────"), disabled=True))
                     items += [ListItem(Label(label), id=itemId) for itemId, (label, _) in SCREEN_ITEMS.items()]
                     items += [ListItem(Label(f"{name} (later)"), disabled=True, classes="later") for name in LATER_SCREENS]
                     yield ActionList(*items, initial_index=1, id="actions")
-                with Collapsible(title="Folders", collapsed=False, id="folders-panel"):
+                    yield Static("(collapsed)", classes="collapsed-note")
+                with Vertical(id="folders-panel", classes="pane"):
                     yield FolderTree(FindProjectRoot() or Path.cwd(), id="folders")
+                    yield Static("(collapsed)", classes="collapsed-note")
             with Vertical(id="right"):
                 with Vertical(id="files-pane", classes="pane"):
                     yield GlobInput(placeholder="Glob, e.g. *_failed*  (/ to focus)", id="glob")
@@ -183,10 +198,10 @@ class HomeScreen(Screen):
         # A screen item (Config, Project Files) highlighted names itself, and dims the file pane it doesn't use (4.1)
         screenItem = self.ScreenItemHighlighted()
         label = SCREEN_ITEMS[screenItem][0] if screenItem else ACTION_LABELS[self.action]
-        self.query_one("#actions-panel", Collapsible).title = f"Actions: {label}"
+        self.query_one("#actions-panel").border_title = f"Actions: {label}"
         for pane in ("#files-pane", "#details"):
             self.query_one(pane).set_class(screenItem is not None, "-dimmed")
-        self.query_one("#folders-panel", Collapsible).title = f"Folders: {Path.cwd().name}"
+        self.query_one("#folders-panel").border_title = f"Folders: {Path.cwd().name}"
 
     def RefreshFiles(self, keep: set[str] | None = None) -> None:
         """Re-list the CWD for the current action. Selections that no longer match the filter are dropped.
@@ -289,8 +304,7 @@ class HomeScreen(Screen):
             self.OpenConfig(SCREEN_ITEMS[event.item.id][1])
             return
         # Next stop after the action is the folder; with Folders collapsed, the file list
-        collapsed = self.query_one("#folders-panel", Collapsible).collapsed
-        self.query_one("#files" if collapsed else "#folders").focus()
+        self.query_one("#files" if self.Collapsed("folders") else "#folders").focus()
 
     def on_selection_list_selection_highlighted(self, event: SelectionList.SelectionHighlighted) -> None:
         self.ScheduleDetails(Path.cwd() / event.selection.value)
@@ -323,15 +337,21 @@ class HomeScreen(Screen):
 
     # ─── Actions ──────────────────────────────────────────────────────
 
+    def Collapsed(self, name: str) -> bool:
+        return self.query_one(f"#{name}-panel").has_class("-collapsed")
+
     def action_toggle_panel(self, name: str) -> None:
-        panel = self.query_one(f"#{name}-panel", Collapsible)
-        panel.collapsed = not panel.collapsed
+        panel = self.query_one(f"#{name}-panel")
+        # A collapsed pane's list or tree is hidden, so it can't keep the focus: hand it to the file list
+        if not self.Collapsed(name) and self.focused is not None and panel in self.focused.ancestors:
+            self.query_one("#files").focus()
+        panel.toggle_class("-collapsed")
         # With both collapsed, the two summaries share one strip and the file pane gets the full width (D19)
-        bothCollapsed = all(self.query_one(f"#{n}-panel", Collapsible).collapsed for n in ("actions", "folders"))
+        bothCollapsed = all(self.Collapsed(n) for n in ("actions", "folders"))
         self.query_one("#body").set_class(bothCollapsed, "stacked")
 
     def action_focus_glob(self) -> None:
-        self.query_one("#glob").focus()
+        self.query_one("#glob", GlobInput).Enter()
 
     def action_leave_glob(self) -> None:
         self.query_one("#files").focus()
