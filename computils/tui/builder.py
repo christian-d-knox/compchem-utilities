@@ -14,9 +14,8 @@ from ..defaults import Defaults
 from ..intent   import IntentDraft
 from .common    import NAV_BINDINGS, FrameRule, KeyHint, NavFooter, Notice, OptionRow
 from .home      import ACTION_LABELS, TitleLine
-from .inspect   import MethodIndices, PreviewMolecule, PreviewRowFor, ProgramName, Styled
+from .inspect   import MethodIndices, PreviewMolecule, PreviewRowFor, ProgramName, RowText, Styled
 
-SPAN_STYLES = {"method": "operation", "added": "good", "base": ""}   # D17 / D28
 RESOURCE_KEYS = [("CPU", "CPU"), ("memoryRatio", "Memory Ratio"), ("wallTime", "WallTime"), ("partition", "Partition")]
 USES_METHODS = (Action.SINGLE_POINT, Action.BENCHMARK)
 USES_GENERATION = (Action.SINGLE_POINT, Action.BENCHMARK, Action.RERUN)
@@ -167,17 +166,7 @@ class BuilderScreen(Screen):
             width = max(len(path.name) for path in self.files) + 2
             rows = [(f"{row.spin:<5}{path.name.ljust(width)}", row)
                     for path in self.files for row in [self.Row(index, path.name)]]
-        lines = []
-        for prefix, row in rows:
-            line = Text(prefix)
-            for text, origin in row.spans:
-                line.append_text(Styled(text, SPAN_STYLES[origin]))
-            if row.tags:
-                line.append_text(Styled(f"  ← orcablocks {' '.join('{' + tag + '}' for tag in row.tags)}", "good"))
-            if row.problem:
-                line.append_text(Styled(f"  ⚠ {row.problem}", "warning"))
-            lines.append(line)
-        return Text("\n").join(lines)
+        return Text("\n").join(Text(prefix) + RowText(row) for prefix, row in rows)
 
     def PreviewLabel(self) -> str:
         if self.action == Action.BENCHMARK:

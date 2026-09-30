@@ -24,19 +24,27 @@ from .project  import ResolveProjectFile
 _OVERRIDE_STATES = {"css": SpinState.CSS, "oss": SpinState.OSS}
 
 
-# Parsed once per run: [(rootName glob, state)], in file order
-@functools.cache
-def _LoadSpinOverrides(overridePath: Path) -> list[tuple[str, SpinState]]:
-    overrides = []
-    for lineNumber, line in enumerate(overridePath.read_text().splitlines(), start=1):
+def ParseSpinOverrides(text: str) -> tuple[list[tuple[str, SpinState]], list[tuple[int, str]]]:
+    """spinstates.txt text -> ([(rootName glob, state)] in file order, [(line number, bad line)])."""
+    overrides, problems = [], []
+    for lineNumber, line in enumerate(text.splitlines(), start=1):
         fields = line.split("#", 1)[0].split()
         if not fields:
             continue
         if len(fields) != 2 or fields[1].lower() not in _OVERRIDE_STATES:
-            console.print(f"[warning]{overridePath}:{lineNumber}: expected '<name or glob>  css|oss', got "
-                          f"'{line.strip()}'. Ignoring this line.[/warning]")
+            problems.append((lineNumber, line.strip()))
             continue
         overrides.append((fields[0], _OVERRIDE_STATES[fields[1].lower()]))
+    return overrides, problems
+
+
+# Parsed once per run
+@functools.cache
+def _LoadSpinOverrides(overridePath: Path) -> list[tuple[str, SpinState]]:
+    overrides, problems = ParseSpinOverrides(overridePath.read_text())
+    for lineNumber, line in problems:
+        console.print(f"[warning]{overridePath}:{lineNumber}: expected '<name or glob>  css|oss', got "
+                      f"'{line}'. Ignoring this line.[/warning]")
     return overrides
 
 

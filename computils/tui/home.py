@@ -22,9 +22,10 @@ ACTION_LABELS = {
     Action.RUN: "Run as Written", Action.SINGLE_POINT: "Single Point", Action.BENCHMARK: "Benchmark",
     Action.RERUN: "Re-run", Action.CUBE: "Cube Files", Action.FORM_CHECK: "FormChk",
 }
-# Screens below the divider: opened with ␣, ⏎ or a click. The rest are listed so the layout matches the design
-CONFIG_ITEM = "screen-config"
-LATER_SCREENS = ["Queue Monitor", "GoodVibes", "Project Files"]
+# Screens below the divider, opened with ␣, ⏎ or a click: item id -> (label, the Config section it opens).
+# The later ones are listed so the layout matches the design
+SCREEN_ITEMS = {"screen-config": ("Config", "SLURM"), "screen-files": ("Project Files", "Project Files")}
+LATER_SCREENS = ["Queue Monitor", "GoodVibes"]
 _COLLAPSE = Binding.Group("Collapse")
 _ALL_NONE = Binding.Group("All/None")
 _FOLD = Binding.Group("Fold", compact=True)
@@ -34,7 +35,7 @@ CONTINUE = Binding("enter", "screen.continue", "Continue")
 STATUS_STYLES = {"normal": "good", "error": "error", "unknown": "warning"}
 
 HELP = {
-    "actions": "↑/↓ choose the action · space choose it and go to the folders · enter continue (to the file list until files are selected) · space or enter on Config opens the config editor · 1 collapse",
+    "actions": "↑/↓ choose the action · space choose it and go to the folders · enter continue (to the file list until files are selected) · space or enter on Config or Project Files opens the config editor there · 1 collapse",
     "folders": "↑/↓ move · space open folder (becomes the working directory) · ←/→ fold · enter continue · 2 collapse",
     "glob":    "Type a pattern to select matching files · enter or esc returns to the file list",
     "files":   "space select · a all · n none · / glob · enter continue to the builder",
@@ -157,7 +158,7 @@ class HomeScreen(Screen):
                 with Collapsible(title="Actions", collapsed=False, id="actions-panel"):
                     items = [ListItem(Label(label), id=f"action-{action.value}") for action, label in ACTION_LABELS.items()]
                     items.append(ListItem(Label("──────────────"), disabled=True))
-                    items.append(ListItem(Label("Config"), id=CONFIG_ITEM))
+                    items += [ListItem(Label(label), id=itemId) for itemId, (label, _) in SCREEN_ITEMS.items()]
                     items += [ListItem(Label(f"{name} (later)"), disabled=True, classes="later") for name in LATER_SCREENS]
                     yield ActionList(*items, initial_index=1, id="actions")
                 with Collapsible(title="Folders", collapsed=False, id="folders-panel"):
@@ -179,11 +180,12 @@ class HomeScreen(Screen):
         project = f"project: {root.name}" if root else "no project"
         self.query_one("#title", Static).update(TitleLine("CompUtils", Styled(project, "info")))
         self.query_one("#files-pane").border_title = f"{Path.cwd().name} · {' '.join(ActionExtensions(self.action))}"
-        # A screen item (Config) highlighted names itself, and dims the file pane it doesn't use (4.1)
-        onScreen = self.ScreenItemHighlighted()
-        self.query_one("#actions-panel", Collapsible).title = f"Actions: {'Config' if onScreen else ACTION_LABELS[self.action]}"
+        # A screen item (Config, Project Files) highlighted names itself, and dims the file pane it doesn't use (4.1)
+        screenItem = self.ScreenItemHighlighted()
+        label = SCREEN_ITEMS[screenItem][0] if screenItem else ACTION_LABELS[self.action]
+        self.query_one("#actions-panel", Collapsible).title = f"Actions: {label}"
         for pane in ("#files-pane", "#details"):
-            self.query_one(pane).set_class(onScreen, "-dimmed")
+            self.query_one(pane).set_class(screenItem is not None, "-dimmed")
         self.query_one("#folders-panel", Collapsible).title = f"Folders: {Path.cwd().name}"
 
     def RefreshFiles(self, keep: set[str] | None = None) -> None:
@@ -202,9 +204,9 @@ class HomeScreen(Screen):
         self.LoadStatuses(paths)
         self.ScheduleDetails(paths[0] if paths else None, 0)
 
-    def ScreenItemHighlighted(self) -> bool:
+    def ScreenItemHighlighted(self) -> str | None:
         item = self.query_one("#actions", ActionList).highlighted_child
-        return item is not None and item.id == CONFIG_ITEM
+        return item.id if item is not None and item.id in SCREEN_ITEMS else None
 
     def FilePrompt(self, name: str, status: str) -> Text:
         return Text.assemble(name.ljust(self._nameWidth), Styled(status, STATUS_STYLES.get(status, "dim")))
@@ -283,8 +285,8 @@ class HomeScreen(Screen):
         self.RefreshFiles(previous)
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if event.item.id == CONFIG_ITEM:
-            self.OpenConfig()
+        if event.item.id in SCREEN_ITEMS:
+            self.OpenConfig(SCREEN_ITEMS[event.item.id][1])
             return
         # Next stop after the action is the folder; with Folders collapsed, the file list
         collapsed = self.query_one("#folders-panel", Collapsible).collapsed
@@ -345,7 +347,7 @@ class HomeScreen(Screen):
         Notice(self.app, "Help", HELP.get(focused, "tab / shift+tab move between panes · ↑/↓ move · 1/2 collapse panels · "
                                                     "ctrl+q quit").replace(" · ", "\n"))
 
-    def OpenConfig(self) -> None:
+    def OpenConfig(self, section: str = "SLURM") -> None:
         from .config import ConfigScreen
         keep = set(self.query_one("#files", FileList).selected)
 
@@ -353,11 +355,12 @@ class HomeScreen(Screen):
             # Saved values (extensions, project overrides) change what Home lists and shows
             if saved:
                 self.RefreshFiles(keep)
-        self.app.push_screen(ConfigScreen(), Closed)
+        self.app.push_screen(ConfigScreen(section), Closed)
 
     def action_continue(self) -> None:
-        if self.query_one("#actions", ActionList).has_focus and self.ScreenItemHighlighted():
-            self.OpenConfig()
+        screenItem = self.ScreenItemHighlighted()
+        if self.query_one("#actions", ActionList).has_focus and screenItem:
+            self.OpenConfig(SCREEN_ITEMS[screenItem][1])
             return
         files = [Path(name) for name in self.query_one("#files", FileList).selected]
         if self.action not in FILE_ACTIONS:

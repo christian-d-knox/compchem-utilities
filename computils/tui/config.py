@@ -1,7 +1,10 @@
-"""Config editor: global values and project overrides, one TOML file per section, patched in place (TUI_DESIGN.md 4.4)."""
+"""Config editor: global values and project overrides, one TOML file per section, patched in place, plus the project
+files (TUI_DESIGN.md 4.4). Lists are edited in a ListEditor pop-up, project files in a TextEditor pop-up."""
 import tomllib as tom
+from itertools import zip_longest
 from pathlib import Path
 
+import regex
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -9,30 +12,45 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import DataTable, Input, Label, ListItem, ListView, Static
 
+from ..actions  import SpinState
+from ..catalog  import MethodKey, ParseRouteTemplate
 from ..defaults import DELETE, Defaults, tomlValue, writeToml
-from ..project  import PROJECT_CONFIG, FindProjectRoot, ProjectFilePath, ReloadConfig, SaveProjectConfig
+from ..fileops  import (PROGRAMS, RESERVED_ORCA_BLOCKS, ExtractFromText, ExtractMixedBasis, ExtractOrcaBlocks,
+                        MixedBasis, extensionGetter)
+from ..molecule import Molecule
+from ..project  import (PROJECT_CONFIG, PROJECT_FILES, FindProjectRoot, ProjectFilePath, ReloadConfig,
+                        ResolveProjectFile, SaveProjectConfig)
+from ..spin     import ParseSpinOverrides
 from .common    import NAV_BINDINGS, FrameRule, KeyHint, NavFooter, Notice, Popup
 from .home      import TitleLine
-from .inspect   import Styled
+from .inspect   import PreviewRow, RenderedRow, RowText, Styled
+from .lists     import Cut, FitColumns, ListEditor, ProblemText, TextEditor
 
-# (label, file); the Benchmark Suite lists benchmarkMethods read-only until its own editor exists
+# (label, file). The divider and Project Files sit below the TOML sections, as in Home's Actions list
+FILES_SECTION = "project files"
 SECTIONS = [("SLURM", "slurm.toml"), ("Programs", "programs.toml"), ("Benchmark Suite", None),
             ("Extensions", "extensions.toml"), ("Notifications", "notifications.toml"),
-            ("Quality of Life", "qol.toml"), ("Paths", "paths.toml")]
+            ("Quality of Life", "qol.toml"), ("Paths", "paths.toml"), ("──────────────", "divider"),
+            ("Project Files", FILES_SECTION)]
 # Set by first-time setup only (the TUI opens only once it has run), or power-user edits made by hand in the file
 HIDDEN = {"hpcType", "submissionList", "gaussianNonVariant", "orcaNonVariant"}
-READ_ONLY = {"binDirectory", "projectMarker", "benchmarkMethods",
-             "botToken", "chatID", "broadcastGroupChatID", "broadcastThreshold"}
+READ_ONLY = {"binDirectory", "projectMarker", "botToken", "chatID", "broadcastGroupChatID", "broadcastThreshold"}
 MASKED = {"botToken", "chatID", "broadcastGroupChatID"}
 # Keys with a fixed set of values: ␣ cycles through them
 CHOICES = {"openShellReference": ["U", "RO"], "colorMode": ["lowColor", "hexCode"]}
-TYPE_NAMES = {int: "a whole number", float: "a number", str: "text", bool: "true or false",
-              list: 'a list, e.g. ["a", "b"]'}
+# methodNames and targetProgram are edited together, as one method -> program list
+METHOD_MAP = ("methodNames", "targetProgram")
+TYPE_NAMES = {int: "a whole number", float: "a number", str: "text", bool: "true or false", list: "a list"}
+FILE_NOTES = {
+    "mixedbasis.txt": "Gen/GenECP basis sets and ECPs for mixed-basis Gaussian jobs.",
+    "orcablocks.txt": "ORCA %blocks, pulled into jobs by {tag} tokens in benchmarkMethods.",
+    "spinstates.txt": "Per-molecule CSS/OSS overrides for singlets (glob  css|oss).",
+}
+# The Renders-as preview's stand-in molecules: (label, multiplicity, spin state)
+STAND_INS = [("CSS", 1, SpinState.CSS), ("OSS", 1, SpinState.OSS), ("Doublet", 2, SpinState.OPEN),
+             ("Triplet", 3, SpinState.OPEN)]
 GLOBAL, PROJECT = 1, 2          # table columns (0 is the key)
-
-
-def Cut(text: str, width: int) -> str:
-    return text if len(text) <= width else text[:max(0, width - 1)] + "…"
+FILES = 3                       # pending project-file text: self.pending[FILES, file name]
 
 
 def Shown(value, masked: bool = False) -> str:
@@ -53,11 +71,15 @@ def ParseValue(key: str, text: str):
         except tom.TOMLDecodeError:
             raw = None
     value = None if raw is None else Defaults._CoerceValue(key, raw)
-    if value is None or (expected is list and not all(isinstance(item, str) for item in value)):
+    if value is None:
         return None, f"Expected {TYPE_NAMES[expected]}."
     if key in CHOICES and value not in CHOICES[key]:
         return None, f"Expected one of {', '.join(CHOICES[key])}."
     return value, ""
+
+
+def EmptyEntries(rows: list[list[str]]) -> list[str]:
+    return [f"✗ Entry {position} is empty" for position, row in enumerate(rows, start=1) if not row[0].strip()]
 
 
 class SectionList(ListView):
@@ -94,10 +116,10 @@ class ConfigScreen(Screen):
         *NAV_BINDINGS,
     ]
 
-    def __init__(self) -> None:
+    def __init__(self, section: str = "SLURM") -> None:
         super().__init__()
         self.root = FindProjectRoot()
-        self.section = 0
+        self.section = next(index for index, (label, _) in enumerate(SECTIONS) if label == section)
         self.keys: list[str] = []                   # the table's rows
         self.pending: dict[tuple[int, str], object] = {}   # (column, key) -> unsaved value (DELETE: follow global)
         self.regenerate: set[str] = set()           # files to regenerate whole on save (R)
@@ -111,10 +133,8 @@ class ConfigScreen(Screen):
         with Horizontal(id="body"):
             with Vertical(id="left", classes="pane") as left:
                 left.border_title = "Sections"
-                items = [ListItem(Label(label)) for label, _ in SECTIONS]
-                items += [ListItem(Label("──────────────"), disabled=True),
-                          ListItem(Label("Project Files (later)"), disabled=True, classes="later")]
-                yield SectionList(*items, id="sections")
+                yield SectionList(*[ListItem(Label(label), disabled=kind == "divider") for label, kind in SECTIONS],
+                                  initial_index=self.section, id="sections")
             with Vertical(id="right"):
                 yield FrameRule("┌┐", id="config-top")
                 yield ConfigTable(id="config-table", classes="side", cursor_type="cell", zebra_stripes=False)
@@ -126,7 +146,7 @@ class ConfigScreen(Screen):
 
     def on_mount(self) -> None:
         self.query_one("#config-edit").display = False
-        self.ShowSection(0)
+        self.ShowSection(self.section)
 
     def on_resize(self, event) -> None:
         # Column widths follow the table's width
@@ -135,6 +155,9 @@ class ConfigScreen(Screen):
     # ─── State ────────────────────────────────────────────────────────
 
     def SavedValue(self, column: int, key: str):
+        if column == FILES:
+            path = self.FilePath(key)
+            return path.read_text(encoding="utf-8") if path is not None and path.is_file() else ""
         if column == GLOBAL:
             return Defaults.GlobalValue(key)
         return Defaults._projectValues.get(key, DELETE)
@@ -158,17 +181,76 @@ class ConfigScreen(Screen):
             return False
         return column == GLOBAL or (key in Defaults._PROJECT_KEYS and self.root is not None)
 
+    def FilesSection(self) -> bool:
+        return SECTIONS[self.section][1] == FILES_SECTION
+
     def Current(self) -> tuple[int, str] | None:
         table = self.query_one("#config-table", ConfigTable)
         if not self.keys or table.cursor_row >= len(self.keys):
             return None
-        return max(table.cursor_column, GLOBAL), self.keys[table.cursor_row]
+        return (FILES if self.FilesSection() else max(table.cursor_column, GLOBAL)), self.keys[table.cursor_row]
 
     def SectionFile(self) -> str | None:
         return SECTIONS[self.section][1]
 
     def Unsaved(self) -> int:
         return len(self.pending) + len(self.regenerate)
+
+    # ─── Project files ────────────────────────────────────────────────
+
+    def FilePath(self, name: str) -> Path | None:
+        """The copy jobs would use (a CWD copy overrides the project's), else where a new one goes: the project marker."""
+        found = ResolveProjectFile(name, False)
+        if found is not None:
+            return Path(found)
+        return ProjectFilePath(self.root, name) if self.root is not None else None
+
+    def PendingTexts(self) -> dict[str, str]:
+        return {name: text for (column, name), text in self.pending.items() if column == FILES}
+
+    def UsedTags(self) -> list[str]:
+        """Every {tag} the (unsaved) benchmark suites use, global and project."""
+        tags = []
+        for column in (GLOBAL, PROJECT):
+            entries = self.Value(column, "benchmarkMethods")
+            for entry in ([] if entries is DELETE else entries):
+                template = ParseRouteTemplate(entry)
+                for tag in template.tags + [tag for _, _, groupTags in template.groups for tag in groupTags]:
+                    if tag not in tags:
+                        tags.append(tag)
+        return tags
+
+    def FileSummary(self, name: str, text: str) -> tuple[str, Text]:
+        """(a short summary for the table, the full summary pane) of a project file's text."""
+        lines = []
+        if name == "orcablocks.txt":
+            blocks = ExtractFromText(text, ExtractOrcaBlocks, empty={})
+            used = self.UsedTags()
+            lines.append(Text(f"Tags: {', '.join(blocks) or 'none'}"))
+            if used:
+                lines.append(Text("benchmarkMethods uses:"))
+                lines += [Styled(f"  {tag} ✓", "good") if tag in blocks else Styled(f"  {tag} ✗ missing", "error") for tag in used]
+            reserved = sorted({name.lower() for name in regex.findall(r"(?m)^%(\w+)", text)} & RESERVED_ORCA_BLOCKS)
+            lines += [Styled(f"⚠ %{block} is written by CompUtils; ignored", "warning") for block in reserved]
+            short = f"{len(blocks)} tag{'s' if len(blocks) != 1 else ''}"
+        elif name == "mixedbasis.txt":
+            basis = ExtractFromText(text, ExtractMixedBasis, empty=MixedBasis([], []))
+            elements = [element for entry in basis.basis for element in entry.elements]
+            ecp = [element for entry in basis.ecp for element in entry.elements]
+            byCenter = sum(entry.byCenter for entry in basis.basis + basis.ecp)
+            lines.append(Text(f"Basis: {' '.join(elements) or 'none'}"))
+            lines.append(Text(f"ECP: {' '.join(ecp) or 'none'}"))
+            if byCenter:
+                lines.append(Styled(f"{byCenter} group(s) by center number (written as-is)", "info"))
+            short = f"{len(elements)} elements · {len(ecp)} ECP"
+        else:
+            overrides, problems = ParseSpinOverrides(text)
+            lines += [Text(f"{glob} → {state.name}") for glob, state in overrides] or [Text("No overrides")]
+            lines += [Styled(f"✗ line {number}: {line}", "error") for number, line in problems]
+            short = f"{len(overrides)} override{'s' if len(overrides) != 1 else ''}"
+            if problems:
+                short += f" · {len(problems)} bad"
+        return short, Text("\n").join(lines)
 
     # ─── Content ──────────────────────────────────────────────────────
 
@@ -186,40 +268,46 @@ class ConfigScreen(Screen):
             cell.append("•", "bold")
         return cell
 
-    def SetColumns(self, keyTexts: list[str]) -> None:
-        """Fixed widths: Key fits its longest entry, Global and Project share the rest. A DataTable's columns otherwise
-        grow with their widest value (and never shrink), pushing the table past its pane."""
-        table = self.query_one("#config-table", ConfigTable)
-        keyWidth = max(map(len, keyTexts))
-        # One cell of padding either side of each column, and room for the vertical scrollbar
-        available = table.content_region.width - 3 * 2 * table.cell_padding - 2
-        self.valueWidth = max(8, (available - keyWidth) // 2)
-        table.clear(columns=True)
-        table.add_column("Key", width=keyWidth)
-        table.add_column("Global", width=self.valueWidth)
-        table.add_column("Project", width=self.valueWidth)
-
     def ShowSection(self, index: int) -> None:
         self.section = index
         label, filename = SECTIONS[index]
         table = self.query_one("#config-table", ConfigTable)
         row, column = table.cursor_row, max(table.cursor_column, GLOBAL)
         if filename is None:
-            # Benchmark Suite: one row per entry, read-only for now
-            globalList, projectList = Defaults.GlobalValue("benchmarkMethods"), Defaults._projectValues.get("benchmarkMethods")
-            self.keys = ["benchmarkMethods"] * max(len(globalList), len(projectList or []))
-            self.SetColumns([str(len(self.keys))])
+            # Benchmark Suite: one row per entry; ␣ opens the list in the Benchmark Suite editor
+            lists = [self.Value(GLOBAL, "benchmarkMethods"), self.Value(PROJECT, "benchmarkMethods")]
+            projectList = None if lists[1] is DELETE or self.root is None else lists[1]
+            self.keys = ["benchmarkMethods"] * max(len(lists[0]), len(projectList or []))
+            self.valueWidth = FitColumns(table, ["#", "Global", "Project"], len(str(len(self.keys))))
             for entry in range(len(self.keys)):
-                cells = [globalList[entry] if entry < len(globalList) else "",
-                         (projectList[entry] if entry < len(projectList) else "") if projectList else "—"]
-                table.add_row(str(entry), *(Text(Cut(cell, self.valueWidth), "dim") for cell in cells))
+                cells = []
+                for listColumn, entries in ((GLOBAL, lists[0]), (PROJECT, projectList)):
+                    if entries is None:
+                        cells.append(Text("—" if entry == 0 else "", "dim"))
+                        continue
+                    text = Cut(entries[entry], self.valueWidth - 2) if entry < len(entries) else ""
+                    cells.append(Text(f"[{text}]" if text and (listColumn, "benchmarkMethods") in self.pending else text))
+                table.add_row(str(entry), *cells)
+        elif filename == FILES_SECTION:
+            self.keys = list(PROJECT_FILES)
+            self.valueWidth = FitColumns(table, ["File", "Location", "Summary"], max(map(len, self.keys)))
+            for name in self.keys:
+                path = self.FilePath(name)
+                location = ("CWD" if Path(name).is_file() else "project" if path is not None and path.is_file()
+                            else "missing")
+                short, _ = self.FileSummary(name, self.Value(FILES, name))
+                edited = "[edited] " if (FILES, name) in self.pending else ""
+                table.add_row(name, Text(location, "dim" if location == "missing" else ""),
+                              Text(Cut(edited + short, self.valueWidth)))
         else:
-            self.keys = [key for key in Defaults._FILE_GROUPS[filename] if key not in HIDDEN and key != "benchmarkMethods"]
-            self.SetColumns(self.keys)
+            self.keys = [key for key in Defaults._FILE_GROUPS[filename] if key not in HIDDEN]
+            self.valueWidth = FitColumns(table, ["Key", "Global", "Project"], max(map(len, self.keys)))
             for key in self.keys:
                 table.add_row(key, self.Cell(GLOBAL, key), self.Cell(PROJECT, key))
         table.move_cursor(row=min(row, len(self.keys) - 1), column=column, animate=False)
-        where = f"{label} · {filename}" if filename else f"{label} · benchmarkMethods"
+        where = (f"{label} · {filename}" if filename not in (None, FILES_SECTION)
+                 else f"{label} · benchmarkMethods" if filename is None
+                 else f"{label} · {self.root.name}/{Defaults.projectMarker}" if self.root else f"{label} · no project")
         self.query_one("#config-top", FrameRule).label = where
         self.query_one("#config-top", FrameRule).right = f"project: {self.root.name}" if self.root else ""
         self.RefreshDetails()
@@ -227,20 +315,31 @@ class ConfigScreen(Screen):
     def RefreshDetails(self, problem: str = "") -> None:
         current = self.Current()
         details = self.query_one("#config-details", Static)
+        width = details.content_region.width
         if current is None:
             details.update("")
+        elif current[0] == FILES:
+            name = current[1]
+            path = self.FilePath(name)
+            lines = [Text(Cut(FILE_NOTES[name], width)),
+                     Text(Cut(f"Path: {path if path is not None else 'none (not inside a project)'}", width)),
+                     Styled("␣ edits the file · r discards unsaved edits", "info")]
+            details.update(Text("\n").join(lines))
+            self.query_one("#config-rule", FrameRule).label = name
         else:
             column, key = current
             comments = Defaults.ProjectComments() if column == PROJECT else Defaults._COMMENTS
-            width = details.content_region.width
             default = "" if key in MASKED else f" · default {Shown(Defaults.DefaultValue(key))}"
-            note = ("Editing comes with the Benchmark Suite editor." if key == "benchmarkMethods"
-                    else "Read-only here." if key in READ_ONLY else "")
+            isList = Defaults._TYPES[key] is list
+            note = ("Read-only here." if key in READ_ONLY else "␣ opens the Benchmark Suite editor." if key == "benchmarkMethods"
+                    else "␣ opens the Method → Program editor." if key in METHOD_MAP
+                    else "␣ opens the list editor." if isList else "")
             # The whole value (the table cuts it to its column), then what kind of value it is
             value = self.Value(column, key) if column == GLOBAL or key in Defaults._PROJECT_KEYS else DELETE
             lines = [Text(Cut(comments.get(key, "").split("\n# ")[0], width)),
                      Text(Cut(f"Value: {Shown(value, key in MASKED)}", width)),
-                     Text.assemble(Cut(f"{TYPE_NAMES[Defaults._TYPES[key]].capitalize()}{default}. ", width), Styled(note, "info"))]
+                     Text.assemble(Cut(f"{TYPE_NAMES[Defaults._TYPES[key]].capitalize()}"
+                                       f"{'' if isList else default}. ", width), Styled(note, "info"))]
             if problem:
                 lines.append(Styled(problem, "error"))
             details.update(Text("\n").join(lines))
@@ -255,11 +354,100 @@ class ConfigScreen(Screen):
     def Redraw(self) -> None:
         self.ShowSection(self.section)
 
+    # ─── Pop-up editors ───────────────────────────────────────────────
+
+    def EditList(self, column: int, key: str) -> None:
+        """A list value in a ListEditor: the Method → Program pair, the Benchmark Suite, or any other list key."""
+        table = self.query_one("#config-table", ConfigTable)
+        if key in METHOD_MAP:
+            # Program codes are shown by name (G16, ORCA) and stored as codes
+            names, codes = self.Value(GLOBAL, "methodNames"), self.Value(GLOBAL, "targetProgram")
+            nameOf = {code: name for code, (name, _) in PROGRAMS.items()}
+            codeOf = {name: code for code, name in nameOf.items()}
+            rows = [[method, nameOf.get(code, code)] for method, code in zip_longest(names, codes, fillvalue="")]
+
+            def Check(rows: list[list[str]]) -> list[str]:
+                problems, seen = [], set()
+                for position, (method, program) in enumerate(rows, start=1):
+                    if not method.strip():
+                        problems.append(f"✗ Entry {position} has no method")
+                    elif not program:
+                        problems.append(f"✗ {method} has no program")
+                    if method and MethodKey(method) in seen:
+                        problems.append(f"⚠ {method} is listed twice (the first wins)")
+                    seen.add(MethodKey(method))
+                return problems
+
+            def Done(rows) -> None:
+                if rows is not None:
+                    self.SetPending(GLOBAL, "methodNames", [method.strip() for method, _ in rows])
+                    self.SetPending(GLOBAL, "targetProgram", [codeOf.get(program, program) for _, program in rows])
+                    self.Redraw()
+            self.app.push_screen(ListEditor("Methods → Programs · programs.toml",
+                                            [("Method", None), ("Program", list(codeOf))], rows,
+                                            check=Check), Done)
+            return
+        values = self.Value(column, key)
+        if values is DELETE:
+            # An empty project cell starts its override from the global list
+            values = self.Value(GLOBAL, key)
+        scope = "Project" if column == PROJECT else "Global"
+
+        def DoneList(rows) -> None:
+            if rows is not None:
+                self.SetPending(column, key, [row[0].strip() for row in rows])
+                self.Redraw()
+        if key == "benchmarkMethods":
+            self.app.push_screen(ListEditor(f"Benchmark Suite · {scope}", [("Route card", None)], [[entry] for entry in values],
+                                            start=table.cursor_row, previewTitle="Renders as",
+                                            check=lambda rows: EmptyEntries(rows) or ([] if rows else ["✗ The suite needs at least one entry"]),
+                                            preview=lambda row: self.RendersAs(row[0])), DoneList)
+        else:
+            self.app.push_screen(ListEditor(f"{key} · {scope}", [(key, None)], [[entry] for entry in values],
+                                            check=EmptyEntries), DoneList)
+
+    def RendersAs(self, entry: str) -> Text:
+        """A route card rendered for stand-in molecules, with what would stop it: the program comes from the unsaved
+        method map, and project-file problems are checked against unsaved project-file text."""
+        if not entry.strip():
+            return Text("")
+        template = ParseRouteTemplate(entry)
+        programOf = dict(zip(self.Value(GLOBAL, "methodNames"), self.Value(GLOBAL, "targetProgram")))
+        extension = extensionGetter(template.method, programOf)
+        lines, problems = [], []
+        for label, multiplicity, spin in STAND_INS:
+            molecule = Molecule(Path("preview"), "preview", 0, multiplicity, 0, extension, "preview", spin)
+            row = RenderedRow(PreviewRow(label, spin.name), template, molecule, set(), self.PendingTexts())
+            if row.problem and row.problem not in problems:
+                problems.append(row.problem)
+            row.problem = ""
+            lines.append(Text(f"{label:<9}") + RowText(row))
+        if template.method not in programOf:
+            problems.insert(0, f"{template.method or 'The first token'} is not in methodNames: it would run as Gaussian16")
+        tags = template.tags + [tag for _, _, groupTags in template.groups for tag in groupTags]
+        if tags and extension != Defaults.orcaExtension:
+            problems.append(f"{{tags}} only apply to ORCA jobs; ignored for {template.method}")
+        return Text("\n").join(lines + ([ProblemText([f"⚠ {problem}" for problem in problems])] if problems else []))
+
+    def EditFile(self, name: str) -> None:
+        path = self.FilePath(name)
+        if path is None:
+            Notice(self.app, "No project", f"Not inside a project and no ./{name}: `cu -init` creates a project.", "warning")
+            return
+
+        def Done(text) -> None:
+            if text is not None:
+                self.SetPending(FILES, name, text)
+                self.Redraw()
+        where = path.parent.name if path.parent != Path(".") else "CWD"
+        self.app.push_screen(TextEditor(f"{name} · {where}", self.Value(FILES, name),
+                                        lambda text: self.FileSummary(name, text)[1]), Done)
+
     # ─── Events ───────────────────────────────────────────────────────
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         index = self.query_one("#sections", SectionList).index
-        if index is not None and index < len(SECTIONS) and index != self.section:
+        if index is not None and SECTIONS[index][1] != "divider" and index != self.section:
             self.ShowSection(index)
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
@@ -294,9 +482,15 @@ class ConfigScreen(Screen):
         if current is None:
             return
         column, key = current
+        if column == FILES:
+            self.EditFile(key)
+            return
         if not self.Editable(column, key):
             if column == PROJECT and key in Defaults._PROJECT_KEYS and self.root is None:
                 Notice(self.app, "No project", "Not inside a project: `cu -init` creates one.", "warning")
+            return
+        if Defaults._TYPES[key] is list:
+            self.EditList(column, key)
             return
         value = self.Value(column, key)
         # An empty project cell starts its override from the global value
@@ -314,7 +508,7 @@ class ConfigScreen(Screen):
         else:
             self.editing = (column, key)
             edit = self.query_one("#config-edit", EditInput)
-            edit.value = value if isinstance(value, str) else tomlValue(value)
+            edit.value = str(value)
             edit.display = True
             edit.focus()
             self.RefreshDetails()
@@ -328,18 +522,24 @@ class ConfigScreen(Screen):
         self.Redraw()
 
     def action_reset(self) -> None:
-        # Global: back to the default (the cluster's setting, else the hardcoded one). Project: follow global
+        # Global: back to the default (the cluster's setting, else the hardcoded one). Project: follow global.
+        # A project file: drop its unsaved edits
         current = self.Current()
-        if current is None or not self.Editable(*current):
+        if current is None:
             return
         column, key = current
-        self.SetPending(column, key, Defaults.DefaultValue(key) if column == GLOBAL else DELETE)
+        if column == FILES:
+            self.pending.pop(current, None)
+        elif self.Editable(column, key):
+            # The method map resets as a pair, so the two lists stay the same length
+            for resetKey in (METHOD_MAP if key in METHOD_MAP else (key,)):
+                self.SetPending(column, resetKey, Defaults.DefaultValue(resetKey) if column == GLOBAL else DELETE)
         self.Redraw()
 
     def action_reset_file(self) -> None:
         current = self.Current()
         filename = self.SectionFile()
-        if current is None or filename is None:
+        if current is None or filename in (None, FILES_SECTION):
             return
         if current[0] == PROJECT:
             if self.root is None:
@@ -364,7 +564,8 @@ class ConfigScreen(Screen):
         self.app.push_screen(Popup("Reset file", message, [("y", "Reset", "reset")], "warning"), Apply)
 
     def MethodMismatch(self) -> str:
-        """Why methodNames and targetProgram don't pair up, or "". The Catalog zips them, dropping the extras."""
+        """Why methodNames and targetProgram don't pair up, or "". The Catalog zips them, dropping the extras.
+        Edits made in the Method → Program editor always pair up; this catches a file edited by hand."""
         names, programs = self.Value(GLOBAL, "methodNames"), self.Value(GLOBAL, "targetProgram")
         if len(names) == len(programs):
             return ""
@@ -424,6 +625,10 @@ class ConfigScreen(Screen):
             if done and projectUpdates:
                 done = SaveProjectConfig(self.root, projectUpdates)
             (written if done else failed).append(PROJECT_CONFIG)
+        # Project files are written exactly as edited
+        for name, text in self.PendingTexts().items():
+            path = self.FilePath(name)
+            (written if writeToml(path.parent, path.name, text) else failed).append(name)
         ReloadConfig()
         if failed:
             # What was written stays written; the rest is still shown as unsaved against the reloaded values
@@ -435,6 +640,8 @@ class ConfigScreen(Screen):
         return written, failed
 
     def FileOf(self, column: int, key: str) -> str:
+        if column == FILES:
+            return key
         if column == PROJECT:
             return PROJECT_CONFIG
         return next(filename for filename, keys in Defaults._FILE_GROUPS.items() if key in keys)
@@ -469,6 +676,7 @@ class ConfigScreen(Screen):
 
     def action_help(self) -> None:
         Notice(self.app, "Help", "\n".join([
-            "↑/↓ move between keys", "←/→ Global or Project", "space edit (toggles true/false, cycles choices)",
-            "r reset the value to its default (Project: follow global)", "R reset the whole file",
-            "enter save and return home", "esc back", "ctrl+q quit"]))
+            "↑/↓ move between keys", "←/→ Global or Project",
+            "space edit: toggles true/false, cycles choices, opens lists and project files in a pop-up editor",
+            "r reset the value to its default (Project: follow global; a project file: drop its edits)",
+            "R reset the whole file", "enter save and return home", "esc back", "ctrl+q quit"]))

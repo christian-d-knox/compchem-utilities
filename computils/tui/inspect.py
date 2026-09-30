@@ -14,7 +14,7 @@ from ..catalog  import Catalog, MatchTemplate, RenderRoute, RouteTemplate
 from ..defaults import Defaults
 from ..fileops  import (MapFile, FindInMap, HasContent, ExtractFrom, ExtractTermination, ExtractCoords, ExtractRouteLine,
                         ExtractResources, IdentifyMethod, SplitRoute, MoleculeElements, extensionGetter,
-                        gaussianChargeFinder)
+                        gaussianChargeFinder, PROGRAMS)
 from ..jobs     import JobFileProblem
 from ..molecule import Molecule
 from ..spin     import ClassifySpin
@@ -65,9 +65,10 @@ def _Charge(path: Path) -> tuple[str, str]:
         return "", ""
 
 
-def ProgramName(method: str) -> str:
+def ProgramName(method: str, programOf: dict | None = None) -> str:
     # Same lookup as extensionGetter, without its console warning
-    return {"G16": "G16", "O": "ORCA"}.get(Catalog.programOf.get(method), "")
+    program = PROGRAMS.get((Catalog.programOf if programOf is None else programOf).get(method))
+    return program[0] if program else ""
 
 
 def FileDetails(path: Path) -> dict[str, str]:
@@ -144,6 +145,32 @@ def RouteSpans(route: str, base: str) -> list[tuple[str, str]]:
     return spans
 
 
+# How each part of a rendered route is coloured (D17 / D28)
+SPAN_STYLES = {"method": "operation", "added": "good", "base": ""}
+
+
+def RenderedRow(row: PreviewRow, template: RouteTemplate, molecule: Molecule, elements: set[str],
+                texts: dict[str, str] | None = None) -> PreviewRow:
+    """Fill row with the template rendered for molecule (spans, orcablocks tags) and why genFile would skip the job.
+    texts: unsaved project-file text to check against instead of the files (the config editor)."""
+    route, row.tags = RenderRoute(template, molecule)
+    row.spans = RouteSpans(route, template.base)
+    row.problem = JobFileProblem(route, row.tags, molecule.extensionType, elements, False, texts)
+    return row
+
+
+def RowText(row: PreviewRow) -> Text:
+    """A rendered route, coloured by origin, then its orcablocks tags and any skip reason."""
+    line = Text()
+    for text, origin in row.spans:
+        line.append_text(Styled(text, SPAN_STYLES[origin]))
+    if row.tags:
+        line.append_text(Styled(f"  ← orcablocks {' '.join('{' + tag + '}' for tag in row.tags)}", "good"))
+    if row.problem:
+        line.append_text(Styled(f"  ⚠ {row.problem}", "warning"))
+    return line
+
+
 def PreviewRowFor(action: Action, molecule: Molecule, index: int) -> PreviewRow:
     """The route one job would get, from the template its workflow would choose (Re-run shares genReRun's MatchTemplate).
     The template is rendered directly: the preview never sets molecule.template, nor mutates the Catalog."""
@@ -160,15 +187,13 @@ def PreviewRowFor(action: Action, molecule: Molecule, index: int) -> PreviewRow:
     else:
         template = Catalog.templates[index]
         molecule.extensionType = extensionGetter(template.method)
-    route, row.tags = RenderRoute(template, molecule)
-    row.spans = RouteSpans(route, template.base)
     if not molecule.coordinateList:
         # dispatch skips files with no geometry
+        RenderedRow(row, template, molecule, set())
         row.problem = "no coordinates found"
         return row
     # The same check genFile skips jobs with, without its prompt for a missing project file
-    row.problem = JobFileProblem(route, row.tags, molecule.extensionType, MoleculeElements(molecule.coordinateList), False)
-    return row
+    return RenderedRow(row, template, molecule, MoleculeElements(molecule.coordinateList))
 
 
 def MethodIndices(action: Action, index: int) -> list[int]:

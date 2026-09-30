@@ -19,6 +19,15 @@ def MapFile(filePath: Path):
         with closing(mmap(file.fileno(), 0, access=ACCESS_READ)) as data:
             yield data
 
+@contextmanager
+def MapText(text: str):
+    # MapFile over text held in memory (e.g. an unsaved edit in the TUI), so the same extractors parse it
+    encoded = text.encode()
+    with closing(mmap(-1, len(encoded))) as data:
+        data.write(encoded)
+        data.seek(0)
+        yield data
+
 # Helper method for performing the searches themselves
 # start limits the search to data[start:] (still an mmap search, nothing is copied); a negative start counts from the
 # end, like a slice. concurrent releases the GIL while
@@ -45,6 +54,13 @@ def ExtractFrom(filePath: Path, extractor, *args, empty=None):
     if not HasContent(filePath):
         return empty
     with MapFile(filePath) as data:
+        return extractor(data, *args)
+
+def ExtractFromText(text: str, extractor, *args, empty=None):
+    # ExtractFrom for text in memory; empty text can't be mapped either
+    if not text:
+        return empty
+    with MapText(text) as data:
         return extractor(data, *args)
 
 # Properly handle line-skipping in extractions
@@ -450,17 +466,17 @@ def getCoords(fileName: Path, outputFileName: Path) -> list:
     return coordinateList
 
 # Handles extensions so I don't have to copypasta this
-def extensionGetter(method: str) -> str:
-    match Catalog.programOf.get(method, ""):
-        case "G16":
-            fileExtension = Defaults.gaussianExtension
-        case "O":
-            fileExtension = Defaults.orcaExtension
-        case _:
-            console.print("[error]Notice: One or more of your intended methods is not specified in programs file nor hardcoded."
-                   " Defaulting to Gaussian16.[/error]")
-            fileExtension = Defaults.gaussianExtension
-    return fileExtension
+# targetProgram codes: code -> (display name, the Defaults key holding that program's input extension)
+PROGRAMS = {"G16": ("G16", "gaussianExtension"), "O": ("ORCA", "orcaExtension")}
+
+# programOf defaults to the loaded Catalog's; the TUI's config editor passes its unsaved method map
+def extensionGetter(method: str, programOf: dict | None = None) -> str:
+    program = PROGRAMS.get((Catalog.programOf if programOf is None else programOf).get(method, ""))
+    if program is None:
+        console.print("[error]Notice: One or more of your intended methods is not specified in programs file nor hardcoded."
+               " Defaulting to Gaussian16.[/error]")
+        return Defaults.gaussianExtension
+    return getattr(Defaults, program[1])
 
 # Gaussian16 Charge Finder in its own method
 def gaussianChargeFinder(geometryFile: Path) -> tuple[str,str]:

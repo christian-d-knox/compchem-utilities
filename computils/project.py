@@ -110,6 +110,11 @@ def ReloadConfig(readGlobals: bool = True) -> None:
     if readGlobals:
         Defaults.Load()
         ApplyTheme(Defaults.colorMode)
+        # Project files may have been rewritten too (their loaders cache by path)
+        from .jobs import _LoadMixedBasis, _LoadOrcaBlocks
+        from .spin import _LoadSpinOverrides
+        for loader in (_LoadMixedBasis, _LoadOrcaBlocks, _LoadSpinOverrides, ResolveProjectFile):
+            loader.cache_clear()
     LoadProjectConfig()
     Catalog.Load()
 
