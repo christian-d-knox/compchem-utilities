@@ -80,6 +80,7 @@ class CompUtilsApp(App):
     .setting-meaning { width: 1fr; color: $text-muted; }
     /* Rows that won't apply (off, an unselected choice, a sub-option of an off row) are greyed out whole */
     .setting.-off Static, .setting.-off Input { text-opacity: 45%; }
+    .setting.-off.-choice .setting-meaning { text-opacity: 100%; }
     #settings:focus-within .setting.-current { background: $boost; }
 
     /* The config editor: the table takes the height the details strip leaves */

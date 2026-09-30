@@ -53,18 +53,20 @@ class Setting:
 
 
 def GoodVibesSettings() -> list[Setting]:
-    """Defaults match the CLI wizard's, and Single Point is on: GoodVibes runs once both the opt and the SP are done."""
+    """Defaults match the CLI wizard's, and Single Point is on: GoodVibes runs once both the opt and the SP are done.
+    This screen's text is in Title Case (Christian). A choice's notes read as one note across its rows, the later
+    ones indented as its hanging lines."""
     return [
         Setting("temperature", "Temperature", "Default 298.15 K", "298.15", "K"),
-        Setting("concentration", "Concentration", "Off: gas phase (1 atm)", "1.0", "mol/l", on=False),
-        Setting("grimme", "Entropy (qh-S)", "qh-G(T) is always present (required)", fixed="Grimme", on=True, choice="entropy"),
-        Setting("truhlar", "", "See G(T) for uncorrected", fixed="Truhlar", on=False, choice="entropy"),
-        Setting("enthalpy", "Enthalpy (qh-H)", "Off: RRHO enthalpy", fixed="Head-Gordon", on=True),
-        Setting("cutoff", "  └ qh cutoff", "Softer modes are corrected", "100", "cm⁻¹", under="enthalpy"),
-        Setting("scale", "Scale factor", "Off: auto from level", "1.0", on=True),
+        Setting("concentration", "Concentration", "Off: Gas Phase (1 atm)", "1.0", "mol/l", on=False),
+        Setting("grimme", "Entropy (qh-S)", "qh-G(T) Is Always Present (Required)", fixed="Grimme", on=True, choice="entropy"),
+        Setting("truhlar", "", "  See G(T) for Uncorrected", fixed="Truhlar", on=False, choice="entropy"),
+        Setting("enthalpy", "Enthalpy (qh-H)", "Off: RRHO Enthalpy", fixed="Head-Gordon", on=True),
+        Setting("cutoff", "  └ qh Cutoff", "Softer Modes Are Corrected", "100", "cm⁻¹", under="enthalpy"),
+        Setting("scale", "Vib Scale Factor", "Off: GV Auto-Detect from Method", "1.0", on=True),
         Setting("singlePoint", "Single Point", "", Defaults.singlePointExtra.lstrip("_"), on=True, accepts=NAME),
-        Setting("check", "Check", "Check for level of theory consistency", on=False),
-        Setting("extra", "Extra keys", "Passed directly to GoodVibes", "", on=False, accepts=TEXT),
+        Setting("check", "Check", "Check for Level of Theory Consistency", on=False),
+        Setting("extra", "Extra Keys", "Passed Directly to GoodVibes", "", on=False, accepts=TEXT),
     ]
 
 
@@ -104,7 +106,8 @@ class SettingBox(Static):
 class SettingRow(Horizontal, can_focus=False):
     """Rows without a typed value take the focus themselves (the list keeps only its current row focusable)."""
     def __init__(self, setting: Setting) -> None:
-        super().__init__(classes="setting", id=f"setting-{setting.key}")
+        # A choice's rows carry one shared note, which is never greyed with an unselected option
+        super().__init__(classes="setting -choice" if setting.choice else "setting", id=f"setting-{setting.key}")
         self.setting, self.on = setting, setting.on
         self.typing = False
 
@@ -299,8 +302,8 @@ class BuilderScreen(Screen):
         with VerticalScroll(id="form"):
             yield FilesPane(NameList(self.files), id="files-summary", classes="side")
             if self.action == Action.GOODVIBES:
-                yield FrameRule("├┤", Text.assemble("Settings · ", KeyHint(self.app, "␣", "on/off or select"), " · ",
-                                                    KeyHint(self.app, "←→", "choose"), " · type a value"))
+                yield FrameRule("├┤", Text.assemble("Settings · ", KeyHint(self.app, "␣", "On/Off or Select"), " · ",
+                                                    KeyHint(self.app, "←→", "Choose"), " · Type a Value"))
                 yield SettingsList(GoodVibesSettings(), id="settings", classes="side")
                 yield FrameRule("├┤", "Command")
                 yield Static(id="command", classes="side")
@@ -432,7 +435,7 @@ class BuilderScreen(Screen):
             try:
                 return float(row.value)
             except ValueError:
-                self.valueErrors.append(f"Enter a number for {row.setting.label.strip(' └')}")
+                self.valueErrors.append(f"Enter a Number for {row.setting.label.strip(' └')}")
                 return None
         draft.tempCorrection = Number("temperature")
         draft.concCorrection = Number("concentration")
@@ -444,7 +447,7 @@ class BuilderScreen(Screen):
         singlePoint = settings.Row("singlePoint")
         draft.singlePointPattern = singlePoint.value.strip().lstrip("_") or None if singlePoint.on else None
         if singlePoint.on and draft.singlePointPattern is None:
-            self.valueErrors.append("Single Point needs a suffix, e.g. SP")
+            self.valueErrors.append("Single Point Needs a Suffix, e.g. SP")
         draft.extraKeys = settings.Row("extra").value.strip() or None
         return draft
 
@@ -455,15 +458,15 @@ class BuilderScreen(Screen):
         # The count follows the typed suffix even while Single Point is off, so turning it on holds no surprise
         suffix = settings.Row("singlePoint").value.strip().lstrip("_")
         structures, _, missing = SpcPartners(self.files, suffix)
-        settings.Row("singlePoint").SetMeaning(f"{len(structures) - len(missing)} of {len(structures)} structures have one")
+        settings.Row("singlePoint").SetMeaning(f"{len(structures) - len(missing)} of {len(structures)} Structures Have One")
         inputs, _, missing = self.Structures()
         command = " ".join(["goodvibes", *GoodVibesArguments(draft)]) + " " + NameList(inputs).replace(", ", " ")
         self.query_one("#command", Static).update(command)
         self.selectionErrors = []
         if missing:
-            self.selectionErrors.append(f"No {draft.singlePointPattern} file: {', '.join(path.name for path in missing)}")
+            self.selectionErrors.append(f"No {draft.singlePointPattern} File: {', '.join(path.name for path in missing)}")
         if not inputs:
-            self.selectionErrors.append("No structures: only single point files are selected")
+            self.selectionErrors.append("No Structures: Only Single Point Files Are Selected")
         return self.valueErrors + self.selectionErrors
 
     def CubeOptions(self) -> list[CubeOption]:
@@ -498,12 +501,13 @@ class BuilderScreen(Screen):
         skippedNote = f" ({skipped} skipped)" if skipped else ""
         self.ready = not errors
         # The bottom edge shows what enter would submit (or run), or the first thing stopping it
-        unit, key = ("structure", "Run") if self.action == Action.GOODVIBES else ("job", "Submit")
+        # GoodVibes' screen is in Title Case
+        unit, ready, key = (("Structure", "Ready", "Run") if self.action == Action.GOODVIBES else ("job", "ready", "Submit"))
         more = f" (+{len(errors) - 1} more)" if len(errors) > 1 else ""
         # A missing SP file is fixed by changing the selection
         change = [" · ", KeyHint(self.app, "esc", "Change")] if errors and errors[0] in self.selectionErrors else []
         self.query_one("#submit", FrameRule).right = (Text.assemble(Styled(errors[0] + more, "error"), *change) if errors
-            else Text.assemble(Styled(f"{count} {unit}{'s' if count != 1 else ''} ready{skippedNote}", "good"), " · ",
+            else Text.assemble(Styled(f"{count} {unit}{'s' if count != 1 else ''} {ready}{skippedNote}", "good"), " · ",
                                KeyHint(self.app, "⏎", key)))
         self.refresh_bindings()
 
