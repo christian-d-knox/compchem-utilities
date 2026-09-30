@@ -49,20 +49,25 @@ class EntryInput(Input):
 class ListEditor(ModalScreen):
     """A list edited as a list: one row per entry, a column per field. columns are (name, choices or None): ␣ cycles a
     choices column and opens the Entry box for a text column. check(rows) lists problems (✗ blocks Done, ⚠ only warns);
-    preview(row) fills a pane for the highlighted row. Dismisses with the rows (lists of str), or None if cancelled."""
+    preview(row) fills a pane for the highlighted row, following the Entry box as it is typed. guide explains the entry
+    format, in its own box shown while typing. Dismisses with the rows (lists of str), or None if cancelled."""
     DEFAULT_CSS = """
     ListEditor { align: center middle; }
     ListEditor > Vertical { height: auto; }
     ListEditor ListTable { height: auto; max-height: 9; }
+    /* While an entry is typed, the table gives its rows to the Entry box, the guide and the preview */
+    ListEditor.-editing ListTable { max-height: 4; }
     ListEditor #entry { height: 1; border: none; }
+    ListEditor #guide { color: $text-muted; }
     """
     BINDINGS = [Binding("escape", "cancel")]
     MAX_WIDTH = 96
 
     def __init__(self, title: str, columns: list[tuple[str, list[str] | None]], rows: list[list[str]], start: int = 0,
-                 check=None, preview=None, previewTitle: str = "") -> None:
+                 check=None, preview=None, previewTitle: str = "", guide: Text | None = None, guideTitle: str = "") -> None:
         super().__init__()
         self.title_, self.columns, self.check, self.preview, self.previewTitle = title, columns, check, preview, previewTitle
+        self.guide, self.guideTitle = guide, guideTitle
         self.rows = [list(row) for row in rows]
         self.original = [list(row) for row in rows]
         self.start = start
@@ -76,6 +81,9 @@ class ListEditor(ModalScreen):
             yield ListTable(id="list", classes="side", cursor_type="cell", zebra_stripes=False)
             yield FrameRule("├┤", id="entry-rule")
             yield EntryInput(id="entry", classes="side")
+            if self.guide is not None:
+                yield FrameRule("├┤", self.guideTitle, id="guide-rule")
+                yield Static(self.guide, id="guide", classes="side")
             if self.preview:
                 yield FrameRule("├┤", self.previewTitle)
                 yield Static(id="preview", classes="side")
@@ -110,19 +118,30 @@ class ListEditor(ModalScreen):
         table = self.query_one("#list", ListTable)
         if self.preview:
             current = self.rows[table.cursor_row] if self.rows and table.cursor_row < len(self.rows) else None
+            if self.editing is not None:
+                # The entry as it is being typed
+                row, column = self.editing
+                current = list(self.rows[row])
+                current[column] = self.query_one("#entry", EntryInput).value
             self.query_one("#preview", Static).update(self.preview(current) if current else "")
         problems = self.Problems()
         self.query_one("#status", Static).update(
             ProblemText(problems) if problems else Styled(f"{len(self.rows)} entr{'y' if len(self.rows) == 1 else 'ies'}", "dim"))
 
     def ShowEntry(self, shown: bool) -> None:
-        for widget in ("#entry-rule", "#entry"):
-            self.query_one(widget).display = shown
+        for widget in ("#entry-rule", "#entry", "#guide-rule", "#guide"):
+            for found in self.query(widget):
+                found.display = shown
+        self.set_class(shown, "-editing")
 
     # ─── Events ───────────────────────────────────────────────────────
 
     def on_data_table_cell_highlighted(self, event: DataTable.CellHighlighted) -> None:
         self.RefreshPanes()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if self.editing is not None:
+            self.RefreshPanes()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if self.editing is None:
@@ -150,6 +169,7 @@ class ListEditor(ModalScreen):
         entry.value = self.rows[row][column]
         self.ShowEntry(True)
         entry.focus()
+        self.RefreshPanes()
 
     def CloseEntry(self) -> None:
         self.editing, self.adding = None, False
@@ -205,31 +225,39 @@ class ListEditor(ModalScreen):
 
 
 class TextEditor(ModalScreen):
-    """A project file edited as text, with a summary(text) -> Text pane re-parsed as you type. esc is Done (⏎ types a
-    newline here, and nothing is written until the config editor saves); ^r reverts. Dismisses with the text."""
+    """A project file edited as text, with a summary(text) -> Text pane re-parsed as you type and, below it, an example
+    of the format. esc is Done (⏎ types a newline here, and nothing is written until the config editor saves); ^r
+    reverts. Dismisses with the text."""
     DEFAULT_CSS = """
     TextEditor { align: center middle; }
     TextEditor #editor-body { height: 1fr; }
     TextEditor TextArea { width: 1fr; border: none; padding: 0; }
-    TextEditor #summary { width: 34; border-left: solid $secondary; padding: 0 1; }
+    TextEditor #editor-side { width: 34; border-left: solid $secondary; }
+    TextEditor #summary { height: 1fr; min-height: 6; padding: 0 1; }
+    TextEditor #example { height: auto; padding: 0 1; color: $text-muted; }
     """
     BINDINGS = [Binding("escape", "done"), Binding("ctrl+r", "revert")]
     MAX_WIDTH = 110
 
-    def __init__(self, title: str, text: str, summary) -> None:
+    def __init__(self, title: str, text: str, summary, example: str = "") -> None:
         super().__init__()
-        self.title_, self.original, self.summary = title, text, summary
+        self.title_, self.original, self.summary, self.example = title, text, summary, example
 
     def compose(self):
         with Vertical():
             yield FrameRule("┌┐", self.title_)
             with Horizontal(id="editor-body", classes="side"):
                 yield TextArea(self.original, id="text", soft_wrap=False)
-                yield Static(id="summary")
+                with Vertical(id="editor-side"):
+                    yield FrameRule("──", "Check")
+                    yield Static(id="summary")
+                    if self.example:
+                        yield FrameRule("──", "Example")
+                        yield Static(self.example, id="example")
             yield FrameRule("└┘", id="text-keys")
 
     def on_mount(self) -> None:
-        frame = self.query_one(Vertical)
+        frame = self.query(Vertical).first()
         frame.styles.width = min(self.app.size.width - 4, self.MAX_WIDTH)
         frame.styles.height = self.app.size.height - 2
         self.query_one("#text-keys", FrameRule).right = Text("  ").join(

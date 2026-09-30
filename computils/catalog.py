@@ -53,13 +53,24 @@ class RouteTemplate:
     method: str = ""                            # picks the program (extensionGetter) and names benchmark files
 
 
+def _GroupSelectors(selectorText: str) -> tuple[frozenset[str], list[str]]:
+    """A [group]'s selectors, and the invalid ones ('<empty>' for a group with none)."""
+    selectors = frozenset(s.strip().lower() for s in selectorText.split(",") if s.strip())
+    return selectors, sorted(s for s in selectors if not _IsValidSelector(s)) or ([] if selectors else ["<empty>"])
+
+
+def UnknownSelectors(routeLine: str) -> list[str]:
+    """Selectors in a route card's [groups] that ParseRouteTemplate would reject (it drops those groups)."""
+    return [invalid for selectorText, _ in regex.findall(ROUTE_GROUP_PATTERN, routeLine)
+            for invalid in _GroupSelectors(selectorText)[1]]
+
+
 def ParseRouteTemplate(routeLine: str) -> RouteTemplate:
     groups = []
     for selectorText, content in regex.findall(ROUTE_GROUP_PATTERN, routeLine):
-        selectors = frozenset(s.strip().lower() for s in selectorText.split(",") if s.strip())
-        invalid = sorted(s for s in selectors if not _IsValidSelector(s))
-        if invalid or not selectors:
-            console.print(f"[warning]\\[config] Unknown spin selector(s) {invalid or ['<empty>']} in benchmarkMethods "
+        selectors, invalid = _GroupSelectors(selectorText)
+        if invalid:
+            console.print(f"[warning]\\[config] Unknown spin selector(s) {invalid} in benchmarkMethods "
                           f"entry '{escape(routeLine)}'. Ignoring that group.[/warning]")
             continue
         keywords, tags = SplitRouteTags(content)

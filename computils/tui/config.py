@@ -13,7 +13,7 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Input, Label, ListItem, ListView, Static
 
 from ..actions  import SpinState
-from ..catalog  import MethodKey, ParseRouteTemplate
+from ..catalog  import MethodKey, ParseRouteTemplate, UnknownSelectors
 from ..defaults import DELETE, Defaults, tomlValue, writeToml
 from ..fileops  import (PROGRAMS, RESERVED_ORCA_BLOCKS, ExtractFromText, ExtractMixedBasis, ExtractOrcaBlocks,
                         MixedBasis, extensionGetter)
@@ -46,6 +46,23 @@ FILE_NOTES = {
     "orcablocks.txt": "ORCA %blocks, pulled into jobs by {tag} tokens in benchmarkMethods.",
     "spinstates.txt": "Per-molecule CSS/OSS overrides for singlets (glob  css|oss).",
 }
+# Shown under each project file's Check panel: the format, by example
+FILE_EXAMPLES = {
+    "orcablocks.txt": "%cpcm\n    smd true\nend\n# @tag tddft10\n%tddft\n    nroots 10\nend\n\n"
+                      "Tag: its %name, or the # @tag above.\nUse as {cpcm} {tddft10} in routes.",
+    "mixedbasis.txt": "C H N O 0\n6-31G(d)\n****\nFe Cu 0\nSDD\n****\n\nFe Cu 0\nSDD\n\n"
+                      "**** ends a group; after the first\nblank line come the ECPs.",
+    "spinstates.txt": "Fe2S2_*    oss\nNi_sqpl_*  css   # a comment\n\n"
+                      "<name or glob>  css|oss, matched\nagainst the file name. First match\nwins; singlets only.",
+}
+# The Benchmark Suite's guide, in its own box while an entry is typed
+ROUTE_GUIDE = Text("\n".join([
+    "[selectors: keywords]  added only for matching molecules, in",
+    "  written order. Selectors: css  oss  open (oss or mult > 1)",
+    "  doublet…septet  m2…m7   several: [oss, triplet: keywords]",
+    "{tag}  adds that orcablocks.txt block (ORCA only)",
+    "U / RO (UKS, UHF…) is added for you from each molecule's spin state",
+]))
 # The Renders-as preview's stand-in molecules: (label, multiplicity, spin state)
 STAND_INS = [("CSS", 1, SpinState.CSS), ("OSS", 1, SpinState.OSS), ("Doublet", 2, SpinState.OPEN),
              ("Triplet", 3, SpinState.OPEN)]
@@ -401,7 +418,8 @@ class ConfigScreen(Screen):
             self.app.push_screen(ListEditor(f"Benchmark Suite · {scope}", [("Route card", None)], [[entry] for entry in values],
                                             start=table.cursor_row, previewTitle="Renders as",
                                             check=lambda rows: EmptyEntries(rows) or ([] if rows else ["✗ The suite needs at least one entry"]),
-                                            preview=lambda row: self.RendersAs(row[0])), DoneList)
+                                            preview=lambda row: self.RendersAs(row[0]),
+                                            guide=ROUTE_GUIDE, guideTitle="How route cards work"), DoneList)
         else:
             self.app.push_screen(ListEditor(f"{key} · {scope}", [(key, None)], [[entry] for entry in values],
                                             check=EmptyEntries), DoneList)
@@ -422,6 +440,7 @@ class ConfigScreen(Screen):
                 problems.append(row.problem)
             row.problem = ""
             lines.append(Text(f"{label:<9}") + RowText(row))
+        problems[:0] = [f"unknown selector '{selector}' (that group is ignored)" for selector in UnknownSelectors(entry)]
         if template.method not in programOf:
             problems.insert(0, f"{template.method or 'The first token'} is not in methodNames: it would run as Gaussian16")
         tags = template.tags + [tag for _, _, groupTags in template.groups for tag in groupTags]
@@ -441,7 +460,7 @@ class ConfigScreen(Screen):
                 self.Redraw()
         where = path.parent.name if path.parent != Path(".") else "CWD"
         self.app.push_screen(TextEditor(f"{name} · {where}", self.Value(FILES, name),
-                                        lambda text: self.FileSummary(name, text)[1]), Done)
+                                        lambda text: self.FileSummary(name, text)[1], FILE_EXAMPLES[name]), Done)
 
     # ─── Events ───────────────────────────────────────────────────────
 
