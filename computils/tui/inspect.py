@@ -34,6 +34,8 @@ def ActionExtensions(action: Action) -> tuple[str, ...]:
         case Action.RUN:        return Defaults.gaussianExtension, Defaults.orcaExtension
         case Action.CUBE:       return ".chk", ".fchk"
         case Action.FORM_CHECK: return (".chk",)
+        # GoodVibes reads program outputs, and .out is the only one this group ever feeds it
+        case Action.GOODVIBES:  return (Defaults.outputExtension,)
         case _:                 return OutputExtensions()
 
 

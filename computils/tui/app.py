@@ -69,6 +69,17 @@ class CompUtilsApp(App):
     #form Checkbox#stalk, #form Checkbox#loop { margin-right: 0; }
     #methods { height: auto; max-height: 12; }
     #range { width: 24; height: 1; border: none; }
+    /* GoodVibes settings: [X] label, value + unit, meaning; the current row is highlighted while the list has focus */
+    #settings { height: auto; }
+    .setting { height: 1; }
+    .setting-box { width: 4; }
+    .setting-label { width: 19; }
+    .setting-value { width: 18; height: 1; }
+    .setting-value Input, .setting-value Input:focus { width: 2; height: 1; padding: 0; border: none; background: transparent; }
+    .setting-unit { width: auto; margin-left: 0; }
+    .setting-meaning { width: 1fr; color: $text-muted; }
+    .setting.-off .setting-value { text-opacity: 45%; }
+    #settings:focus-within .setting.-current { background: $boost; }
 
     /* The config editor: the table takes the height the details strip leaves */
     #config-table { height: 1fr; }

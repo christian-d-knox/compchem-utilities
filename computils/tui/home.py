@@ -20,12 +20,12 @@ from .inspect   import ActionExtensions, FileDetails, FileStatus, Styled
 
 ACTION_LABELS = {
     Action.RUN: "Run as Written", Action.SINGLE_POINT: "Single Point", Action.BENCHMARK: "Benchmark",
-    Action.RERUN: "Re-run", Action.CUBE: "Cube Files", Action.FORM_CHECK: "FormChk",
+    Action.RERUN: "Re-run", Action.CUBE: "Cube Files", Action.FORM_CHECK: "FormChk", Action.GOODVIBES: "GoodVibes",
 }
 # Screens below the divider, opened with ␣, ⏎ or a click: item id -> (label, the Config section it opens).
 # The later ones are listed so the layout matches the design
 SCREEN_ITEMS = {"screen-config": ("Config", "SLURM"), "screen-files": ("Project Files", "Project Files")}
-LATER_SCREENS = ["Queue Monitor", "GoodVibes"]
+LATER_SCREENS = ["Queue Monitor"]
 _COLLAPSE = Binding.Group("Collapse")
 _ALL_NONE = Binding.Group("All/None")
 _FOLD = Binding.Group("Fold", compact=True)

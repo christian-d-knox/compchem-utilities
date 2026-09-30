@@ -102,15 +102,18 @@ class ExcelIntent(Intent):
 
 @dataclass
 class GoodVibesIntent(Intent):
-    """`cu -gv` — run goodvibes against *.out in CWD, then convert to xlsx.
+    """`cu -gv [FILE ...]` — run goodvibes on the given outputs (default: every output in the CWD), then convert to xlsx.
 
-    All fields here correspond to today's goodVibesInteractive() prompts.
+    analysis.GoodVibesArguments turns the fields into goodvibes flags. truhlarEntropy and checkConsistency are set by the TUI only.
     """
-    quasiharmonic:      bool            = False
+    files:              list[Path]
+    headGordonEnthalpy: bool            = False  # -q
+    truhlarEntropy:     bool            = False  # --qs truhlar (Grimme otherwise)
+    checkConsistency:   bool            = False  # --check
     freqCutoff:         Optional[float] = None
     tempCorrection:     Optional[float] = None   # K
     concCorrection:     Optional[float] = None   # mol/L
-    vibeScale:          Optional[float] = None
+    vibeScale:          Optional[float] = 1.0    # None: GoodVibes picks one from the level of theory
     singlePointPattern: Optional[str]   = None   # e.g. "SP"
     extraKeys:          Optional[str]   = None   # raw passthrough
 
@@ -157,7 +160,7 @@ class IntentDraft:
     """
     action: Optional[Action] = None
 
-    # File-bearing actions (RUN, SP, BENCH, CUBE, RERUN, FORM_CHECK)
+    # File-bearing actions (RUN, SP, BENCH, CUBE, RERUN, FORM_CHECK, GOODVIBES)
     files: list[Path] = field(default_factory=list)
 
     # SLURM modifiers (only meaningful when action ∈ JobIntent subclasses)
@@ -175,11 +178,13 @@ class IntentDraft:
     excelInputFile: Optional[Path] = None
 
     # GOODVIBES
-    quasiharmonic:      bool            = False
+    headGordonEnthalpy: bool            = False
+    truhlarEntropy:     bool            = False
+    checkConsistency:   bool            = False
     freqCutoff:         Optional[float] = None
     tempCorrection:     Optional[float] = None
     concCorrection:     Optional[float] = None
-    vibeScale:          Optional[float] = None
+    vibeScale:          Optional[float] = 1.0
     singlePointPattern: Optional[str]   = None
     extraKeys:          Optional[str]   = None
 
@@ -287,17 +292,19 @@ if __name__ == "__main__":
     assert isinstance(intent, ReRunIntent)
     print("Test 5 (RERUN intent): PASS")
 
-    # Test 6: GoodVibes intent has no files (acts on CWD)
+    # Test 6: GoodVibes intent takes files, and needs at least one
     draft = IntentDraft()
     draft.action = Action.GOODVIBES
-    draft.quasiharmonic = True
+    draft.headGordonEnthalpy = True
     draft.freqCutoff = 100.0
+    assert draft.Validate(), "Test 6 should need files"
+    draft.files = [Path("ethane.out")]
     errors = draft.Validate()
     assert errors == [], f"Test 6 errors: {errors}"
     intent = draft.Finalize()
     assert isinstance(intent, GoodVibesIntent)
-    assert intent.quasiharmonic is True
-    assert intent.freqCutoff == 100.0
+    assert intent.headGordonEnthalpy is True
+    assert intent.freqCutoff == 100.0 and intent.files == [Path("ethane.out")]
     print("Test 6 (GOODVIBES with options): PASS")
 
     # Test 7: Init project intent needs no files

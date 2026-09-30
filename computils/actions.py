@@ -23,7 +23,8 @@ class Action(Enum):
     INIT_PROJECT     = "init"       # -init
 
 # Actions that take a batch of files (IntentDraft.Validate, and the TUI's Continue)
-FILE_ACTIONS = (Action.RUN, Action.SINGLE_POINT, Action.BENCHMARK, Action.CUBE, Action.RERUN, Action.FORM_CHECK)
+FILE_ACTIONS = (Action.RUN, Action.SINGLE_POINT, Action.BENCHMARK, Action.CUBE, Action.RERUN, Action.FORM_CHECK,
+                Action.GOODVIBES)
 
 # Spin-state class of a molecule, set once in dispatch by spin.ClassifySpin()
 class SpinState(Enum):

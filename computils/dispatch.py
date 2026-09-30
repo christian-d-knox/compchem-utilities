@@ -5,6 +5,7 @@ The CLI (argparse) and the TUI both build typed Intents, which arrive
 here. Dispatch() routes to the per-action handler based on intent type.
 """
 import subprocess
+from pathlib import Path
 
 from .console   import console
 from .defaults  import Defaults
@@ -20,7 +21,7 @@ from .fileops   import grabPaths, gaussianChargeFinder, formCheck, getCoords, fi
 from .jobs      import runJob
 from .          import jobs
 from .workflows import genBench, genSinglePoint, genReRun, gimmeCubes
-from .analysis  import goodVibesProcessor
+from .analysis  import goodVibesProcessor, GoodVibesArguments, SpcPartners, GOODVIBES_OUTPUT
 from .notify    import CheckAndBroadcast
 from .stalk     import jobStalking
 from .spin      import ClassifySpin
@@ -130,21 +131,28 @@ def _DispatchExcel(intent: ExcelIntent) -> None:
 
 
 def _DispatchGoodVibes(intent: GoodVibesIntent) -> None:
-    # Build the goodvibes command from the intent's fields.
-    vibeScale = str(intent.vibeScale) if intent.vibeScale is not None else "1.0"
-    keyList: list[str] = ["-v", vibeScale]
-    if intent.quasiharmonic:           keyList.append("-q")
-    if intent.freqCutoff is not None:  keyList.extend(["-f", str(intent.freqCutoff)])
-    if intent.tempCorrection is not None: keyList.extend(["-t", str(intent.tempCorrection)])
-    if intent.concCorrection is not None: keyList.extend(["-c", str(intent.concCorrection)])
-    if intent.singlePointPattern is not None: keyList.extend(["--spc", intent.singlePointPattern])
-    if intent.extraKeys:               keyList.extend(intent.extraKeys.split())
-
+    # GoodVibes stops at the first structure without its single point file; name every one of them up front instead
+    inputs, _, missing = SpcPartners(intent.files, intent.singlePointPattern)
+    if missing:
+        console.print(f"[error]No _{intent.singlePointPattern} file for: {', '.join(path.name for path in missing)}. "
+                      "Run their single points first, or run without single point corrections.[/error]")
+        return
+    if not inputs:
+        console.print("[error]No structures to analyse (only single point files were given).[/error]")
+        return
+    # A stale table from an earlier run must never be converted after a failed one
+    Path(GOODVIBES_OUTPUT).unlink(missing_ok=True)
     console.print("[operation]Running GoodVibes...[/operation]")
-    keyString = " ".join(keyList)
-    subprocess.run(f"goodvibes {keyString} *.out", shell=True, check=True)
+    try:
+        result = subprocess.run(["goodvibes", *GoodVibesArguments(intent), *(str(path) for path in inputs)])
+    except FileNotFoundError:
+        console.print("[error]GoodVibes isn't installed, or isn't on PATH.[/error]")
+        return
+    if result.returncode != 0:
+        console.print("[error]GoodVibes stopped with an error (see above). No Excel file was written.[/error]")
+        return
     console.print("[operation]GoodVibes has terminated. Handing output over to the excel exporter.[/operation]")
-    goodVibesProcessor("Goodvibes_output.dat")
+    goodVibesProcessor(GOODVIBES_OUTPUT)
     console.print("[good]Enjoy your Excel-formatted GoodVibes output![/good]")
 
 
