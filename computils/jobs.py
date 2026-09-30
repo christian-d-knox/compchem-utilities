@@ -4,8 +4,8 @@ from .console  import console
 from rich.markup import escape
 from .defaults import Defaults
 from .catalog  import RenderRoute, ROUTE_LEAK_PATTERN
-from .fileops  import (fileCreation, ExtractFrom, HasContent, ExtractResources, ExtractOrcaBlocks, ExtractMixedBasis,
-                       MixedBasis, BasisEntry, NormalizeElement, MoleculeElements)
+from .fileops  import (fileCreation, ExtractFrom, ExtractFromText, HasContent, ExtractResources, ExtractOrcaBlocks,
+                       ExtractMixedBasis, MixedBasis, BasisEntry, NormalizeElement, MoleculeElements)
 from .molecule import Molecule
 from .project  import ResolveProjectFile, FindProjectRoot, ProjectFilePath
 from .intent import JobIntent
@@ -55,26 +55,35 @@ def _FilterMixedBasis(master: MixedBasis, elements: set[str]) -> tuple[str, str,
     return Section(master.basis), Section(master.ecp), missing
 
 # Why genFile would skip a job, or '' if it can be generated. The one check shared by genFile and the TUI's route
-# preview, which passes required=False so a missing project file never prompts
-def JobFileProblem(route: str, tags: list[str], extensionType: str, elements: set[str], required: bool = True) -> str:
+# preview, which passes required=False so a missing project file never prompts. texts ({file name: unsaved text}, from
+# the TUI's config editor) stands in for those project files
+def JobFileProblem(route: str, tags: list[str], extensionType: str, elements: set[str], required: bool = True,
+                   texts: dict[str, str] | None = None) -> str:
     # {tag} and [group] syntax is parsed out in Catalog.Load and must never reach an input file
     if regex.search(ROUTE_LEAK_PATTERN, route):
         return "malformed [ ] group in benchmarkMethods"
     if extensionType == Defaults.gaussianExtension and _UsesMixedBasis(route):
-        basisPath = ResolveProjectFile("mixedbasis.txt", required)
-        if basisPath is None:
+        master = _ProjectData("mixedbasis.txt", ExtractMixedBasis, _LoadMixedBasis, MixedBasis([], []), required, texts)
+        if master is None:
             return _MissingProjectFile("mixedbasis.txt")
-        _, _, missing = _FilterMixedBasis(_LoadMixedBasis(basisPath), elements)
+        _, _, missing = _FilterMixedBasis(master, elements)
         if missing:
             return f"mixedbasis.txt has no basis for {' '.join(sorted(missing))}"
     if extensionType == Defaults.orcaExtension and tags:
-        blocksPath = ResolveProjectFile("orcablocks.txt", required)
-        if blocksPath is None:
+        blocks = _ProjectData("orcablocks.txt", ExtractOrcaBlocks, _LoadOrcaBlocks, {}, required, texts)
+        if blocks is None:
             return _MissingProjectFile("orcablocks.txt")
-        missingTags = [tag for tag in tags if tag not in _LoadOrcaBlocks(blocksPath)]
+        missingTags = [tag for tag in tags if tag not in blocks]
         if missingTags:
             return f"orcablocks.txt has no {', '.join(missingTags)}"
     return ""
+
+def _ProjectData(fileName: str, extractor, loader, empty, required: bool, texts: dict[str, str] | None):
+    # A project file's parsed content: its unsaved text if given, else the file (None if there is no file)
+    if texts and fileName in texts:
+        return ExtractFromText(texts[fileName], extractor, empty=empty)
+    path = ResolveProjectFile(fileName, required)
+    return None if path is None else loader(path)
 
 def _MissingProjectFile(fileName: str) -> str:
     root = FindProjectRoot()
