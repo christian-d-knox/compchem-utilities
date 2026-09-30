@@ -1,4 +1,5 @@
 import copy
+from dataclasses import dataclass, field
 from typing import Any
 from pathlib import Path
 import regex
@@ -148,11 +149,11 @@ class Defaults:
     isNotifications = False
     botToken = ""
     chatID = ""
-    broadcastGroupChatID = "REDACTED"
+    broadcastGroupChatID = ""
     broadcastThreshold = 30
     needsFirstTimeSetup = False
     colorMode = ""
-    bareCommandOpensTUI = False
+    bareCommandOpensTUI = True
 
     # What files contain what keys
     _FILE_GROUPS: dict[str, list[str]] = {
@@ -222,7 +223,7 @@ class Defaults:
         "wallTime": "Default wall time (hours).",
         "cluster": "Default cluster for job submission. REQUIRED — program will error at startup if unset.",
         "partition": "Default partition for job submission. REQUIRED — program will error at startup if unset.",
-        "hpcType": "HPC identity (LOCAL_CLUSTER, Stampede3, Bridges2). REQUIRED.",
+        "hpcType": "HPC identity: a built-in cluster (Bridges2, Stampede3) or one from your lab profile. REQUIRED.",
         "stalkDuration": "How long (minutes) before job stalking times out without looping.",
         "stalkFrequency": "How often (minutes) to ping the queue while stalking.",
         "submissionList": "SLURM header lines for job submission. Set automatically by hpcType.",
@@ -294,6 +295,8 @@ class Defaults:
     }
     # Files the last Load() had to generate (Main runs their setup before the TUI opens)
     generatedFiles: list[str] = []
+    # The installed lab profile's clusters (profile.py), read on every Load
+    _profileClusters: list["Cluster"] = []
 
 
     @classmethod
@@ -315,6 +318,9 @@ class Defaults:
                 if missingKeys:
                     cls._AppendMissing(filename, missingKeys)
 
+        from .profile import InstalledProfile
+        profile = InstalledProfile()
+        cls._profileClusters = profile.clusters if profile else []
         cls._Validate()
 
 
@@ -331,6 +337,14 @@ class Defaults:
                 if not changed or cls._PatchFile(configDir / filename, changed):
                     return
         writeToml(configDir, filename, cls._BuildContent(filename))
+
+
+    @classmethod
+    def _SaveKeys(cls, keys) -> None:
+        """_SaveSection for every file holding one of these keys (a cluster's or a profile's settings span files)."""
+        for filename, fileKeys in cls._FILE_GROUPS.items():
+            if any(key in fileKeys for key in keys):
+                cls._SaveSection(filename)
 
 
     @classmethod
@@ -481,10 +495,17 @@ class Defaults:
     def DefaultValue(cls, key: str) -> Any:
         """What resetting a key writes: the active cluster's setting for it (e.g. Stampede3's full-node memoryRatio),
         else its hardcoded default."""
-        cluster = next((option for option in SUBMISSIONS if option.hpcType == cls.hpcType), None)
+        cluster = next((option for option in cls.Clusters() if option.hpcType == cls.hpcType), None)
         if cluster is not None and key in cluster.settings:
             return cluster.settings[key]
         return copy.deepcopy(cls._HARDCODED[key])
+
+
+    @classmethod
+    def Clusters(cls) -> list["Cluster"]:
+        """The clusters setup offers: the lab profile's first (replacing a built-in of the same name), then the built-ins."""
+        names = {cluster.hpcType for cluster in cls._profileClusters}
+        return cls._profileClusters + [cluster for cluster in BUILTIN_CLUSTERS if cluster.hpcType not in names]
 
 
     @classmethod
@@ -564,27 +585,22 @@ Defaults._TYPES = {key: str if isinstance(getattr(Defaults, key), Path) else typ
 Defaults._HARDCODED = {key: copy.deepcopy(getattr(Defaults, key)) for keys in Defaults._FILE_GROUPS.values() for key in keys}
 
 
-# Each supported cluster: its SLURM header, and the Defaults firstTimeSetup() sets for it
-class Stampede3Submission:
-    # JobName OutputName Error Nodes Partition Time
-    submissionList = ["#!/usr/bin/env bash","#SBATCH -J","#SBATCH -o","#SBATCH -e error.%j","#SBATCH -N 1 -n 1",
-                      "#SBATCH -p","#SBATCH -t"]
-    hpcType = "Stampede3"
-    # Stampede3 reserves whole nodes: 200 GB over the icx node's 80 cores
-    settings = {"partition": "icx", "CPU": 80, "memoryRatio": 200/80, "memoryBuffer": 0, "highMemoryRatio": 200/80}
+@dataclass
+class Cluster:
+    """A cluster setup can choose: its SLURM header, and the Defaults firstTimeSetup() sets for it."""
+    hpcType: str
+    submissionList: list[str]
+    settings: dict[str, Any] = field(default_factory=dict)
 
-class LOCAL_CLUSTERSubmission:
-    # JobName OutputName Nodes CPUs Mem Time Cluster Partition
-    submissionList = ["#!/bin/bash -l","#SBATCH -J","#SBATCH -o","#SBATCH -N 1",
-                      "#SBATCH --ntasks-per-node=","#SBATCH --mem=","#SBATCH -t","#SBATCH -M","#SBATCH -p"]
-    hpcType = "LOCAL_CLUSTER"
-    settings = {"partition": "REDACTED", "cluster": "smp"}
 
-class Bridges2Submission:
+# The public clusters. A lab's own (e.g. with its private partition) come from its lab profile (profile.py)
+BUILTIN_CLUSTERS = (
     # JobName Nodes Partition NTasks Time
-    submissionList = ["#!/bin/csh","#SBATCH -J","#SBATCH -N 1","#SBATCH -p",
-                      "#SBATCH --ntasks-per-node=","#SBATCH -t"]
-    hpcType = "Bridges2"
-    settings = {"partition": "RM-shared", "memoryRatio": 2.0, "memoryBuffer": 0, "highMemoryRatio": 2.0}
-
-SUBMISSIONS = (LOCAL_CLUSTERSubmission, Bridges2Submission, Stampede3Submission)
+    Cluster("Bridges2", ["#!/bin/csh", "#SBATCH -J", "#SBATCH -N 1", "#SBATCH -p", "#SBATCH --ntasks-per-node=",
+                         "#SBATCH -t"],
+            {"partition": "RM-shared", "memoryRatio": 2.0, "memoryBuffer": 0, "highMemoryRatio": 2.0}),
+    # JobName OutputName Error Nodes Partition Time. Stampede3 reserves whole nodes: 200 GB over the icx node's 80 cores
+    Cluster("Stampede3", ["#!/usr/bin/env bash", "#SBATCH -J", "#SBATCH -o", "#SBATCH -e error.%j", "#SBATCH -N 1 -n 1",
+                          "#SBATCH -p", "#SBATCH -t"],
+            {"partition": "icx", "CPU": 80, "memoryRatio": 200/80, "memoryBuffer": 0, "highMemoryRatio": 200/80}),
+)

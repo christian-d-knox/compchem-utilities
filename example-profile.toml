@@ -1,0 +1,48 @@
+# example-profile.toml -- A CompUtils lab profile
+#
+# A lab profile holds what a lab shares but shouldn't publish: its own clusters (e.g. a private partition) and shared
+# settings (e.g. the Telegram bot that alerts the group). Keep it somewhere only your lab can read, such as your
+# group's shared folder on the cluster (chgrp <group> + chmod 640), and give labmates its path:
+#
+#   python3 conda-installer.py --profile /path/to/lab-profile.toml    (new installs)
+#   cu -profile /path/to/lab-profile.toml                              (existing installs)
+#
+# CompUtils keeps a copy in ~/bin/profile.toml, and offers to apply this file again whenever it changes.
+# Every value is checked like the config files; unknown keys are ignored with a warning.
+
+# Shown when the profile is applied
+name = "Example Lab"
+
+# Any global config key (see the TOML files in ~/bin), applied to every labmate's config. Leave a key out
+# (or commented out) rather than empty: an empty value is applied too, e.g. wiping a labmate's own bot token
+[settings]
+isNotifications = true
+# botToken = "123456789:ABC..."   # the lab bot's token, from Telegram's @BotFather
+# broadcastGroupChatID = "-100..."   # the group chat that hears about large submissions
+benchmarkMethods = [
+    "M062X 6-311+G(d,p)",
+    "B3LYP 6-311+G(d,p) EmpiricalDispersion=GD3BJ",
+]
+
+# A cluster setup offers (listed before the built-in Bridges2 and Stampede3).
+# submissionList is its SLURM header: each line is filled in by the flag it holds
+# (-J name, -o output, --ntasks CPUs, --mem memory, -t wall time, -p partition, -M cluster).
+# Any other key is a setting that choosing this cluster applies.
+[clusters.ExampleHPC]
+submissionList = [
+    "#!/bin/bash -l",
+    "#SBATCH -J",
+    "#SBATCH -o",
+    "#SBATCH -N 1",
+    "#SBATCH --ntasks-per-node=",
+    "#SBATCH --mem=",
+    "#SBATCH -t",
+    "#SBATCH -p",
+]
+partition = "example-lab"
+CPU = 16
+memoryRatio = 4.0
+
+# A built-in cluster's table only overrides its settings (its header stays)
+[clusters.Bridges2]
+partition = "RM-shared"

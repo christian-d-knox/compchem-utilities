@@ -12,6 +12,7 @@ ACTION_FLAGS = {
     "run": Action.RUN, "singlePoint": Action.SINGLE_POINT, "bench": Action.BENCHMARK, "cube": Action.CUBE,
     "rerun": Action.RERUN, "formcheck": Action.FORM_CHECK, "excel": Action.EXCEL, "goodvibes": Action.GOODVIBES,
     "first": Action.FIRST_TIME_SETUP, "update": Action.UPDATE, "init": Action.INIT_PROJECT,
+    "profile": Action.PROFILE,
 }
 
 
@@ -34,6 +35,8 @@ def BuildParser() -> argparse.ArgumentParser:
     actionGroup.add_argument('-first','--first', action='store_true', help="Re-run first-time setup.")
     actionGroup.add_argument('-up', '--update', action='store_true', help="Update CompUtils from GitHub.")
     actionGroup.add_argument('-init', '--init', action='store_true', help="Mark the CWD as a project root.")
+    actionGroup.add_argument('-profile', '--profile', nargs='?', const="", metavar="FILE",
+                             help="Apply a lab profile (its clusters and shared settings). Without FILE, re-apply the last one.")
     # Handled in Main() before parsing; listed here for --help and so argparse rejects it alongside another action
     actionGroup.add_argument('-tui', '--tui', action='store_true', help="Open the TUI. Cannot be combined with any other flag.")
 
@@ -42,7 +45,7 @@ def BuildParser() -> argparse.ArgumentParser:
     parser.add_argument('-ch', '--checkpoint', action='store_true', help="Enable Gaussian checkpoint files.")
     parser.add_argument('-nbo', '--nbo7', action='store_true', help="Enable NBO7 keylist.")
     parser.add_argument('-ovr', '--override', type=int, default=0, help="Index override for benchmark methods (zero-indexed).")
-    parser.add_argument('--update-branch', type=str, default="main", help="With --update, install from this branch (default: main).")
+    parser.add_argument('--update-branch', type=str, default=None, help="With --update, install from this branch (default: the one CompUtils was installed from, else main).")
 
     return parser
 
@@ -76,6 +79,8 @@ def ParseCLI(argv: list[str]) -> Intent:
     # Single-file actions
     if args.excel:
         draft.excelInputFile = Path(args.excel)
+    if args.profile:
+        draft.profileFile = Path(args.profile).expanduser()
 
     # Modifiers
     draft.stalk         = args.stalk

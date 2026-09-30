@@ -10,10 +10,10 @@ readme      = "README.md"
 requires-python = ">=3.11"
 authors     = [{name = "Christian Drew Knox"}]
 license     = {text = "MIT"}
+# compUtils.yml must cover these: conda-installer.py pip-installs CompUtils with --no-deps
 dependencies = [
     "rich>=13.7",
     "textual>=6.4",
-    "termcolor",
     "pandas",
     "regex",
     "xlsxwriter",

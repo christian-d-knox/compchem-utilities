@@ -1,5 +1,6 @@
 """Entry point for the cu command (and `python -m computils`)."""
 import sys
+from pathlib import Path
 from .defaults import Defaults
 from .catalog  import Catalog
 from .console  import ApplyTheme, console
@@ -15,6 +16,7 @@ def Main() -> None:
 
     argv = sys.argv[1:]
     opensTUI = argv in (["-tui"], ["--tui"]) or (not argv and Defaults.bareCommandOpensTUI)
+    appliesProfile = argv[:1] in (["-profile"], ["--profile"])
 
     # If Defaults._Validate determined that first-time setup is needed,
     # run it here rather than from inside Defaults.
@@ -23,15 +25,19 @@ def Main() -> None:
         ColorSetup()
     if Defaults.needsFirstTimeSetup:
         from .wizards import firstTimeSetup
-        result = firstTimeSetup()
+        # `cu -profile FILE` on a fresh install: setup applies it, before offering the clusters it adds
+        profileFile = Path(argv[1]).expanduser() if appliesProfile and len(argv) == 2 else None
+        result = firstTimeSetup(profileFile)
         # The TUI can't set the cluster (hpcType is setup-only), so it opens only once setup has set one
-        while opensTUI and result is False:
-            result = firstTimeSetup()
-        if opensTUI and result is None:
+        if (opensTUI and result is None) or profileFile is not None:
             return
-    elif opensTUI and "notifications.toml" in Defaults.generatedFiles:
-        from .wizards import NotificationSetup
-        NotificationSetup()
+    else:
+        if not appliesProfile and sys.stdin.isatty():
+            from .profile import CheckProfileSource
+            CheckProfileSource()
+        if opensTUI and "notifications.toml" in Defaults.generatedFiles:
+            from .wizards import NotificationSetup
+            NotificationSetup()
 
     ApplyTheme(Defaults.colorMode)
 

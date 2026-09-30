@@ -31,8 +31,8 @@ def AskFloat(prompt: str, default = None, style: str = "prompt") -> float:
             console.print(f"[warning]{escape(response)} is not a number.[/warning]")
 
 def AskStr(prompt: str, default = None, style: str = "prompt") -> str:
-    """Ask for a non-empty string (or accept the default), and return it"""
-    if default is not None:
+    """Ask for a non-empty string (or accept the default, which may be "" to make the answer optional), and return it"""
+    if default:
         suffix = f" ({default}): "
     else:
         suffix = ": "

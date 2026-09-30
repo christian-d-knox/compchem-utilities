@@ -2,9 +2,9 @@ import os
 from pathlib import Path
 
 from .console  import console, Panel
-from .defaults import Defaults, SUBMISSIONS
+from .defaults import Defaults
 from .notify   import _SendTelegram, _DetectTelegramChatID
-from .prompts import AskBool, AskStr
+from .prompts import AskBool, AskStr, AskChoice
 
 
 def NotificationSetup() -> None:
@@ -26,18 +26,24 @@ def NotificationSetup() -> None:
 
     Defaults.isNotifications = True
 
-    print("  You'll need the bot token from your lab admin.")
-    print("  (Enter 'q' to quit and come back later.)")
-    botToken = input("  Bot token: ").strip()
+    from .profile import InstalledProfile
+    profile = InstalledProfile()
+    botToken = profile.settings.get("botToken", "") if profile else ""
+    if botToken:
+        console.print("[info]  Using the bot token from your lab profile.[/info]")
+    else:
+        print("  You'll need a bot token: your lab admin's, or your own from Telegram's @BotFather.")
+        print("  (Enter 'q' to quit and come back later.)")
+        botToken = input("  Bot token: ").strip()
 
-    if botToken.lower() == "q":
-        StopSetup("  Setup paused. Access later by calling with the --first flag.")
-        return
-    if ":" not in botToken:
-        console.print("[warning]  Warning: that doesn't look like a valid bot token[/warning]")
-        print("  (expected format: 123456789:ABCdef...).")
-        StopSetup("  Setup cancelled. Access later by calling with the --first flag.")
-        return
+        if botToken.lower() == "q":
+            StopSetup("  Setup paused. Access later by calling with the --first flag.")
+            return
+        if ":" not in botToken:
+            console.print("[warning]  Warning: that doesn't look like a valid bot token[/warning]")
+            print("  (expected format: 123456789:ABCdef...).")
+            StopSetup("  Setup cancelled. Access later by calling with the --first flag.")
+            return
 
     Defaults.botToken = botToken
 
@@ -64,15 +70,16 @@ def NotificationSetup() -> None:
         if manualID:
             Defaults.chatID = manualID
         else:
-            console.print(Panel("Personal notifications won't work, but broadcast alerts will still be sent to the group"
-                                ". Run CompUtils with --first at a later date (or edit notifications.toml directly) if "
+            console.print(Panel("Personal notifications won't work (group broadcast alerts still will). "
+                                "Run CompUtils with --first at a later date (or edit notifications.toml directly) if "
                                 "you wish to try again."), style="info")
 
     Defaults._SaveSection("notifications.toml")
 
     console.print(f"[good]Saved to {Defaults.binDirectory}/notifications.toml[/good]") #light_green good
-    console.print(Panel("Reminders:\nnotifications.toml contains the bot token.\nDO NOT EDIT THIS FOR ANY "
-                        "REASON\nJoin the lab's broadcasting group for queue alerts!", style="info"))
+    console.print(Panel("Reminders:\nnotifications.toml contains the bot token.\nDO NOT EDIT THIS FOR ANY REASON"
+                        + ("\nJoin the lab's broadcasting group for queue alerts!" if Defaults.broadcastGroupChatID else ""),
+                        style="info"))
 
 def ColorSetup() -> None:
     console.print(Panel("Color Mode Setup", style="operation"))
@@ -98,21 +105,22 @@ def ColorSetup() -> None:
 
 
 
-def firstTimeSetup() -> bool | None:
-    """Set the cluster (and then notifications). True once a cluster is set, False for an unknown name,
-    None for an unsupported cluster (asking again won't help)."""
-    systemType = AskStr("Enter the name of the HPC cluster you are using (LOCAL_CLUSTER, Expanse, Bridges2, Stampede3)")
-    if systemType == "Expanse":
-        console.print("[error]CompUtils is not supported on the Expanse architecture due to being outdated and messy. Have a good day.[/error]")
+def firstTimeSetup(profileFile: Path | None = None) -> bool | None:
+    """Apply a lab profile (if there is one), then set the cluster (and notifications). True once a cluster is set,
+    None if the user cancelled."""
+    from .profile import SetupProfile
+    SetupProfile(profileFile)
+    clusters = Defaults.Clusters()
+    # The lab profile's clusters come first, so a labmate's cluster is the default
+    index = AskChoice("Which HPC cluster are you using?", [cluster.hpcType for cluster in clusters])
+    if index is None:
+        console.print("[error]CompUtils needs a cluster to write job scripts for. For one not listed, a lab profile can "
+                      "add it (see example-profile.toml).[/error]")
         return None
-    # Each cluster's header and settings live on its Submission class (defaults.py)
-    submission = next((option for option in SUBMISSIONS if option.hpcType == systemType), None)
-    if submission is None:
-        console.print("[error]Unknown HPC architecture input. Aborting.[/error]")
-        return False
-    Defaults.hpcType, Defaults.submissionList = submission.hpcType, submission.submissionList
-    for key, value in submission.settings.items():
+    cluster = clusters[index]
+    Defaults.hpcType, Defaults.submissionList = cluster.hpcType, cluster.submissionList
+    for key, value in cluster.settings.items():
         setattr(Defaults, key, value)
-    Defaults._SaveSection("slurm.toml")
+    Defaults._SaveKeys(["hpcType", *cluster.settings])
     NotificationSetup()
     return True

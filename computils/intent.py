@@ -127,7 +127,7 @@ class FirstTimeSetupIntent(Intent):
 @dataclass
 class UpdateIntent(Intent):
     """`cu --update` — re-install CompUtils from GitHub."""
-    branch: str = "main"
+    branch: Optional[str] = None
 
 
 @dataclass
@@ -136,12 +136,18 @@ class InitProjectIntent(Intent):
     pass
 
 
+@dataclass
+class ProfileIntent(Intent):
+    """`cu -profile [FILE]` — apply a lab profile (None: re-apply the last one)."""
+    profileFile: Optional[Path] = None
+
+
 # The Intent each Action finalizes to. Excel and Update aren't listed: their fields are named differently on the draft
 _INTENT_TYPES = {
     Action.RUN: RunIntent, Action.SINGLE_POINT: SinglePointIntent, Action.BENCHMARK: BenchmarkIntent,
     Action.RERUN: ReRunIntent, Action.CUBE: CubeIntent, Action.FORM_CHECK: FormCheckIntent,
     Action.GOODVIBES: GoodVibesIntent, Action.FIRST_TIME_SETUP: FirstTimeSetupIntent,
-    Action.INIT_PROJECT: InitProjectIntent,
+    Action.INIT_PROJECT: InitProjectIntent, Action.PROFILE: ProfileIntent,
 }
 
 
@@ -189,7 +195,10 @@ class IntentDraft:
     extraKeys:          Optional[str]   = None
 
     # UPDATE
-    updateBranch: str = "main"
+    updateBranch: Optional[str] = None  # None: the branch CompUtils was installed from
+
+    # PROFILE
+    profileFile: Optional[Path] = None  # None: re-apply the last one
 
     # This validates the fields for an Action() wants from its Intent()
     def Validate(self) -> list[str]:
@@ -209,6 +218,9 @@ class IntentDraft:
 
         if self.action == Action.EXCEL and self.excelInputFile is None:
             errors.append("Input file required for Excel conversion.")
+
+        if self.action == Action.PROFILE and self.profileFile is not None and not self.profileFile.is_file():
+            errors.append(f"No lab profile file at {self.profileFile}.")
 
         return errors
 
@@ -315,6 +327,15 @@ if __name__ == "__main__":
     intent = draft.Finalize()
     assert isinstance(intent, InitProjectIntent)
     print("Test 7 (INIT_PROJECT intent): PASS")
+
+    # Test 8: Profile intent re-applies without a file, and needs an existing file when given one
+    draft = IntentDraft()
+    draft.action = Action.PROFILE
+    assert draft.Validate() == [], "Test 8 bare -profile should be valid"
+    assert draft.Finalize() == ProfileIntent(profileFile=None)
+    draft.profileFile = Path("no-such-profile.toml")
+    assert any("No lab profile file" in e for e in draft.Validate()), "Test 8 should reject a missing file"
+    print("Test 8 (PROFILE intent): PASS")
 
     print("=" * 50)
     print("All smoke tests passed.")
