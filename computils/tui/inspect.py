@@ -179,7 +179,7 @@ def PreviewRowFor(action: Action, molecule: Molecule, index: int) -> PreviewRow:
         routeLine = ExtractFrom(molecule.sourcePath, ExtractRouteLine, molecule.sourcePath.suffix, empty="")
         method = IdentifyMethod(routeLine) if routeLine else ""
         if not method:
-            row.problem = "no route card found" if not routeLine else "method not recognised"
+            row.problem = "No route card found" if not routeLine else "Method not recognised"
             return row
         molecule.extensionType = extensionGetter(method)
         # No matching entry: genReRun uses the route verbatim, so only the U/RO reference can be added
@@ -190,7 +190,7 @@ def PreviewRowFor(action: Action, molecule: Molecule, index: int) -> PreviewRow:
     if not molecule.coordinateList:
         # dispatch skips files with no geometry
         RenderedRow(row, template, molecule, set())
-        row.problem = "no coordinates found"
+        row.problem = "No coordinates found"
         return row
     # The same check genFile skips jobs with, without its prompt for a missing project file
     return RenderedRow(row, template, molecule, MoleculeElements(molecule.coordinateList))

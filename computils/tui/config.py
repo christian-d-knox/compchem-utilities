@@ -5,6 +5,8 @@ from itertools import zip_longest
 from pathlib import Path
 
 import regex
+from rich.console import Group
+from rich.table import Table
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -48,21 +50,34 @@ FILE_NOTES = {
 }
 # Shown under each project file's Check panel: the format, by example
 FILE_EXAMPLES = {
-    "orcablocks.txt": "%cpcm\n    smd true\nend\n# @tag tddft10\n%tddft\n    nroots 10\nend\n\n"
-                      "Tag: its %name, or the # @tag above.\nUse as {cpcm} {tddft10} in routes.",
-    "mixedbasis.txt": "C H N O 0\n6-31G(d)\n****\nFe Cu 0\nSDD\n****\n\nFe Cu 0\nSDD\n\n"
-                      "**** ends a group; after the first\nblank line come the ECPs.",
+    "orcablocks.txt": "%cpcm\n    smd true\nend\n# @tag tddft10\n%tddft\n    nroots 10\nend\n"
+                      "Tag: %name, or # @tag above\nUse: {cpcm} {tddft10}",
+    "mixedbasis.txt": "C H N O 0\n6-31G(d)\n****\nFe Cu 0\nSDD\n****\n\nFe Cu 0\nSDD\n"
+                      "A blank line starts the ECPs",
     "spinstates.txt": "Fe2S2_*    oss\nNi_sqpl_*  css   # a comment\n\n"
                       "<name or glob>  css|oss, matched\nagainst the file name. First match\nwins; singlets only.",
 }
-# The Benchmark Suite's guide, in its own box while an entry is typed
-ROUTE_GUIDE = Text("\n".join([
-    "[selectors: keywords]  added only for matching molecules, in",
-    "  written order. Selectors: css  oss  open (oss or mult > 1)",
-    "  doublet…septet  m2…m7   several: [oss, triplet: keywords]",
-    "{tag}  adds that orcablocks.txt block (ORCA only)",
-    "U / RO (UKS, UHF…) is added for you from each molecule's spin state",
-]))
+# The Benchmark Suite's guide, in its own box while an entry is typed: (syntax, meaning) rows, then a closing line
+ROUTE_GUIDE_ROWS = [
+    ("[css: keywords]", "Closed-shell singlets only"),
+    ("[oss: guess=mix]", "Open-shell (broken-symmetry) singlets only"),
+    ("[open: stable=opt]", "Every open shell multiplicity"),
+    ("[triplet: keywords]", "One multiplicity by name: doublet, triplet … septet"),
+    ("[oss, triplet: …]", "Several selectors share one group"),
+    ("{cpcm}", "Adds the cpcm block from orcablocks.txt (ORCA only)"),
+]
+ROUTE_GUIDE_CLOSING = "Groups apply in the order written. U / RO (UKS, UHF…) is added for you."
+
+
+def RouteGuide() -> Group:
+    # A grid, so the meanings fill the box's width (and wrap in a narrow one)
+    table = Table.grid(expand=True, padding=(0, 3, 0, 0))
+    table.add_column(no_wrap=True)
+    table.add_column(ratio=1)
+    for syntax, meaning in ROUTE_GUIDE_ROWS:
+        # Text, not str: Rich would read [oss: …] as markup and drop it
+        table.add_row(Text(syntax), Text(meaning))
+    return Group(table, Text(ROUTE_GUIDE_CLOSING))
 # The Renders-as preview's stand-in molecules: (label, multiplicity, spin state)
 STAND_INS = [("CSS", 1, SpinState.CSS), ("OSS", 1, SpinState.OSS), ("Doublet", 2, SpinState.OPEN),
              ("Triplet", 3, SpinState.OPEN)]
@@ -145,7 +160,7 @@ class ConfigScreen(Screen):
         self.valueWidth = 14
 
     def compose(self) -> ComposeResult:
-        project = f"project: {self.root.name}" if self.root else "no project"
+        project = f"Project: {self.root.name}" if self.root else "No project"
         yield Static(TitleLine("Config", Styled(project, "info")), id="title")
         with Horizontal(id="body"):
             with Vertical(id="left", classes="pane") as left:
@@ -263,7 +278,7 @@ class ConfigScreen(Screen):
         else:
             overrides, problems = ParseSpinOverrides(text)
             lines += [Text(f"{glob} → {state.name}") for glob, state in overrides] or [Text("No overrides")]
-            lines += [Styled(f"✗ line {number}: {line}", "error") for number, line in problems]
+            lines += [Styled(f"✗ Line {number}: {line}", "error") for number, line in problems]
             short = f"{len(overrides)} override{'s' if len(overrides) != 1 else ''}"
             if problems:
                 short += f" · {len(problems)} bad"
@@ -273,9 +288,9 @@ class ConfigScreen(Screen):
 
     def Cell(self, column: int, key: str) -> Text:
         if column == PROJECT and key not in Defaults._PROJECT_KEYS:
-            return Text("(global only)", "dim")
+            return Text("(Global only)", "dim")
         if column == PROJECT and self.root is None:
-            return Text("no project", "dim")
+            return Text("No project", "dim")
         value = self.Value(column, key)
         pending, marked = (column, key) in self.pending, column == PROJECT and value is not DELETE
         # Cut to the column, leaving room for the [unsaved] brackets and the • of a project value (the one in force)
@@ -310,11 +325,11 @@ class ConfigScreen(Screen):
             self.valueWidth = FitColumns(table, ["File", "Location", "Summary"], max(map(len, self.keys)))
             for name in self.keys:
                 path = self.FilePath(name)
-                location = ("CWD" if Path(name).is_file() else "project" if path is not None and path.is_file()
-                            else "missing")
+                location = ("CWD" if Path(name).is_file() else "Project" if path is not None and path.is_file()
+                            else "Missing")
                 short, _ = self.FileSummary(name, self.Value(FILES, name))
-                edited = "[edited] " if (FILES, name) in self.pending else ""
-                table.add_row(name, Text(location, "dim" if location == "missing" else ""),
+                edited = "[Edited] " if (FILES, name) in self.pending else ""
+                table.add_row(name, Text(location, "dim" if location == "Missing" else ""),
                               Text(Cut(edited + short, self.valueWidth)))
         else:
             self.keys = [key for key in Defaults._FILE_GROUPS[filename] if key not in HIDDEN]
@@ -324,9 +339,9 @@ class ConfigScreen(Screen):
         table.move_cursor(row=min(row, len(self.keys) - 1), column=column, animate=False)
         where = (f"{label} · {filename}" if filename not in (None, FILES_SECTION)
                  else f"{label} · benchmarkMethods" if filename is None
-                 else f"{label} · {self.root.name}/{Defaults.projectMarker}" if self.root else f"{label} · no project")
+                 else f"{label} · {self.root.name}/{Defaults.projectMarker}" if self.root else f"{label} · No project")
         self.query_one("#config-top", FrameRule).label = where
-        self.query_one("#config-top", FrameRule).right = f"project: {self.root.name}" if self.root else ""
+        self.query_one("#config-top", FrameRule).right = f"Project: {self.root.name}" if self.root else ""
         self.RefreshDetails()
 
     def RefreshDetails(self, problem: str = "") -> None:
@@ -340,7 +355,7 @@ class ConfigScreen(Screen):
             path = self.FilePath(name)
             lines = [Text(Cut(FILE_NOTES[name], width)),
                      Text(Cut(f"Path: {path if path is not None else 'none (not inside a project)'}", width)),
-                     Styled("␣ edits the file · r discards unsaved edits", "info")]
+                     Styled("␣ Edit the file · r Discard its unsaved edits", "info")]
             details.update(Text("\n").join(lines))
             self.query_one("#config-rule", FrameRule).label = name
         else:
@@ -365,7 +380,7 @@ class ConfigScreen(Screen):
         count = self.Unsaved()
         self.query_one("#config-save", FrameRule).right = (
             Text.assemble(Styled(f"{count} unsaved", "warning"), " · ", KeyHint(self.app, "⏎", "Save")) if count
-            else Styled("no changes", "dim"))
+            else Styled("No changes", "dim"))
         self.refresh_bindings()
 
     def Redraw(self) -> None:
@@ -419,7 +434,7 @@ class ConfigScreen(Screen):
                                             start=table.cursor_row, previewTitle="Renders as",
                                             check=lambda rows: EmptyEntries(rows) or ([] if rows else ["✗ The suite needs at least one entry"]),
                                             preview=lambda row: self.RendersAs(row[0]),
-                                            guide=ROUTE_GUIDE, guideTitle="How route cards work"), DoneList)
+                                            guide=RouteGuide(), guideTitle="How route cards work"), DoneList)
         else:
             self.app.push_screen(ListEditor(f"{key} · {scope}", [(key, None)], [[entry] for entry in values],
                                             check=EmptyEntries), DoneList)
@@ -440,7 +455,7 @@ class ConfigScreen(Screen):
                 problems.append(row.problem)
             row.problem = ""
             lines.append(Text(f"{label:<9}") + RowText(row))
-        problems[:0] = [f"unknown selector '{selector}' (that group is ignored)" for selector in UnknownSelectors(entry)]
+        problems[:0] = [f"Unknown selector '{selector}' (that group is ignored)" for selector in UnknownSelectors(entry)]
         if template.method not in programOf:
             problems.insert(0, f"{template.method or 'The first token'} is not in methodNames: it would run as Gaussian16")
         tags = template.tags + [tag for _, _, groupTags in template.groups for tag in groupTags]
@@ -695,7 +710,7 @@ class ConfigScreen(Screen):
 
     def action_help(self) -> None:
         Notice(self.app, "Help", "\n".join([
-            "↑/↓ move between keys", "←/→ Global or Project",
-            "space edit: toggles true/false, cycles choices, opens lists and project files in a pop-up editor",
-            "r reset the value to its default (Project: follow global; a project file: drop its edits)",
-            "R reset the whole file", "enter save and return home", "esc back", "ctrl+q quit"]))
+            "↑/↓ Move between keys", "←/→ Global or Project",
+            "space Edit: toggles true/false, cycles choices, opens lists and project files in a pop-up editor",
+            "r Reset the value to its default (Project: follow global; a project file: drop its edits)",
+            "R Reset the whole file", "enter Save and return home", "esc Back", "ctrl+q Quit"]))
