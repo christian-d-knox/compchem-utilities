@@ -232,8 +232,11 @@ class TextEditor(ModalScreen):
     TextEditor { align: center middle; }
     /* Sized by CSS, so the frame follows the terminal when it is resized */
     TextEditor > Vertical { width: 100%; max-width: 110; height: 100%; margin: 1 2; }
-    TextEditor #editor-body { height: 1fr; }
-    TextEditor TextArea { width: 1fr; border: none; padding: 0; }
+    /* Not .side: the app's .side { height: auto } outranks this widget CSS, and would size the body to its text
+       instead of the frame, pushing the right column (and its Example) past the bottom edge */
+    TextEditor #editor-body { height: 1fr; border-left: solid $secondary; border-right: solid $secondary; padding: 0 1; }
+    /* :focus too, or TextArea's own focus border (more specific) comes back */
+    TextEditor TextArea, TextEditor TextArea:focus { width: 1fr; border: none; padding: 0; }
     TextEditor #editor-side { width: 34; border-left: solid $secondary; }
     TextEditor #summary, TextEditor #example { border-top: solid $secondary; border-title-align: left; padding: 0 1; }
     TextEditor #summary { height: 1fr; }
@@ -249,7 +252,7 @@ class TextEditor(ModalScreen):
     def compose(self):
         with Vertical():
             yield FrameRule("┌┐", self.title_)
-            with Horizontal(id="editor-body", classes="side"):
+            with Horizontal(id="editor-body"):
                 yield TextArea(self.original, id="text", soft_wrap=False)
                 with Vertical(id="editor-side"):
                     yield Static(id="summary")
