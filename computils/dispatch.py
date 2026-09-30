@@ -4,7 +4,10 @@ Single execution path for all Intents.
 The CLI (argparse) and the TUI both build typed Intents, which arrive
 here. Dispatch() routes to the per-action handler based on intent type.
 """
+import importlib.metadata
+import json
 import subprocess
+import sys
 from pathlib import Path
 
 from .console   import console
@@ -15,7 +18,7 @@ from .intent    import (
     Intent,
     RunIntent, SinglePointIntent, BenchmarkIntent, ReRunIntent,
     CubeIntent, FormCheckIntent, ExcelIntent, GoodVibesIntent,
-    FirstTimeSetupIntent, UpdateIntent, InitProjectIntent,
+    FirstTimeSetupIntent, UpdateIntent, InitProjectIntent, ProfileIntent,
 )
 from .fileops   import grabPaths, gaussianChargeFinder, formCheck, getCoords, fileCreation
 from .jobs      import runJob
@@ -41,6 +44,7 @@ def Dispatch(intent: Intent) -> None:
         case FirstTimeSetupIntent():  _DispatchFirstTimeSetup(intent)
         case UpdateIntent():          _DispatchUpdate(intent)
         case InitProjectIntent():     _DispatchInitProject(intent)
+        case ProfileIntent():         _DispatchProfile(intent)
         case _:
             raise ValueError(f"Unknown intent: {type(intent).__name__}")
 
@@ -161,16 +165,23 @@ def _DispatchFirstTimeSetup(intent: FirstTimeSetupIntent) -> None:
     firstTimeSetup()
 
 
+def _InstalledBranch() -> str:
+    """The branch CompUtils was pip-installed from (pip records it in direct_url.json), else main."""
+    try:
+        record = json.loads(importlib.metadata.distribution("compchem-utilities").read_text("direct_url.json") or "{}")
+    except (importlib.metadata.PackageNotFoundError, ValueError):
+        return "main"
+    return record.get("vcs_info", {}).get("requested_revision") or "main"
+
+
 def _DispatchUpdate(intent: UpdateIntent) -> None:
-    repoUrl = (
-        f"git+https://github.com/christian-d-knox/"
-        f"compchem-utilities.git@{intent.branch}"
-    )
-    console.print(f"[operation]Updating from branch '{intent.branch}'...[/operation]")
+    branch = intent.branch or _InstalledBranch()
+    # The same install conda-installer.py runs
+    repoUrl = f"git+https://github.com/christian-d-knox/compchem-utilities.git@{branch}"
+    console.print(f"[operation]Updating from branch '{branch}'...[/operation]")
     result = subprocess.run(
-        ["pip", "install", "--upgrade", "--force-reinstall",
+        [sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall",
          "--no-deps", "--no-cache-dir", repoUrl],
-        capture_output=False,
     )
     if result.returncode == 0:
         console.print("[good]Update complete! Next launch of cu will use the new version.[/good]")
@@ -194,3 +205,8 @@ def _DispatchInitProject(intent: InitProjectIntent) -> None:
         if not AskBool("Create a nested project root here anyway?", "n"):
             return
     CreateProjectRoot(here)
+
+
+def _DispatchProfile(intent: ProfileIntent) -> None:
+    from .profile import ApplyProfile
+    ApplyProfile(intent.profileFile)

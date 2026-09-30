@@ -12,7 +12,7 @@ QUEUE_COMMAND = ["squeue", "-h", "--me", "--format=%j|%T|%S|%M"]
 
 
 # Where stalked jobs run: jobs are submitted this same run by slurmHandler(), so its Defaults values are exact.
-# The cluster is only included when the submission header actually sends -M (LOCAL_CLUSTER); otherwise just the partition
+# The cluster is only included when the submission header actually sends -M; otherwise just the partition
 def jobLocation() -> str:
     submitsCluster = any("-M" in line for line in Defaults.submissionList)
     parts = [Defaults.cluster if submitsCluster else "", Defaults.partition]

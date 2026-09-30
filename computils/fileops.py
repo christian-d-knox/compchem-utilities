@@ -455,7 +455,7 @@ def formCheck(molecule: Molecule) -> None:
     subprocess.run(["bash", "-l", "-c", f"module load gaussian && formchk {molecule.fullPath}"], check=True)
     Retarget(molecule, molecule.rootName, extensionType=".fchk")
 
-# A new fully pythonic solution to coordinate scraping, agnostic of the PERL bullshit on LOCAL_CLUSTER
+# A new fully pythonic solution to coordinate scraping, agnostic of the cluster's PERL bullshit
 def getCoords(fileName: Path, outputFileName: Path) -> list:
     at, X, Y, Z = ExtractFrom(fileName, ExtractCoords, empty=([], [], [], []))
     # Translates from Atomic Number to Atomic Symbol; the lines are written to the .xyz and kept for the input files
