@@ -17,7 +17,8 @@ DEFAULT_TEMPERATURE = 298.15
 # Fills the GoodVibes fields of an IntentDraft; GoodVibesArguments turns them into the goodvibes command
 def goodVibesInteractive(draft) -> None:
     draft.headGordonEnthalpy = AskBool("Apply the Head-Gordon quasi-harmonic enthalpy correction?", "Y")
-    if AskBool("Utilize a frequency cutoff?", "Y"):
+    # The cutoff is asked (and passed) only with the Head-Gordon correction, as in the TUI
+    if draft.headGordonEnthalpy and AskBool("Utilize a frequency cutoff?", "Y"):
         draft.freqCutoff = AskFloat("Enter the frequency cutoff (wavenumbers)", 100)
     if AskBool("Utilize a temperature correction?", "N"):
         draft.tempCorrection = AskFloat("Enter temperature (K)")
@@ -41,7 +42,9 @@ def GoodVibesArguments(intent) -> list[str]:
     if intent.vibeScale is not None:        arguments += ["-v", str(intent.vibeScale)]
     # 3.2 always applies Grimme's quasi-harmonic entropy; -q adds Head-Gordon's enthalpy
     if intent.headGordonEnthalpy:           arguments.append("-q")
-    if intent.freqCutoff is not None:       arguments += ["-f", f"{intent.freqCutoff:g}"]
+    # The cutoff is a sub-option of the Head-Gordon correction; without it, GoodVibes' default (100) applies
+    if intent.headGordonEnthalpy and intent.freqCutoff is not None:
+        arguments += ["-f", f"{intent.freqCutoff:g}"]
     if intent.tempCorrection is not None and intent.tempCorrection != DEFAULT_TEMPERATURE:
         arguments += ["-t", f"{intent.tempCorrection:g}"]
     if intent.concCorrection is not None:   arguments += ["-c", f"{intent.concCorrection:g}"]

@@ -49,6 +49,7 @@ class Setting:
     on: bool | None = None      # the checkbox; None: always applies, so no checkbox
     accepts: str | None = NUMBER  # the characters it takes (a regex); TEXT: anything, a space included
     choice: str = ""            # rows of one choice share this name, shown as (•) / ( )
+    under: str = ""             # the row this one is a sub-option of: it applies only while that row is on
 
 
 def GoodVibesSettings() -> list[Setting]:
@@ -59,7 +60,7 @@ def GoodVibesSettings() -> list[Setting]:
         Setting("grimme", "Entropy (qh-S)", "qh-G(T) is always present (required)", fixed="Grimme", on=True, choice="entropy"),
         Setting("truhlar", "", "See G(T) for uncorrected", fixed="Truhlar", on=False, choice="entropy"),
         Setting("enthalpy", "Enthalpy (qh-H)", "Off: RRHO enthalpy", fixed="Head-Gordon", on=True),
-        Setting("cutoff", "qh cutoff", "Softer modes are corrected", "100", "cm⁻¹"),
+        Setting("cutoff", "  └ qh cutoff", "Softer modes are corrected", "100", "cm⁻¹", under="enthalpy"),
         Setting("scale", "Scale factor", "Off: auto from level", "1.0", on=True),
         Setting("singlePoint", "Single Point", "", Defaults.singlePointExtra.lstrip("_"), on=True, accepts=NAME),
         Setting("check", "Check", "Check for level of theory consistency", on=False),
@@ -138,8 +139,8 @@ class SettingRow(Horizontal, can_focus=False):
         if self.setting.value is None:
             fixed = f"({'•' if self.on else ' '}) {self.setting.fixed}" if self.setting.choice else self.setting.fixed
             self.query_one(".setting-fixed", Static).update(fixed)
-        # Off, the value stays readable but dimmed; a choice's unselected option isn't "off"
-        self.set_class(self.on is False and not self.setting.choice, "-off")
+        # Whatever won't apply (off, an unselected choice, a sub-option of an off row) is greyed out
+        self.set_class(not self.parent.Applies(self), "-off")
 
     def SetMeaning(self, text: str) -> None:
         self.query_one(".setting-meaning", Static).update(text)
@@ -147,9 +148,13 @@ class SettingRow(Horizontal, can_focus=False):
     def on_input_changed(self, event: Input.Changed) -> None:
         event.input.Fit(event.value)
         # Typing a value turns its row on; free text (Extra keys) is on whenever it holds something
-        if self.on is not None and self.typing:
-            self.on = bool(event.value.strip()) if self.setting.accepts is TEXT else True
-            self.Show()
+        if self.typing:
+            if self.on is not None:
+                self.on = bool(event.value.strip()) if self.setting.accepts is TEXT else True
+            # ...and a sub-option's value turns on the row it belongs to
+            if self.setting.under:
+                self.parent.Row(self.setting.under).on = True
+            self.parent.ShowAll()
 
     def on_click(self) -> None:
         self.parent.Choose(self)
@@ -191,6 +196,15 @@ class SettingsList(Vertical):
     def Row(self, key: str) -> SettingRow:
         return self.query_one(f"#setting-{key}", SettingRow)
 
+    def Applies(self, row: SettingRow) -> bool:
+        """Whether the row takes part in the run: not off, and not under a row that is off."""
+        return row.on is not False and (not row.setting.under or self.Applies(self.Row(row.setting.under)))
+
+    def ShowAll(self) -> None:
+        # A row's change can grey out (or bring back) its sub-options
+        for row in self.rows:
+            row.Show()
+
     def Choose(self, row: SettingRow) -> None:
         """Make row current: the only focusable one, so Tab enters and leaves the list in one stop."""
         hadFocus = self.screen.focused is not None and self in self.screen.focused.ancestors_with_self
@@ -219,7 +233,7 @@ class SettingsList(Vertical):
             self.Select(row)
         elif row.on is not None and row.setting.accepts is not TEXT:
             row.on = not row.on
-            row.Show()
+            self.ShowAll()
             self.post_message(self.Changed())
 
     def action_choose(self, step: int) -> None:
@@ -231,7 +245,7 @@ class SettingsList(Vertical):
         for row in self.rows:
             if row.setting.choice == chosen.setting.choice:
                 row.on = row is chosen
-                row.Show()
+        self.ShowAll()
         self.post_message(self.Changed())
 
 
@@ -413,12 +427,12 @@ class BuilderScreen(Screen):
 
         def Number(key: str) -> float | None:
             row = settings.Row(key)
-            if row.on is False:
+            if not settings.Applies(row):
                 return None
             try:
                 return float(row.value)
             except ValueError:
-                self.valueErrors.append(f"{row.setting.label} must be a number")
+                self.valueErrors.append(f"Enter a number for {row.setting.label.strip(' └')}")
                 return None
         draft.tempCorrection = Number("temperature")
         draft.concCorrection = Number("concentration")

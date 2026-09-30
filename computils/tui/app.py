@@ -78,7 +78,8 @@ class CompUtilsApp(App):
     .setting-value Input, .setting-value Input:focus { width: 2; height: 1; padding: 0; border: none; background: transparent; }
     .setting-unit { width: auto; margin-left: 0; }
     .setting-meaning { width: 1fr; color: $text-muted; }
-    .setting.-off .setting-value { text-opacity: 45%; }
+    /* Rows that won't apply (off, an unselected choice, a sub-option of an off row) are greyed out whole */
+    .setting.-off Static, .setting.-off Input { text-opacity: 45%; }
     #settings:focus-within .setting.-current { background: $boost; }
 
     /* The config editor: the table takes the height the details strip leaves */
