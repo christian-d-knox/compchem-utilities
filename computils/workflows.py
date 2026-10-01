@@ -2,8 +2,8 @@ import time, regex
 
 from .console  import console
 from .defaults import Defaults
-from .catalog  import Catalog, MatchTemplate, RouteTemplate
-from .fileops import extensionGetter, fileCreation, ExtractFrom, ExtractRouteLine, IdentifyMethod, IncrementSuffix, Retarget
+from .catalog  import Catalog
+from .fileops import fileCreation, IncrementSuffix, Retarget, ReRunTemplate
 from .actions  import CubeOption
 from .intent import JobIntent, BenchmarkIntent, ReRunIntent, CubeIntent
 from .jobs     import genFile, runJob, slurmHandler, SubmitJob
@@ -77,30 +77,12 @@ def gimmeCubes(molecule: Molecule, intent: CubeIntent) -> None:
 
 # Because jobs don't always work the first time
 def genReRun(molecule: Molecule, intent: ReRunIntent, stalkingSet: set) -> None:
-    routeLine = ExtractFrom(molecule.sourcePath, ExtractRouteLine, molecule.extensionType, empty="")
-
-    if not routeLine:
-        console.print(f"[error]Could not find route card in {molecule.baseName}. Skipping re-run.[/error]")
-        return
-
-    methodName = IdentifyMethod(routeLine)
-    if not methodName:
-        console.print(f"[error]Could not identify method in route card for {molecule.baseName}. Skipping re-run.[/error]")
-        return
-
-    # The program must be known before matching: the U/RO reference step differs between Gaussian and ORCA
-    molecule.extensionType = extensionGetter(methodName)
-    # Extracted route cards are already rendered (no tags/groups). Find the benchmark entry that renders to the same
-    # route for THIS molecule's spin state, so its orcablocks tags carry over
-    template = MatchTemplate(routeLine, molecule)
+    template, problem = ReRunTemplate(molecule)
     if template is None:
-        # Use the route verbatim. RenderRoute's reference step is idempotent, so no double U prefix
-        template = RouteTemplate(routeLine, method=methodName)
-        if molecule.extensionType == Defaults.orcaExtension:
-            console.print(f"[info]No benchmarkMethods entry matches the route card of {molecule.baseName}, so no "
-                          f"orcablocks.txt blocks will be added to its re-run.[/info]")
-    # A re-run of a re-run increments instead of stacking: mol_re -> mol_re2, not mol_re_re. The program comes from
-    # the identified method, which a verbatim route's first token may not be
+        console.print(f"[error]{problem}. Skipping {molecule.baseName}.[/error]")
+        return
+    # A re-run of a re-run increments instead of stacking: mol_re -> mol_re2, not mol_re_re. The program was set by
+    # ReRunTemplate, which a verbatim route's first token may not name
     Retarget(molecule, IncrementSuffix(molecule.baseName, Defaults.reRunExtra), template, molecule.extensionType)
 
     # Calls the separate file generation method, feeds directly into runJob. Skip this job if generation failed

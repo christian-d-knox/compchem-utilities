@@ -51,6 +51,7 @@ class RouteTemplate:
     tags: list[str] = field(default_factory=list)
     groups: list[tuple[frozenset[str], str, list[str]]] = field(default_factory=list)  # (selectors, keywords, tags)
     method: str = ""                            # picks the program (extensionGetter) and names benchmark files
+    blocks: list[str] = field(default_factory=list)  # literal ORCA %blocks written after the tag blocks (a re-run's own)
 
 
 def _GroupSelectors(selectorText: str) -> tuple[frozenset[str], list[str]]:
@@ -111,7 +112,9 @@ def _ApplyReference(tokens: list[str], spinState: SpinState, extensionType: str)
         # ORCA already runs UKS/UHF when multiplicity > 1
         if spinState == SpinState.OPEN and reference == "U":
             return tokens
-        method = MethodKey(tokens[0])
+        # ORCA routes often lead with the basis (def2-TZVP ... DLPNO-CCSD(T)), so judge HF vs KS by the known method
+        found = next(filter(None, (SplitReference(MethodKey(token)) for token in tokens)), None)
+        method = found[1] if found else MethodKey(tokens[0])
         isHartreeFock = method == "HF" or any(key in method for key in ("MP2", "CC", "CAS", "NEVPT"))
         return tokens + [reference + ("HF" if isHartreeFock else "KS")]
 

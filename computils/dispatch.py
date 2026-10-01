@@ -18,9 +18,9 @@ from .intent    import (
     Intent,
     RunIntent, SinglePointIntent, BenchmarkIntent, ReRunIntent,
     CubeIntent, FormCheckIntent, ExcelIntent, GoodVibesIntent,
-    FirstTimeSetupIntent, UpdateIntent, InitProjectIntent, ProfileIntent,
+    FirstTimeSetupIntent, UpdateIntent, InitProjectIntent, ProfileIntent, RefreshIntent,
 )
-from .fileops   import grabPaths, gaussianChargeFinder, formCheck, getCoords, fileCreation
+from .fileops   import grabPaths, formCheck, fileCreation, HasContent, MapFile, ReadMolecule, WriteXyz
 from .jobs      import runJob
 from .          import jobs
 from .workflows import genBench, genSinglePoint, genReRun, gimmeCubes
@@ -45,25 +45,31 @@ def Dispatch(intent: Intent) -> None:
         case UpdateIntent():          _DispatchUpdate(intent)
         case InitProjectIntent():     _DispatchInitProject(intent)
         case ProfileIntent():         _DispatchProfile(intent)
+        case RefreshIntent():         _DispatchRefresh(intent)
         case _:
             raise ValueError(f"Unknown intent: {type(intent).__name__}")
 
 
 # ─── SLURM-submitting dispatchers ─────────────────────────────────────
 
-# Shared by the dispatchers that generate new inputs. Returns None (skip this file) if it has no usable geometry
+# Shared by the dispatchers that generate new inputs. Returns None (skip this file) if it has no usable geometry.
+# The file is mapped once: everything later steps need from it (route card, ORCA input) is read now, onto the Molecule
 def _LoadMolecule(jobPath, coordExtra: str = "") -> Molecule | None:
     baseName, extension = grabPaths(jobPath)
     if baseName is None:
         return None
-    charge, multiplicity = gaussianChargeFinder(jobPath)
-    coordList = getCoords(jobPath, fileCreation(baseName, Defaults.coordExtension, coordExtra))
-    if not coordList:
+    jobPath = Path(jobPath)
+    if not HasContent(jobPath):
         console.print(f"[error]No coordinates found in {jobPath}. Skipping {baseName}.[/error]")
         return None
-    molecule = Molecule(jobPath, baseName, charge, multiplicity, coordList, extension, baseName)
-    # Spin state is classified once per molecule, from its source file, before any route is rendered
-    molecule.spinState, reason = ClassifySpin(jobPath, molecule.rootName, molecule.multiplicity, extension)
+    with MapFile(jobPath) as data:
+        molecule = ReadMolecule(data, jobPath)
+        if not molecule.coordinateList:
+            console.print(f"[error]No coordinates found in {jobPath}. Skipping {baseName}.[/error]")
+            return None
+        # Spin state is classified once per molecule, from its source file, before any route is rendered
+        molecule.spinState, reason = ClassifySpin(molecule, data)
+    WriteXyz(molecule, fileCreation(baseName, Defaults.coordExtension, coordExtra))
     console.print(f"[info]{molecule.rootName}: {molecule.spinState.name} ({reason})[/info]")
     return molecule
 
@@ -210,3 +216,10 @@ def _DispatchInitProject(intent: InitProjectIntent) -> None:
 def _DispatchProfile(intent: ProfileIntent) -> None:
     from .profile import ApplyProfile
     ApplyProfile(intent.profileFile)
+
+
+def _DispatchRefresh(intent: RefreshIntent) -> None:
+    Defaults.RefreshFiles()
+    if intent.project:
+        from .project import RefreshProjectConfig
+        RefreshProjectConfig()

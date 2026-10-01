@@ -18,5 +18,10 @@ class Molecule:
         self.spinState = spinState
         # The file this molecule was loaded from. Never mutated, unlike fullPath (the twin of rootName)
         self.sourcePath = fullPath
+        # Read from sourcePath with the rest of the molecule (fileops.ReadMolecule), never mutated: the program that wrote
+        # it (its input extension, '' if unknown), its route card, and ORCA's input as written ('' for Gaussian)
+        self.sourceProgram = ""
+        self.sourceRoute = ""
+        self.sourceInput = ""
         # The RouteTemplate genFile renders for the current job. Set with every job by fileops.Retarget()
         self.template = None

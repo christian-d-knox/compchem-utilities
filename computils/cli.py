@@ -12,7 +12,7 @@ ACTION_FLAGS = {
     "run": Action.RUN, "singlePoint": Action.SINGLE_POINT, "bench": Action.BENCHMARK, "cube": Action.CUBE,
     "rerun": Action.RERUN, "formcheck": Action.FORM_CHECK, "excel": Action.EXCEL, "goodvibes": Action.GOODVIBES,
     "first": Action.FIRST_TIME_SETUP, "update": Action.UPDATE, "init": Action.INIT_PROJECT,
-    "profile": Action.PROFILE,
+    "profile": Action.PROFILE, "refresh": Action.REFRESH,
 }
 
 
@@ -37,6 +37,9 @@ def BuildParser() -> argparse.ArgumentParser:
     actionGroup.add_argument('-init', '--init', action='store_true', help="Mark the CWD as a project root.")
     actionGroup.add_argument('-profile', '--profile', nargs='?', const="", metavar="FILE",
                              help="Apply a lab profile (its clusters and shared settings). Without FILE, re-apply the last one.")
+    actionGroup.add_argument('-refresh', '--refresh', nargs='?', const="", metavar="project",
+                             help="Rewrite the config files in the current layout, keeping your values (old defaults and "
+                                  "invalid values become the current default). With 'project', also the nearest project.toml.")
     # Handled in Main() before parsing; listed here for --help and so argparse rejects it alongside another action
     actionGroup.add_argument('-tui', '--tui', action='store_true', help="Open the TUI. Cannot be combined with any other flag.")
 
@@ -81,6 +84,8 @@ def ParseCLI(argv: list[str]) -> Intent:
         draft.excelInputFile = Path(args.excel)
     if args.profile:
         draft.profileFile = Path(args.profile).expanduser()
+    if args.refresh is not None:
+        draft.refreshScope = args.refresh
 
     # Modifiers
     draft.stalk         = args.stalk

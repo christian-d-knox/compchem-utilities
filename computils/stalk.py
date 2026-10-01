@@ -33,21 +33,27 @@ def _ReportRunning(name: str, outputPath: Path, duration: str) -> None:
                       f"{duration}[/info]")
         return
     with MapFile(outputPath) as inFile:
-        stabilityInsert, convergeCriteria = ExtractStability(inFile), ExtractConvergence(inFile)
-    if convergeCriteria is None:
+        stabilityInsert, convergence = ExtractStability(inFile), ExtractConvergence(inFile)
+    if convergence is None:
         status = "is currently running. Convergence criterion header not found."
     else:
-        status = f"is currently running, and has converged on {convergeCriteria} out of 4 criteria."
+        # Gaussian has 4 criteria; ORCA 4 or 5
+        status = f"is currently running, and has converged on {convergence[0]} out of {convergence[1]} criteria."
     console.print(f"[info]Job {name} {status}\n    {stabilityInsert} Current duration is {duration}[/info]")
+
+# How a job ended, as a phrase for messages. The matched line itself only reads well for Gaussian: ORCA's is
+# 'terminated normally' ("has finished via terminated normally")
+def EndingPhrase(termination: str) -> str:
+    return "error termination" if termination == Defaults.terminationVariants[2] else "normal termination"
 
 def _ReportFinished(name: str, termination: str) -> None:
     if not termination:
         console.print(f"[warning]Job {name} left the queue without a termination line (cancelled, out of time, or no "
                       f"output written).[/warning]")
     elif termination == Defaults.terminationVariants[2]:
-        console.print(f"[error]Job {name} has encountered {termination}[/error]")
+        console.print(f"[error]Job {name} has encountered {EndingPhrase(termination)}[/error]")
     else:
-        console.print(f"[good]Job {name} has encountered {termination}[/good]")
+        console.print(f"[good]Job {name} has encountered {EndingPhrase(termination)}[/good]")
 
 # Follows this run's jobs through the queue: progress while they run, then how each one ended (reported once, and
 # again in the final summary). Jobs are matched to the queue by their full name
@@ -76,7 +82,7 @@ def jobStalking(jobSet: set, duration: int, frequency: int, loop: bool) -> None:
                 finished[name] = termination
                 del waiting[name]
                 _ReportFinished(name, termination)
-                NotifyPersonal(f"Job {name}{locationText} has finished via {termination}." if termination
+                NotifyPersonal(f"Job {name}{locationText} has finished via {EndingPhrase(termination)}." if termination
                                else f"Job {name}{locationText} left the queue without a termination line.")
 
         # If all jobs for stalking are done, finish execution and release the terminal

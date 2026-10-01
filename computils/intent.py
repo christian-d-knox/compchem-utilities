@@ -142,6 +142,12 @@ class ProfileIntent(Intent):
     profileFile: Optional[Path] = None
 
 
+@dataclass
+class RefreshIntent(Intent):
+    """`cu -refresh [project]` — rewrite the config files in the current layout (project: the nearest project.toml too)."""
+    project: bool = False
+
+
 # The Intent each Action finalizes to. Excel and Update aren't listed: their fields are named differently on the draft
 _INTENT_TYPES = {
     Action.RUN: RunIntent, Action.SINGLE_POINT: SinglePointIntent, Action.BENCHMARK: BenchmarkIntent,
@@ -200,6 +206,9 @@ class IntentDraft:
     # PROFILE
     profileFile: Optional[Path] = None  # None: re-apply the last one
 
+    # REFRESH: '' (global files) or 'project' (also the nearest project.toml)
+    refreshScope: str = ""
+
     # This validates the fields for an Action() wants from its Intent()
     def Validate(self) -> list[str]:
         """Return human-readable errors. Empty list means valid."""
@@ -222,6 +231,9 @@ class IntentDraft:
         if self.action == Action.PROFILE and self.profileFile is not None and not self.profileFile.is_file():
             errors.append(f"No lab profile file at {self.profileFile}.")
 
+        if self.action == Action.REFRESH and self.refreshScope not in ("", "project"):
+            errors.append(f"-refresh takes no argument, or 'project' (got '{self.refreshScope}').")
+
         return errors
 
     def Finalize(self) -> Intent:
@@ -236,6 +248,8 @@ class IntentDraft:
                 return ExcelIntent(inputFile=self.excelInputFile)
             case Action.UPDATE:
                 return UpdateIntent(branch=self.updateBranch)
+            case Action.REFRESH:
+                return RefreshIntent(project=self.refreshScope == "project")
         intentType = _INTENT_TYPES.get(self.action)
         if intentType is None:
             raise ValueError(f"Unknown action: {self.action}")
@@ -336,6 +350,16 @@ if __name__ == "__main__":
     draft.profileFile = Path("no-such-profile.toml")
     assert any("No lab profile file" in e for e in draft.Validate()), "Test 8 should reject a missing file"
     print("Test 8 (PROFILE intent): PASS")
+
+    # Test 9: Refresh takes nothing or 'project'
+    draft = IntentDraft()
+    draft.action = Action.REFRESH
+    assert draft.Validate() == [] and draft.Finalize() == RefreshIntent(project=False)
+    draft.refreshScope = "project"
+    assert draft.Validate() == [] and draft.Finalize() == RefreshIntent(project=True)
+    draft.refreshScope = "banana"
+    assert any("-refresh takes" in e for e in draft.Validate()), "Test 9 should reject another argument"
+    print("Test 9 (REFRESH intent): PASS")
 
     print("=" * 50)
     print("All smoke tests passed.")

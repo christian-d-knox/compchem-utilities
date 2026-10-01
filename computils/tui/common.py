@@ -4,7 +4,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import Checkbox, Footer, Static
+from textual.widgets import Checkbox, DataTable, Footer, Static
 from textual.widgets._footer import FooterKey
 
 from ..console import console
@@ -31,6 +31,15 @@ class NavFooter(Footer):
             yield FooterKey("up", "↑↓", "Move", "", tooltip="Arrow keys move within the focused pane").data_bind(
                 compact=Footer.compact)
         yield from super().compose()
+
+
+class EditableTable(DataTable):
+    """A table whose cells ␣ edits (the screen's edit action): a double-click edits the clicked cell the same way, so
+    the mouse works here as it does on every list. The first click has already moved the cursor; the header row
+    (row -1) is not a cell."""
+    def on_click(self, event) -> None:
+        if event.chain == 2 and event.style.meta.get("row", -1) >= 0:
+            self.call_after_refresh(self.run_action, "screen.edit")
 
 
 _OPTION = Binding.Group("Option", compact=True)

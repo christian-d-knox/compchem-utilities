@@ -10,11 +10,11 @@ from rich.text import Text
 
 from ..actions  import Action
 from ..console  import console
-from ..catalog  import Catalog, MatchTemplate, RenderRoute, RouteTemplate
+from ..catalog  import Catalog, RenderRoute, RouteTemplate
 from ..defaults import Defaults
-from ..fileops  import (MapFile, FindInMap, HasContent, ExtractFrom, ExtractTermination, ExtractCoords, ExtractRouteLine,
-                        ExtractResources, IdentifyMethod, SplitRoute, MoleculeElements, extensionGetter,
-                        gaussianChargeFinder, PROGRAMS)
+from ..fileops  import (MapFile, FindInMap, HasContent, ExtractFrom, ExtractTermination, ExtractResources, IdentifyMethod,
+                        SplitRoute, MoleculeElements, extensionGetter, ReadMolecule, ReRunTemplate, OrcaBlockName,
+                        PROGRAMS)
 from ..jobs     import JobFileProblem
 from ..molecule import Molecule
 from ..spin     import ClassifySpin
@@ -59,45 +59,40 @@ def FileStatus(path: Path) -> str:
     return "Error" if termination == Defaults.terminationVariants[2] else "Normal"
 
 
-def _Charge(path: Path) -> tuple[str, str]:
-    # Only Gaussian outputs have the 'Charge = 0 Multiplicity = 1' line; anything else can fail to index
-    try:
-        return gaussianChargeFinder(path)
-    except (IndexError, ValueError, OSError):
-        return "", ""
-
-
 def ProgramName(method: str, programOf: dict | None = None) -> str:
     # Same lookup as extensionGetter, without its console warning
     program = PROGRAMS.get((Catalog.programOf if programOf is None else programOf).get(method))
     return program[0] if program else ""
 
 
+def _SourceProgramName(program: str) -> str:
+    """Display name of the program that wrote a file (ReadMolecule's sourceProgram, an input extension), or ''."""
+    return next((name for name, extensionKey in PROGRAMS.values() if program and getattr(Defaults, extensionKey) == program), "")
+
+
 def FileDetails(path: Path) -> dict[str, str]:
-    """The Details pane fields for one file (D12). Missing values are '—'."""
+    """The Details pane fields for one file (D12). Missing values are '—'. The file is mapped once for all of them."""
     details = {"Status": "—", "Charge": "—", "Mult": "—", "Spin": "—", "Method": "—", "Program": "—",
                "CPU": "—", "Mem": "—", "Keys": "—"}
     if not HasContent(path):
         return details
-    if path.suffix in OutputExtensions():
-        details["Status"] = _Termination(path).title() or "Unknown (No Termination Line)"
-    charge, multiplicity = _Charge(path)
-    if multiplicity:
-        details["Charge"], details["Mult"] = charge, multiplicity
-        spinState, reason = ClassifySpin(path, path.stem, multiplicity, path.suffix)
-        details["Spin"] = f"{spinState.name} ({reason})"
-
     with MapFile(path) as data:
-        routeLine = ExtractRouteLine(data, path.suffix)
-        method, basis, keys = SplitRoute(routeLine)
+        if path.suffix in OutputExtensions():
+            details["Status"] = ExtractTermination(data, -TERMINATION_TAIL).title() or "Unknown (No Termination Line)"
+        molecule = ReadMolecule(data, path)
+        if molecule.multiplicity:
+            details["Charge"], details["Mult"] = molecule.charge, molecule.multiplicity
+            spinState, reason = ClassifySpin(molecule, data)
+            details["Spin"] = f"{spinState.name} ({reason})"
+        method, basis, keys = SplitRoute(molecule.sourceRoute)
         if method:
             details["Method"] = f"{method}/{basis}" if basis else method
-            details["Program"] = ProgramName(method) or "—"
+        # The program that wrote the file; for a file of neither program's, the one its method runs in
+        details["Program"] = _SourceProgramName(molecule.sourceProgram) or (ProgramName(method) if method else "") or "—"
         details["Keys"] = keys or "—"
         # ExtractResources silently falls back to Defaults, which would show made-up values for this file
-        if FindInMap(data, r"%nproc|nprocs", ignoreCase=True):
-            programExtension = Defaults.orcaExtension if details["Program"] == "ORCA" else Defaults.gaussianExtension
-            cpus, jobRam = ExtractResources(data, programExtension)
+        if molecule.sourceProgram and FindInMap(data, r"%nproc|nprocs", ignoreCase=True):
+            cpus, jobRam = ExtractResources(data, molecule.sourceProgram)
             details["CPU"], details["Mem"] = str(cpus), f"{jobRam} GB"
     return details
 
@@ -110,16 +105,17 @@ class PreviewRow:
     spin: str = ""
     spans: list[tuple[str, str]] = field(default_factory=list)   # (text, origin): origin is method / base / added
     tags: list[str] = field(default_factory=list)
+    carried: list[str] = field(default_factory=list)                # names of the template's own %blocks (re-run)
     problem: str = ""                                               # non-empty -> this job would be skipped
 
 
 def PreviewMolecule(path: Path) -> Molecule:
-    """A Molecule for previewing, built the way dispatch builds one, but without writing the .xyz file."""
-    charge, multiplicity = _Charge(path)
-    # Atomic numbers are enough for MoleculeElements, which is all the preview needs the coordinates for
-    atomicNumbers, _, _, _ = ExtractFrom(path, ExtractCoords, empty=([], [], [], []))
-    molecule = Molecule(path, path.stem, charge, multiplicity, atomicNumbers, path.suffix, path.stem)
-    molecule.spinState, _ = ClassifySpin(path, path.stem, multiplicity, path.suffix)
+    """A Molecule for previewing, read the way dispatch reads one (one map), but without writing the .xyz file."""
+    if not HasContent(path):
+        return Molecule(path, path.stem, "", "", [], path.suffix, path.stem)
+    with MapFile(path) as data:
+        molecule = ReadMolecule(data, path)
+        molecule.spinState, _ = ClassifySpin(molecule, data)
     return molecule
 
 
@@ -156,6 +152,7 @@ def RenderedRow(row: PreviewRow, template: RouteTemplate, molecule: Molecule, el
     """Fill row with the template rendered for molecule (spans, orcablocks tags) and why genFile would skip the job.
     texts: unsaved project-file text to check against instead of the files (the config editor)."""
     route, row.tags = RenderRoute(template, molecule)
+    row.carried = [OrcaBlockName(block) for block in template.blocks]
     row.spans = RouteSpans(route, template.base)
     row.problem = JobFileProblem(route, row.tags, molecule.extensionType, elements, False, texts)
     return row
@@ -168,24 +165,22 @@ def RowText(row: PreviewRow) -> Text:
         line.append_text(Styled(text, SPAN_STYLES[origin]))
     if row.tags:
         line.append_text(Styled(f"  ← orcablocks {' '.join('{' + tag + '}' for tag in row.tags)}", "good"))
+    if row.carried:
+        line.append_text(Styled(f"  ← carried {' '.join('%' + name for name in row.carried)}", "good"))
     if row.problem:
         line.append_text(Styled(f"  ⚠ {row.problem}", "warning"))
     return line
 
 
 def PreviewRowFor(action: Action, molecule: Molecule, index: int) -> PreviewRow:
-    """The route one job would get, from the template its workflow would choose (Re-run shares genReRun's MatchTemplate).
+    """The route one job would get, from the template its workflow would choose (Re-run shares genReRun's ReRunTemplate).
     The template is rendered directly: the preview never sets molecule.template, nor mutates the Catalog."""
     row = PreviewRow(molecule.rootName, spin=molecule.spinState.name)
     if action == Action.RERUN:
-        routeLine = ExtractFrom(molecule.sourcePath, ExtractRouteLine, molecule.sourcePath.suffix, empty="")
-        method = IdentifyMethod(routeLine) if routeLine else ""
-        if not method:
-            row.problem = "No Route Card Found" if not routeLine else "Method Not Recognised"
+        # No matching entry: the route verbatim (only the U/RO reference can be added), with an ORCA job's own blocks
+        template, row.problem = ReRunTemplate(molecule)
+        if template is None:
             return row
-        molecule.extensionType = extensionGetter(method)
-        # No matching entry: genReRun uses the route verbatim, so only the U/RO reference can be added
-        template = MatchTemplate(routeLine, molecule) or RouteTemplate(routeLine, method=method)
     else:
         template = Catalog.templates[index]
         molecule.extensionType = extensionGetter(template.method)

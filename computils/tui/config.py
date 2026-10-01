@@ -23,7 +23,7 @@ from ..molecule import Molecule
 from ..project  import (PROJECT_CONFIG, PROJECT_FILES, FindProjectRoot, ProjectFilePath, ReloadConfig,
                         ResolveProjectFile, SaveProjectConfig)
 from ..spin     import ParseSpinOverrides
-from .common    import NAV_BINDINGS, FrameRule, KeyHint, NavFooter, Notice, Popup
+from .common    import NAV_BINDINGS, EditableTable, FrameRule, KeyHint, NavFooter, Notice, Popup
 from .home      import TitleLine
 from .inspect   import PreviewRow, RenderedRow, RowText, Styled
 from .lists     import Cut, FitColumns, ListEditor, ProblemText, TextEditor
@@ -156,7 +156,7 @@ class SectionList(ListView):
     BINDINGS = [Binding("space", "select_cursor", "Open", key_display="␣"), Binding("enter", "screen.save", "Save")]
 
 
-class ConfigTable(DataTable):
+class ConfigTable(EditableTable):
     BINDINGS = [
         Binding("left", "cursor_left", "Column", group=Binding.Group("Column", compact=True)),
         Binding("right", "cursor_right", "Column", group=Binding.Group("Column", compact=True)),
@@ -748,6 +748,6 @@ class ConfigScreen(Screen):
     def action_help(self) -> None:
         Notice(self.app, "Help", "\n".join([
             "↑/↓ Move Between Keys", "←/→ Global or Project",
-            "space Edit (Toggle, Cycle, or Open an Editor)",
+            "space Edit (Toggle, Cycle, or Open an Editor)", "Double-Click Edit a Value",
             "r Reset to Default (Project: Follow Global; a File: Drop Its Edits)",
             "R Reset the Whole File", "enter Save and Return Home", "esc Back", "ctrl+q Quit"]))
