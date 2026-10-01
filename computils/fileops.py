@@ -7,7 +7,7 @@ from pathlib import Path
 from .console  import console
 from rich.markup import escape
 from .defaults import Defaults
-from .catalog  import Catalog, MethodKey, SplitReference, RouteTemplate
+from .catalog  import Catalog, MethodKey, SplitReference, RouteTemplate, MatchTemplate
 from .molecule import Molecule
 
 
@@ -29,12 +29,13 @@ def MapText(text: str):
         yield data
 
 # Helper method for performing the searches themselves
-# start limits the search to data[start:] (still an mmap search, nothing is copied); a negative start counts from the
-# end, like a slice. concurrent releases the GIL while
+# start/end limit the search to data[start:end] (still an mmap search, nothing is copied); a negative start counts from
+# the end, like a slice (footers), and end bounds a header search. concurrent releases the GIL while
 # matching, so a long search in a TUI worker doesn't freeze the screen; safe because every mapping is read-only.
 # Reverse searches run from the pattern's END: start them with a literal and put trailing captures in a lookahead,
 # or the engine retries the tail (e.g. a number) at every match of it in the file
-def FindInMap(data, pattern: str, reverse: bool = False, ignoreCase: bool = False, start: int = 0) -> regex.Match | None:
+def FindInMap(data, pattern: str, reverse: bool = False, ignoreCase: bool = False, start: int = 0,
+              end: int | None = None) -> regex.Match | None:
     flags = 0
     if reverse:
         flags |= regex.REVERSE
@@ -42,7 +43,7 @@ def FindInMap(data, pattern: str, reverse: bool = False, ignoreCase: bool = Fals
         flags |= regex.IGNORECASE
     if start < 0:
         start = max(0, len(data) + start)
-    return regex.search(pattern.encode(), data, flags, pos=start, concurrent=True)
+    return regex.search(pattern.encode(), data, flags, pos=start, endpos=end, concurrent=True)
 
 # mmap can't map an empty file, so every read of a whole file checks this first
 def HasContent(filePath: Path) -> bool:
@@ -73,35 +74,85 @@ def SkipInMap(data, match, skipLines: int = 0, fromStart: bool = False) -> None:
         data.readline()
 
 # Begin individual return methods for mmap extraction
-def ExtractCoords(data) -> tuple[list[int], list[str], list[str], list[str]]:
-    # Jobs run with nosymm only print the Input orientation. With symmetry on, the last table printed is Standard
-    tableLocation = FindInMap(data, r"(?:Standard|Input) orientation:", True)
+
+# Gaussian and ORCA both write .out (SLURM -o), so an output's program comes from its header, found in the first few KB.
+# ORCA's banner is line 2, Gaussian's 'Entering Gaussian System' line 1
+PROGRAM_HEADER_BYTES = 4096
+ORCA_HEADER = r"\* O   R   C   A \*"
+
+def ExtractProgram(data, suffix: str) -> str:
+    """The program that wrote this file, as its input extension (the key CompUtils branches on), or '' if unknown.
+    An input file is known by its extension; an output by its header."""
+    if suffix in (Defaults.gaussianExtension, Defaults.orcaExtension):
+        return suffix
+    header = FindInMap(data, ORCA_HEADER + "|Entering Gaussian System", end=PROGRAM_HEADER_BYTES)
+    if header is None:
+        return ""
+    return Defaults.orcaExtension if header.group().startswith(b"*") else Defaults.gaussianExtension
+
+def ExtractCoords(data, program: str) -> tuple[list[str], list[str], list[str], list[str]]:
+    """The LAST geometry printed (an optimisation's final one) as (element symbols, X, Y, Z)."""
+    if program == Defaults.orcaExtension:
+        # One block per geometry step: header, dashed line, then 'C  x y z' rows ending at a blank line
+        tableLocation, headerLines = FindInMap(data, r"CARTESIAN COORDINATES \(ANGSTROEM\)", True), 1
+    else:
+        # Jobs run with nosymm only print the Input orientation. With symmetry on, the last table printed is Standard.
+        # Rows: center, atomic number, type, x y z, ending at a dashed line
+        tableLocation, headerLines = FindInMap(data, r"(?:Standard|Input) orientation:", True), 4
     if tableLocation is None:
         return [], [], [], []
 
-    SkipInMap(data, tableLocation, 4)
+    SkipInMap(data, tableLocation, headerLines)
 
-    at, X, Y, Z = [], [], [], []
+    symbols, X, Y, Z = [], [], [], []
     fields = data.readline().decode().split()
     while len(fields) > 2:
-        # Extracts the Atomic Number, and X Y Z coordinates into their respective lists
-        at.append(fields[1])
-        X.append(fields[3])
-        Y.append(fields[4])
-        Z.append(fields[5])
+        symbols.append(fields[0] if program == Defaults.orcaExtension else ATOMIC_SYMBOLS[int(fields[1])])
+        X.append(fields[-3])
+        Y.append(fields[-2])
+        Z.append(fields[-1])
         fields = data.readline().decode().split()
-    return at, X, Y, Z
+    return symbols, X, Y, Z
 
-def ExtractGaussianCharge(data) -> tuple[str, str]:
-    chargeLocation = FindInMap(data, "Charge")
-    if chargeLocation is None:
+def ExtractCharge(data, program: str) -> tuple[str, str]:
+    """(charge, multiplicity), or ('', '') if not found."""
+    if program == Defaults.orcaExtension:
+        # The input's coordinate line ('* xyz 0 1', '*xyzfile 0 1 geom.xyz'), echoed in an output
+        chargeMatch = FindInMap(data, r"\*\s*(?:xyzfile|xyz|internal|int|gzmtfile|gzmt|pdbfile)\s+(-?\d+)\s+(\d+)",
+                                ignoreCase=True)
+        if chargeMatch is None:
+            return "", ""
+        return chargeMatch.group(1).decode(), chargeMatch.group(2).decode()
+    # 'Charge =  0 Multiplicity = 1'. \W also spans non-breaking spaces (bytes C2 A0), which some outputs contain.
+    # Anchored on the whole line, so a 'Charge' keyword earlier in the file (or any other file) can't be misread
+    chargeMatch = FindInMap(data, r"Charge\W*?(-?\d+)\W+Multiplicity\W*?(\d+)")
+    if chargeMatch is None:
         return "", ""
-    data.seek(chargeLocation.start())
-    # Replace non-breaking spaces so they don't swallow a charge value and shift indices
-    chargeSub = data.readline().decode().replace('\xa0', ' ').strip().split()
-    charge = chargeSub[2]
-    multiplicity = chargeSub[5]
-    return charge, multiplicity
+    return chargeMatch.group(1).decode(), chargeMatch.group(2).decode()
+
+def ExtractOrcaInput(data) -> str:
+    """ORCA's input as written: from an output, its verbatim echo ('|  N> ' prefixes removed, up to ****END OF INPUT****);
+    from an .inp, the whole file. '' for an output without an echo."""
+    echoStart = FindInMap(data, r"(?m)^\|\s*1> ")
+    if echoStart is None:
+        return "" if FindInMap(data, ORCA_HEADER, end=PROGRAM_HEADER_BYTES) else data[:].decode().replace("\r\n", "\n")
+    data.seek(echoStart.start())
+    lines = []
+    for rawLine in iter(data.readline, b""):
+        if not rawLine.startswith(b"|"):
+            break
+        line = regex.sub(r"^\|\s*\d+> ?", "", rawLine.decode().rstrip("\r\n"))
+        if "****END OF INPUT****" in line:
+            break
+        lines.append(line + "\n")
+    return "".join(lines)
+
+def OrcaRouteLine(inputText: str) -> str:
+    """The '!' line of an ORCA input (ORCA echoes it verbatim, never wrapped), without its marker or # comment."""
+    for line in inputText.splitlines():
+        if line.lstrip().startswith("!"):
+            return _StripRouteMarker(line.split("#", 1)[0])
+    return ""
 
 def ExtractGoodVibes(data) -> list:
     headerLocation = FindInMap(data, "Structure", ignoreCase=True)
@@ -121,34 +172,23 @@ def ExtractGoodVibes(data) -> list:
         line = data.readline()
     return outputData
 
-def ExtractRouteLine(data, extensionType: str) -> str:
-    """Extract the route card from an input or output file via mmap regex.
-
-    Searches for the first '#' (Gaussian) or '!' (ORCA) marker,
-    then reads the full line. For output files or unknown extensions, tries both.
-    Returns the route card with the leading marker stripped.
-    """
+def ExtractRouteLine(data, program: str) -> str:
+    """The route card of an input or output file (program from ExtractProgram), without its leading marker."""
+    if program == Defaults.orcaExtension:
+        return OrcaRouteLine(ExtractOrcaInput(data))
     # Gaussian outputs echo the route between two dashed lines, wrapped mid-word at a fixed width:
     #  -------------------------------------------------------------
     #  #p opt freq=noraman b3lyp genecp scrf=(smd,solvent=water) 5d empiricald
     #  ispersion=gd3bj
     #  -------------------------------------------------------------
-    if extensionType != Defaults.orcaExtension:
-        blockMatch = FindInMap(data, r"(?m)^ *-{20,}\r?\n( *#[^\r\n]*\r?\n(?:[^\r\n]*\r?\n){0,20}?) *-{20,}\r?$")
-        if blockMatch:
-            # Each echoed line has one leading space; the rest is the route verbatim, so rejoin without a separator
-            wrappedLines = blockMatch.group(1).decode().splitlines()
-            routeLine = "".join(line[1:] if line.startswith(" ") else line for line in wrappedLines).strip()
-            return _StripRouteMarker(routeLine)
-    match extensionType:
-        case Defaults.gaussianExtension:
-            routeMatch = FindInMap(data, r"#")
-        case Defaults.orcaExtension:
-            routeMatch = FindInMap(data, r"!")
-        case _:
-            routeMatch = FindInMap(data, r"#")
-            if routeMatch is None:
-                routeMatch = FindInMap(data, r"!")
+    blockMatch = FindInMap(data, r"(?m)^ *-{20,}\r?\n( *#[^\r\n]*\r?\n(?:[^\r\n]*\r?\n){0,20}?) *-{20,}\r?$")
+    if blockMatch:
+        # Each echoed line has one leading space; the rest is the route verbatim, so rejoin without a separator
+        wrappedLines = blockMatch.group(1).decode().splitlines()
+        routeLine = "".join(line[1:] if line.startswith(" ") else line for line in wrappedLines).strip()
+        return _StripRouteMarker(routeLine)
+    # A Gaussian input: the first '#' line
+    routeMatch = FindInMap(data, r"#")
     if routeMatch is None:
         return ""
     data.seek(routeMatch.start())
@@ -202,21 +242,36 @@ def ExtractTermination(data, start: int = 0) -> str:
     found = termLine.group().decode().lower()
     return next(variant for variant in Defaults.terminationVariants if variant.lower() == found)
 
+# Stability analysis section headers, Gaussian then ORCA. Case-sensitive: ORCA also prints 'stability analysis' (its
+# contributor list) and 'SCF Stability Analysis' (its timings)
+STABILITY_HEADER = r"Stability analysis|WAVEFUNCTION STABILITY ANALYSIS"
+ORCA_STABLE_VERDICT = r"The stability analysis shows that the wavefunction is stable"
+STABLE_VERDICT = r"The wavefunction is already stable\.|" + ORCA_STABLE_VERDICT
+
 def ExtractStability(data) -> str:
-    if FindInMap(data, "Stability analysis") is None:
+    # An analysis without a stable verdict is read as not stabilized, so the unstable wording never has to be matched
+    if FindInMap(data, STABILITY_HEADER) is None:
         return ""
-    if FindInMap(data, "The wavefunction is already stable.", True) is not None:
+    if FindInMap(data, STABLE_VERDICT, True) is not None:
         return "Wavefunction has stabilized."
     return "Wavefunction has not stabilized."
 
-def ExtractConvergence(data) -> int | None:
-    """How many of the 4 optimization criteria the last convergence table marks YES, or None if there is no table yet."""
-    finalTableHeader = FindInMap(data, "Item               Value     Threshold  Converged?", True)
+def ExtractConvergence(data) -> tuple[int, int] | None:
+    """(criteria met, criteria) in the last optimization convergence table, or None if there is no complete row yet.
+    Gaussian's table has 4 rows; ORCA's 4 or 5 (its first cycle has no energy change row)."""
+    finalTableHeader = FindInMap(data, r"Item\s+Value\s+(?:Threshold|Tolerance)\s+Converged", True, True)
     if finalTableHeader is None:
         return None
     SkipInMap(data, finalTableHeader, 0)
-    # Each row ends in YES/NO. While the job runs, the table can still be half-written
-    return sum(data.readline().decode().split()[-1:] == ["YES"] for index in range(4))
+    # Each row ends in YES/NO; ORCA puts a dashed line before them. While the job runs, the table can be half-written
+    met = total = 0
+    for line in iter(data.readline, b""):
+        fields = line.split()
+        if fields[-1:] in ([b"YES"], [b"NO"]):
+            met, total = met + (fields[-1] == b"YES"), total + 1
+        elif total or (fields and fields[0].strip(b"-")):
+            break
+    return (met, total) if total else None
 
 def ExtractResources(data, extensionType: str) -> tuple[int, int]:
     """Extract CPU count and SLURM memory request from an mmap data stream.
@@ -255,54 +310,81 @@ def ExtractSpinContamination(data) -> float | None:
     return None
 
 def HasRestrictedInstability(data) -> bool:
-    """Gaussian stable= output: 'The wavefunction has an RHF -> UHF instability.'"""
-    return FindInMap(data, r"R\w*\s*->\s*U\w*\s+instability", ignoreCase=True) is not None
+    """Gaussian stable= output: 'The wavefunction has an RHF -> UHF instability.' ORCA prints no such line, so its
+    analysis counts when it lacks the stable verdict (spin.py only asks for singlets whose route has no UKS/UHF)."""
+    if FindInMap(data, r"R\w*\s*->\s*U\w*\s+instability", ignoreCase=True) is not None:
+        return True
+    return (FindInMap(data, "WAVEFUNCTION STABILITY ANALYSIS") is not None
+            and FindInMap(data, ORCA_STABLE_VERDICT, True) is None)
 
 # CompUtils writes these itself in genFile(), so user copies would conflict
 RESERVED_ORCA_BLOCKS = {"pal", "maxcore"}
 
-def ExtractOrcaBlocks(data) -> dict[str, str]:
-    """Extract tagged %blocks from an orcablocks.txt mmap data stream.
+def OrcaBlockName(blockText: str) -> str:
+    """'%cpcm\\n  smd true\\nend\\n' -> 'cpcm'."""
+    return regex.match(r"\s*%(\w*)", blockText).group(1).lower()
 
-    A block starts at a column-0 '%' line and runs until the next column-0 '%' line, '# @tag' directive, or EOF.
-    Its tag is the preceding '# @tag NAME' directive if present, else the block name. Tags are lowercased.
-    Trailing blank/comment lines are trimmed. No 'end' counting, so nested ends (e.g. %geom constraints) are safe.
-    """
-    blocks: dict[str, str] = {}
-    pendingTag = ""
-    currentTag, currentLines = "", []
-
-    def CloseBlock() -> None:
-        while currentLines and (not currentLines[-1].strip() or currentLines[-1].lstrip().startswith("#")):
-            currentLines.pop()
-        if not currentTag:
-            return
-        if currentTag in blocks:
-            console.print(f"[error]Duplicate tag '{currentTag}' in orcablocks.txt. Keeping the first definition.[/error]")
-            return
-        blocks[currentTag] = "".join(currentLines)
-
-    data.seek(0)
-    for rawLine in iter(data.readline, b""):
-        line = rawLine.decode().replace("\r\n", "\n")
+def _SplitOrcaBlocks(lines: list[str]) -> list[tuple[str, str]]:
+    """Split lines into (directive tag, block text). A block starts at a column-0 '%' line and runs until the next one,
+    a '# @tag NAME' directive (which tags the block after it), or the end. Trailing blank/comment lines are trimmed.
+    No 'end' counting, so nested ends (e.g. %geom constraints) are safe. Lines outside a block are dropped."""
+    blocks, pendingTag, current = [], "", None
+    for line in lines + ["%"]:   # the sentinel closes the last block (and is never closed itself)
         tagMatch = regex.match(r"#\s*@tag\s+([\w-]+)", line)
-        if tagMatch or line.startswith("%"):
-            CloseBlock()
-            currentTag, currentLines = "", []
+        if (tagMatch or line.startswith("%")) and current is not None:
+            while current[1] and (not current[1][-1].strip() or current[1][-1].lstrip().startswith("#")):
+                current[1].pop()
+            blocks.append((current[0], "".join(current[1])))
+            current = None
         if tagMatch:
             pendingTag = tagMatch.group(1).lower()
-            continue
-        if line.startswith("%"):
-            blockName = regex.match(r"%(\w*)", line).group(1).lower()
-            if blockName in RESERVED_ORCA_BLOCKS:
-                console.print(f"[warning]orcablocks.txt: %{blockName} is written by CompUtils. Ignoring this block.[/warning]")
-                pendingTag = ""
-                continue
-            currentTag, pendingTag = pendingTag or blockName, ""
-        if currentTag:
-            currentLines.append(line)
-    CloseBlock()
+        elif line.startswith("%"):
+            current, pendingTag = (pendingTag, []), ""
+        if current is not None:
+            current[1].append(line)
     return blocks
+
+def ExtractOrcaBlocks(data) -> dict[str, str]:
+    """Extract tagged %blocks from an orcablocks.txt mmap data stream (split by _SplitOrcaBlocks).
+    A block's tag is the preceding '# @tag NAME' directive if present, else the block name. Tags are lowercased."""
+    blocks: dict[str, str] = {}
+    data.seek(0)
+    lines = [rawLine.decode().replace("\r\n", "\n") for rawLine in iter(data.readline, b"")]
+    for directiveTag, blockText in _SplitOrcaBlocks(lines):
+        blockName = OrcaBlockName(blockText)
+        if blockName in RESERVED_ORCA_BLOCKS:
+            console.print(f"[warning]orcablocks.txt: %{blockName} is written by CompUtils. Ignoring this block.[/warning]")
+            continue
+        tag = directiveTag or blockName
+        if tag in blocks:
+            console.print(f"[error]Duplicate tag '{tag}' in orcablocks.txt. Keeping the first definition.[/error]")
+            continue
+        blocks[tag] = blockText
+    return blocks
+
+# Blocks an ORCA re-run never carries over: genFile writes %pal/%maxcore, and the new geometry comes from the output
+RERUN_SKIPPED_BLOCKS = RESERVED_ORCA_BLOCKS | {"coords"}
+
+def OrcaInputBlocks(inputText: str) -> list[str]:
+    """The %blocks of an ORCA input (ExtractOrcaInput), as written, for a re-run to carry over. The '!' line and the
+    geometry are left out, and so is anything after a $new_job (a re-run repeats the first job)."""
+    lines, inGeometry = [], False
+    for line in inputText.splitlines(keepends=True):
+        stripped = line.strip()
+        if inGeometry:
+            inGeometry = stripped != "*"
+            continue
+        if stripped.lower().startswith("$new_job"):
+            break
+        if stripped.startswith("*"):
+            # '* xyz 0 1' opens a block closed by a lone '*'; '*xyzfile 0 1 geom.xyz' is one line
+            inGeometry = regex.match(r"\*\s*(?:xyz|internal|int|gzmt)\b", stripped, regex.IGNORECASE) is not None
+            continue
+        if stripped.startswith("!"):
+            continue
+        # ORCA allows an indented block start
+        lines.append(line.lstrip() if stripped.startswith("%") else line)
+    return [blockText for _, blockText in _SplitOrcaBlocks(lines) if OrcaBlockName(blockText) not in RERUN_SKIPPED_BLOCKS]
 
 # Atomic number -> symbol, 1-103. Shared by getCoords() and the mixed basis element checks
 ATOMIC_SYMBOLS = dict(enumerate((
@@ -442,6 +524,28 @@ def Retarget(molecule: Molecule, baseName: str, template: RouteTemplate | None =
     molecule.extensionType = extensionType or extensionGetter(template.method)
     molecule.fullPath = fileCreation(baseName, molecule.extensionType)
 
+# The template a re-run renders, from the route card ReadMolecule stored: (template, '') or (None, why it can't be
+# re-run). Sets molecule.extensionType to the program the job runs in. Shared by genReRun and the TUI's Re-run preview
+def ReRunTemplate(molecule: Molecule) -> tuple[RouteTemplate | None, str]:
+    routeLine = molecule.sourceRoute
+    if not routeLine:
+        return None, "No Route Card Found"
+    methodName = IdentifyMethod(routeLine)
+    if not methodName:
+        return None, "Method Not Recognised"
+    # A re-run repeats the job in the program that ran it (an ORCA B3LYP job stays ORCA, whatever programs.toml maps
+    # B3LYP to). It must be known before matching: the U/RO reference step differs between Gaussian and ORCA
+    molecule.extensionType = molecule.sourceProgram or extensionGetter(methodName)
+    # Extracted route cards are already rendered (no tags/groups). Find the benchmark entry that renders to the same
+    # route for THIS molecule's spin state, so its orcablocks tags carry over (a block fixed in orcablocks.txt applies)
+    template = MatchTemplate(routeLine, molecule)
+    if template is None:
+        # Use the route verbatim, with the %blocks the ORCA job ran with. RenderRoute's reference step is idempotent,
+        # so no double U prefix
+        blocks = OrcaInputBlocks(molecule.sourceInput) if molecule.extensionType == Defaults.orcaExtension else []
+        template = RouteTemplate(routeLine, method=methodName, blocks=blocks)
+    return template, ""
+
 # Appends a suffix, or bumps its counter if the name already ends in it: mol -> mol_re -> mol_re2 -> mol_re3
 def IncrementSuffix(baseName: str, extra: str) -> str:
     suffixMatch = regex.fullmatch(rf"(.*){regex.escape(extra)}(\d*)", baseName)
@@ -455,15 +559,29 @@ def formCheck(molecule: Molecule) -> None:
     subprocess.run(["bash", "-l", "-c", f"module load gaussian && formchk {molecule.fullPath}"], check=True)
     Retarget(molecule, molecule.rootName, extensionType=".fchk")
 
-# A new fully pythonic solution to coordinate scraping, agnostic of the cluster's PERL bullshit
-def getCoords(fileName: Path, outputFileName: Path) -> list:
-    at, X, Y, Z = ExtractFrom(fileName, ExtractCoords, empty=([], [], [], []))
-    # Translates from Atomic Number to Atomic Symbol; the lines are written to the .xyz and kept for the input files
-    coordinateList = [f"{ATOMIC_SYMBOLS[int(number)]}   {x}   {y}   {z}\n" for number, x, y, z in zip(at, X, Y, Z)]
+# Everything CompUtils reads from a source output, from ONE open map (the caller manages MapFile, and runs ClassifySpin
+# on the same map): program, charge/multiplicity, final coordinates, route card and ORCA's input as written.
+# Writes nothing, so the TUI preview shares it. A new fully pythonic solution to coordinate scraping, agnostic of the
+# cluster's PERL bullshit
+def ReadMolecule(data, path: Path) -> Molecule:
+    program = ExtractProgram(data, path.suffix)
+    charge, multiplicity = ExtractCharge(data, program)
+    symbols, X, Y, Z = ExtractCoords(data, program)
+    # The lines are written to the .xyz (WriteXyz) and kept for the input files
+    coordinateList = [f"{symbol}   {x}   {y}   {z}\n" for symbol, x, y, z in zip(symbols, X, Y, Z)]
+    molecule = Molecule(path, path.stem, charge, multiplicity, coordinateList, path.suffix, path.stem)
+    molecule.sourceProgram = program
+    if program == Defaults.orcaExtension:
+        molecule.sourceInput = ExtractOrcaInput(data)
+        molecule.sourceRoute = OrcaRouteLine(molecule.sourceInput)
+    else:
+        molecule.sourceRoute = ExtractRouteLine(data, program)
+    return molecule
+
+def WriteXyz(molecule: Molecule, outputFileName: Path) -> None:
     with open(outputFileName, 'w') as outputFile:
-        outputFile.write(str(len(at))+"\nPointless Comment Line\n")
-        outputFile.writelines(coordinateList)
-    return coordinateList
+        outputFile.write(f"{len(molecule.coordinateList)}\nPointless Comment Line\n")
+        outputFile.writelines(molecule.coordinateList)
 
 # Handles extensions so I don't have to copypasta this
 # targetProgram codes: code -> (display name, the Defaults key holding that program's input extension)
@@ -477,10 +595,6 @@ def extensionGetter(method: str, programOf: dict | None = None) -> str:
                " Defaulting to Gaussian16.[/error]")
         return Defaults.gaussianExtension
     return getattr(Defaults, program[1])
-
-# Gaussian16 Charge Finder in its own method
-def gaussianChargeFinder(geometryFile: Path) -> tuple[str,str]:
-    return ExtractFrom(geometryFile, ExtractGaussianCharge, empty=("", ""))
 
 # This subroutine returns file name and extension for ease-of-use
 def grabPaths(fileName: str|Path) -> tuple[str,str] | tuple[None,None]:

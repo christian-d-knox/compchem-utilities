@@ -17,7 +17,7 @@ from .actions  import SpinState
 from .catalog  import MethodKey, SplitReference
 from .console  import console
 from .defaults import Defaults
-from .fileops  import MapFile, HasContent, FindInMap, ExtractRouteLine, ExtractSpinContamination, HasRestrictedInstability
+from .fileops  import ExtractSpinContamination, HasRestrictedInstability
 from .project  import ResolveProjectFile
 
 # Only CSS/OSS can be forced; high-spin states come from the multiplicity
@@ -48,10 +48,9 @@ def _LoadSpinOverrides(overridePath: Path) -> list[tuple[str, SpinState]]:
     return overrides
 
 
-def _RouteDeclaresBrokenSymmetry(data, extensionType: str) -> str:
+def _RouteDeclaresBrokenSymmetry(molecule) -> str:
     """Return a reason string if the previous route card already declared an unrestricted/BS singlet, else ''."""
-    routeLine = ExtractRouteLine(data, extensionType)
-    for token in routeLine.split():
+    for token in molecule.sourceRoute.split():
         upperToken = token.upper()
         # ORCA: explicit unrestricted reference on the ! line
         if upperToken in ("UKS", "UHF"):
@@ -62,16 +61,18 @@ def _RouteDeclaresBrokenSymmetry(data, extensionType: str) -> str:
             return f"Route Has {token.split('/')[0]}"
         if regex.match(r"GUESS[=(]+\(?\s*MIX", upperToken):
             return f"Route Has {token}"
-    # ORCA broken-symmetry block
-    if FindInMap(data, r"BrokenSym", ignoreCase=True):
+    # ORCA broken-symmetry block, in the input as written
+    if regex.search(r"BrokenSym", molecule.sourceInput, regex.IGNORECASE):
         return "Input Has BrokenSym"
     return ""
 
 
-def ClassifySpin(sourcePath: Path, rootName: str, multiplicity, extensionType: str) -> tuple[SpinState, str]:
-    """Classify one molecule. Returns (state, short reason for the log)."""
+def ClassifySpin(molecule, data) -> tuple[SpinState, str]:
+    """Classify one molecule (fileops.ReadMolecule) from its source file's open map, the one ReadMolecule read.
+    Returns (state, short reason for the log)."""
+    rootName = molecule.rootName
     try:
-        multiplicityValue = int(multiplicity)
+        multiplicityValue = int(molecule.multiplicity)
     except (TypeError, ValueError):
         multiplicityValue = None
 
@@ -92,25 +93,20 @@ def ClassifySpin(sourcePath: Path, rootName: str, multiplicity, extensionType: s
     if multiplicityValue > 1:
         return SpinState.OPEN, f"Multiplicity {multiplicityValue}"
 
-    # mmap can't map an empty file; nothing more to learn from it anyway
-    if not HasContent(sourcePath):
-        return SpinState.CSS, "Multiplicity 1"
+    # 3. Previous route card (user-declared)
+    routeReason = _RouteDeclaresBrokenSymmetry(molecule)
+    if routeReason:
+        return SpinState.OSS, routeReason
 
-    with MapFile(sourcePath) as data:
-        # 3. Previous route card (user-declared)
-        routeReason = _RouteDeclaresBrokenSymmetry(data, extensionType)
-        if routeReason:
-            return SpinState.OSS, routeReason
+    # 4. Spin contamination (heuristic, last resort)
+    spinSquared = ExtractSpinContamination(data)
+    if spinSquared is not None and spinSquared > Defaults.ossSpinThreshold:
+        return SpinState.OSS, f"<S**2>={spinSquared:.3f}"
 
-        # 4. Spin contamination (heuristic, last resort)
-        spinSquared = ExtractSpinContamination(data)
-        if spinSquared is not None and spinSquared > Defaults.ossSpinThreshold:
-            return SpinState.OSS, f"<S**2>={spinSquared:.3f}"
-
-        # 5. Closed-shell, but flag an unresolved instability for the user to decide
-        if HasRestrictedInstability(data):
-            console.print(f"[warning]{rootName}: the output reports a restricted -> unrestricted instability, but it "
-                          f"is being treated as closed-shell. Add '{rootName}  oss' to spinstates.txt if it is an "
-                          f"open-shell singlet.[/warning]")
+    # 5. Closed-shell, but flag an unresolved instability for the user to decide
+    if HasRestrictedInstability(data):
+        console.print(f"[warning]{rootName}: the output reports a restricted -> unrestricted instability, but it "
+                      f"is being treated as closed-shell. Add '{rootName}  oss' to spinstates.txt if it is an "
+                      f"open-shell singlet.[/warning]")
     reason = "Multiplicity 1" if spinSquared is None else f"<S**2>={spinSquared:.3f}"
     return SpinState.CSS, reason

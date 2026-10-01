@@ -22,6 +22,7 @@ class Action(Enum):
     UPDATE           = "update"     # -up
     INIT_PROJECT     = "init"       # -init
     PROFILE          = "profile"    # -profile
+    REFRESH          = "refresh"    # -refresh
 
 # Actions that take a batch of files (IntentDraft.Validate, and the TUI's Continue)
 FILE_ACTIONS = (Action.RUN, Action.SINGLE_POINT, Action.BENCHMARK, Action.CUBE, Action.RERUN, Action.FORM_CHECK,

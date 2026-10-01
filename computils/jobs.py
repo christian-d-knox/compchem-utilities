@@ -152,6 +152,8 @@ def genFile(molecule: Molecule, intent: JobIntent) -> bool:
             if blockTags:
                 availableBlocks = _LoadOrcaBlocks(ResolveProjectFile("orcablocks.txt", True))
                 selectedBlocks = [availableBlocks[tag] for tag in blockTags]
+            # Then the template's own literal blocks (an ORCA re-run carries the blocks its job ran with)
+            selectedBlocks += molecule.template.blocks
             # Opens the job file
             with open(inputFile, 'w') as jobInput:
                 # Sets the job's CPU and RAM
@@ -182,6 +184,29 @@ def slurmHandler(molecule: Molecule, queueName: Path, outputName: Path, cpus: in
         for line in Defaults.submissionList:
             fill = next((value for flag, value in fills if flag in line), "")
             outputFile.write(f"{line}{fill}\n")
+
+# An ORCA job's plumbing, after orcaNonVariant's environment: run in node scratch, then copy the result files into
+# <job name>-scratch/ however the job ends. At the wall time SLURM sends SIGTERM (then SIGKILL ~30 s later), so the TERM
+# trap exits and the EXIT trap still copies. The .out itself comes back through SLURM -o
+ORCA_RUN_SCRIPT = """\
+# Run in the node's scratch space
+cp "$SLURM_SUBMIT_DIR/{inputName}" "$SLURM_SCRATCH/"
+cd "$SLURM_SCRATCH"
+
+# Copy the results back however the job ends: normal end, ORCA error, or the wall time
+results="$SLURM_SUBMIT_DIR/{resultsFolder}"
+CopyBack() {{
+    mkdir -p "$results"
+    for file in {resultFiles}; do
+        if [ -f "$file" ]; then cp "$file" "$results/"; fi
+    done
+}}
+trap CopyBack EXIT
+trap 'exit 143' TERM
+
+# $(which orca) is necessary: ORCA needs its full path to run in parallel
+$(which orca) {inputName}
+"""
 
 # Every job reaches the queue through here, so the group broadcast can count the whole invocation (dispatch)
 submittedJobs = 0
@@ -216,15 +241,13 @@ def runJob(molecule: Molecule, intent: JobIntent, stalkingSet: set) -> None:
                 outputFile.write(f"\ng16 < {molecule.fullPath}\n\n")
 
         case Defaults.orcaExtension:
-            program = "ORCA 6.0.1"
-            inputName = fileCreation(molecule.baseName, Defaults.orcaExtension)
+            program = "ORCA"
+            resultFiles = " ".join(str(fileCreation(molecule.baseName, suffix)) for suffix in Defaults.orcaResultSuffixes)
             with open(queueName, 'a') as outputFile:
-                # Now runs in ORCA 6.0.1 instead of 4.2.0
-                outputFile.writelines(Defaults.orcaNonVariant[0:3])
-                outputFile.write(f"files=({inputName})\n")
-                outputFile.writelines(Defaults.orcaNonVariant[3:8])
-                outputFile.write(f"$(which orca) {inputName}\n\n")
-                outputFile.writelines(Defaults.orcaNonVariant[8:10])
+                outputFile.writelines(Defaults.orcaNonVariant)
+                outputFile.write(ORCA_RUN_SCRIPT.format(
+                    inputName=fileCreation(molecule.baseName, Defaults.orcaExtension), resultFiles=resultFiles,
+                    resultsFolder=fileCreation(molecule.baseName, "", Defaults.scratchFolderExtra)))
 
         # Only Gaussian and ORCA inputs are submitted
         case _:

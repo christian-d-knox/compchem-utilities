@@ -1,4 +1,4 @@
-import copy
+import copy, shutil
 from dataclasses import dataclass, field
 from typing import Any
 from pathlib import Path
@@ -107,6 +107,7 @@ class Defaults:
     # Filemask and Extension related
     singlePointExtra = "_SP"
     reRunExtra = "_re"
+    scratchFolderExtra = "-scratch"
     coordExtension = ".xyz"
     gaussianExtension = ".gjf"
     orcaExtension = ".inp"
@@ -135,11 +136,11 @@ class Defaults:
     # Job submission related. Edit this across clusters
     gaussianNonVariant = ["\nmodule purge\nmodule load gaussian\n\n",
                           "export GAUSS_SCRDIR=$SLURM_SCRATCH\nulimit -s unlimited\nexport LC_COLLATE=C\n"]
-    orcaNonVariant = ["\n# Load the module\nmodule purge\n","module load orca/6.0.1\n\n",
-                      "# Copy files to SLURM_SCRATCH\n","for i in ${files[@]}; do\n",
-                      "    cp $SLURM_SUBMIT_DIR/$i $SLURM_SCRATCH/$i\ndone\n\n","# cd to the SCRATCH space\n",
-                      "cd $SLURM_SCRATCH\n\n","# run the job, $(which orca) is necessary\n",
-                      "# finally, copy back gbw and prop files\n","cp $SLURM_SCRATCH/*.{gbw,prop} $SLURM_SUBMIT_DIR\n\n"]
+    # The ORCA job's environment only: runJob writes the scratch copy, the copy-back and the run itself
+    orcaNonVariant = ["\n# Load the module\nmodule purge\n","module load orca/6.1.0\n\n"]
+    # Result files copied from scratch into <job name><scratchFolderExtra>/ however the job ends (the .out comes back
+    # through SLURM -o)
+    orcaResultSuffixes = [".gbw", ".property.txt", ".hess", ".xyz", "_trj.xyz", ".engrad"]
     # Formatting related
     coreLineVariants = ["%nproc","%nprocshared","%pal"]
     ramLineVariants = ["%mem","%maxcore"]
@@ -172,10 +173,10 @@ class Defaults:
             "nboKeylist", "mixedBasisVariants",
             "potCube", "denCube", "valenceCube", "spinCube",
             "coreLineVariants", "ramLineVariants", "terminationVariants",
-            "gaussianNonVariant", "orcaNonVariant",
+            "gaussianNonVariant", "orcaNonVariant", "orcaResultSuffixes",
         ],
         "extensions.toml": [
-            "singlePointExtra", "reRunExtra",
+            "singlePointExtra", "reRunExtra", "scratchFolderExtra",
             "coordExtension", "gaussianExtension", "orcaExtension",
             "cubeExtension", "queueExtension", "outputExtension",
         ],
@@ -246,9 +247,11 @@ class Defaults:
         "ramLineVariants": "Input file keylist identifying the memory line, by program.",
         "terminationVariants": "Output file strings indicating normal or error job termination.",
         "gaussianNonVariant": "Gaussian16 SLURM script boilerplate written verbatim into job files.",
-        "orcaNonVariant": "ORCA 6.X SLURM script boilerplate written verbatim into job files.",
+        "orcaNonVariant": "ORCA 6.X SLURM script environment (modules), written verbatim into job files before the run.",
+        "orcaResultSuffixes": "ORCA result files (<job name><suffix>) copied back from scratch, however the job ends.",
         "singlePointExtra": "Filename suffix appended to single-point calculation jobs.",
         "reRunExtra": "Filename suffix appended to re-run jobs.",
+        "scratchFolderExtra": "Suffix of the folder (<job name><suffix>/) an ORCA job's result files are copied into.",
         "coordExtension": "Coordinate file extension.",
         "gaussianExtension": "Gaussian16 input file extension.",
         "orcaExtension": "ORCA 6.X input file extension.",
@@ -317,6 +320,7 @@ class Defaults:
                 missingKeys = cls._ApplySection(data, filename)
                 if missingKeys:
                     cls._AppendMissing(filename, missingKeys)
+                cls._GuardBrokenLayouts(filename)
 
         from .profile import InstalledProfile
         profile = InstalledProfile()
@@ -470,6 +474,85 @@ class Defaults:
 
 
     @classmethod
+    def _GuardBrokenLayouts(cls, filename: str) -> None:
+        """A value still in a layout that can no longer work (_BROKEN_LAYOUTS) is replaced by the default in memory only.
+        The file is never rewritten here (keys must not flip back and forth): `cu -refresh` updates it."""
+        for key, marker in _BROKEN_LAYOUTS.items():
+            if key in cls._FILE_GROUPS[filename] and _InBrokenLayout(key, getattr(cls, key)):
+                setattr(cls, key, copy.deepcopy(cls._HARDCODED[key]))
+                console.print(f"[warning]\\[config] {key} in {filename} is in a layout that no longer works. Using the "
+                              f"default this run; run `cu -refresh` to update the file.[/warning]")
+
+
+    @classmethod
+    def RefreshFiles(cls) -> None:
+        """`cu -refresh`: rewrite every global file in the current layout (header, comments, key order) with the loaded
+        values. Stale keys are dropped, invalid values and old defaults (_OLD_DEFAULTS) become the current default, a key
+        found in the wrong file moves to its own, and an unparseable file is backed up to .bak first. The report names
+        keys only, since values can be secrets."""
+        configDir = Path(cls.binDirectory)
+        fileOf = {key: filename for filename, keys in cls._FILE_GROUPS.items() for key in keys}
+        notes = {filename: {} for filename in cls._FILE_GROUPS}
+        def Note(filename: str, label: str, key: str) -> None:
+            notes[filename].setdefault(label, []).append(key)
+
+        raw = {}
+        for filename in cls._FILE_GROUPS:
+            path = configDir / filename
+            try:
+                raw[filename] = tom.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+            except (tom.TOMLDecodeError, OSError, UnicodeDecodeError):
+                raw[filename] = {}
+                if BackUpFile(path):
+                    Note(filename, "unreadable, backed up to", f"{filename}.bak")
+
+        for filename, data in raw.items():
+            for key, value in data.items():
+                if key not in fileOf:
+                    Note(filename, "dropped", key)
+                    continue
+                checked = cls._CoerceValue(key, value)
+                home = fileOf[key]
+                if home != filename:
+                    Note(filename, "moved out", key)
+                    # Load never read it here and appended the default to its own file: the value here is the user's
+                    ownValue = raw[home].get(key, DELETE)
+                    if checked is not None and (ownValue is DELETE or ownValue == _TomlForm(cls.DefaultValue(key))):
+                        cls._SetGlobal(key, checked)
+                        Note(home, "moved in", key)
+                elif checked is None:
+                    Note(filename, "reset to default", key)
+                elif key in _BROKEN_LAYOUTS and _InBrokenLayout(key, checked) and checked not in _OLD_DEFAULTS.get(key, []):
+                    Note(filename, "reset (old layout no longer works)", key)
+
+        # Old hardcoded defaults become the current one: only ever here, so a value never flips back and forth on load
+        for key, oldDefaults in _OLD_DEFAULTS.items():
+            if cls.GlobalValue(key) in oldDefaults:
+                cls._SetGlobal(key, cls.DefaultValue(key))
+                Note(fileOf[key], "updated to the new default", key)
+
+        for filename in cls._FILE_GROUPS:
+            path = configDir / filename
+            content = cls._BuildContent(filename)
+            current = path.read_text(encoding="utf-8") if path.is_file() else None
+            if current is not None and current.replace("\r\n", "\n") == content:
+                console.print(f"[info]\\[config] {filename} is already current.[/info]")
+                continue
+            if writeToml(configDir, filename, content):
+                details = "; ".join(f"{label}: {', '.join(keys)}" for label, keys in notes[filename].items())
+                console.print(f"[good]\\[config] Refreshed {filename}{f' ({details})' if details else ''}.[/good]")
+
+
+    @classmethod
+    def _SetGlobal(cls, key: str, value: Any) -> None:
+        """Set a key's global value, behind any project override of it (what _PersistedValue writes)."""
+        if key in cls._globalValues:
+            cls._globalValues[key] = value
+        else:
+            setattr(cls, key, value)
+
+
+    @classmethod
     def _AppendMissing(cls, filename: str, missingKeys: list[str]) -> None:
         if cls._PatchFile(Path(cls.binDirectory) / filename, {key: cls._PersistedValue(key) for key in missingKeys}):
             console.print(f"[warning]\\[config] Appended {len(missingKeys)} missing key(s) to {filename}.[/warning]")
@@ -568,7 +651,7 @@ class Defaults:
             values = {key: cls.GlobalValue(key) for key in cls._PROJECT_KEYS}
         lines = ["# project.toml -- Project-level overrides of the global CompUtils config",
                  "# Generated by `cu -init` as a snapshot of the global config at that time." if snapshot
-                 else "# Written by the CompUtils config editor.",
+                 else "# Written by CompUtils (config editor or `cu -refresh`).",
                  "# Every key here overrides the global value for jobs run anywhere inside this project.",
                  "# Delete a key to follow the global value again. Only the keys below can be overridden." if snapshot
                  else f"# Delete a key to follow the global value again. Overridable: {', '.join(cls._PROJECT_KEYS)}.", ""]
@@ -583,6 +666,35 @@ class Defaults:
 Defaults._TYPES = {key: str if isinstance(getattr(Defaults, key), Path) else type(getattr(Defaults, key))
                    for keys in Defaults._FILE_GROUPS.values() for key in keys}
 Defaults._HARDCODED = {key: copy.deepcopy(getattr(Defaults, key)) for keys in Defaults._FILE_GROUPS.values() for key in keys}
+
+# Past hardcoded defaults, by key. `cu -refresh` (and only it) moves a value still equal to one of them to the current
+# default. Lab-private values (e.g. the old broadcastGroupChatID) never go here: they must not be in the public source
+_OLD_DEFAULTS: dict[str, list[Any]] = {
+    # The whole ORCA 6.0.1 job plumbing, until runJob took it over (ORCA 6.1)
+    "orcaNonVariant": [["\n# Load the module\nmodule purge\n","module load orca/6.0.1\n\n",
+                        "# Copy files to SLURM_SCRATCH\n","for i in ${files[@]}; do\n",
+                        "    cp $SLURM_SUBMIT_DIR/$i $SLURM_SCRATCH/$i\ndone\n\n","# cd to the SCRATCH space\n",
+                        "cd $SLURM_SCRATCH\n\n","# run the job, $(which orca) is necessary\n",
+                        "# finally, copy back gbw and prop files\n","cp $SLURM_SCRATCH/*.{gbw,prop} $SLURM_SUBMIT_DIR\n\n"]],
+    "bareCommandOpensTUI": [False],
+}
+
+# Values in a layout that can no longer work, by a marker only that layout contains. Replaced in memory on every load
+# (with a warning), and in the file by `cu -refresh`
+_BROKEN_LAYOUTS: dict[str, str] = {"orcaNonVariant": "${files[@]}"}
+
+def _InBrokenLayout(key: str, value) -> bool:
+    return isinstance(value, list) and any(_BROKEN_LAYOUTS[key] in str(line) for line in value)
+
+
+def BackUpFile(path: Path) -> bool:
+    """Move a file aside to <name>.bak before it is regenerated. False (with an error) if that failed."""
+    try:
+        shutil.move(path, path.with_name(path.name + ".bak"))
+        return True
+    except OSError as error:
+        console.print(f"[error]Could not back up {path}: {error}. Leaving it as-is.[/error]")
+        return False
 
 
 @dataclass

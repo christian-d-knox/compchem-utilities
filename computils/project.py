@@ -9,7 +9,7 @@ import tomllib as tom
 from pathlib import Path
 
 from .console  import ApplyTheme, console
-from .defaults import DELETE, Defaults, loadToml, writeToml
+from .defaults import DELETE, BackUpFile, Defaults, loadToml, writeToml
 from .prompts  import AskBool, AskChoice
 
 # Known shareable files. -init (and the auto-prompt) offer to move these from the CWD into a new marker.
@@ -67,15 +67,36 @@ def EnsureProjectConfig(root: Path) -> None:
             console.print(f"[info]{configPath} already exists; left unchanged.[/info]")
             return
         except (tom.TOMLDecodeError, OSError, UnicodeDecodeError) as error:
-            backupPath = configPath.with_name(PROJECT_CONFIG + ".bak")
-            console.print(f"[warning]{configPath} could not be read ({error}). Backing it up to {backupPath.name} "
+            console.print(f"[warning]{configPath} could not be read ({error}). Backing it up to {PROJECT_CONFIG}.bak "
                           f"and regenerating it from the global config.[/warning]")
-            try:
-                shutil.move(configPath, backupPath)
-            except OSError as moveError:
-                console.print(f"[error]Could not back up {configPath}: {moveError}. Leaving it as-is.[/error]")
+            if not BackUpFile(configPath):
                 return
     writeToml(configPath.parent, PROJECT_CONFIG, Defaults.BuildProjectContent())
+
+
+def RefreshProjectConfig() -> None:
+    """`cu -refresh project`: rewrite the nearest project.toml in the current layout, keeping the overrides that applied
+    (LoadProjectConfig). Keys a project can't override, stale keys and invalid values are dropped (they follow global).
+    A missing or unparseable file goes through EnsureProjectConfig, since there is nothing to keep."""
+    root = FindProjectRoot()
+    if root is None:
+        console.print("[info]Not inside a project, so there is no project.toml to refresh (`cu -init` creates one).[/info]")
+        return
+    configPath = ProjectFilePath(root, PROJECT_CONFIG)
+    try:
+        current = configPath.read_text(encoding="utf-8")
+        data = tom.loads(current)
+    except (tom.TOMLDecodeError, OSError, UnicodeDecodeError):
+        EnsureProjectConfig(root)
+        return
+    values = {key: Defaults._projectValues[key] for key in Defaults._PROJECT_KEYS if key in Defaults._projectValues}
+    content = Defaults.BuildProjectContent(values)
+    if current.replace("\r\n", "\n") == content:
+        console.print(f"[info]{configPath} is already current.[/info]")
+        return
+    dropped = ", ".join(key for key in data if key not in values)
+    if writeToml(configPath.parent, PROJECT_CONFIG, content):
+        console.print(f"[good]Refreshed {configPath}{f' (dropped: {dropped})' if dropped else ''}.[/good]")
 
 
 def LoadProjectConfig() -> None:
