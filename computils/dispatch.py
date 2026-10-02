@@ -18,7 +18,8 @@ from .intent    import (
     Intent,
     RunIntent, SinglePointIntent, BenchmarkIntent, ReRunIntent,
     CubeIntent, FormCheckIntent, ExcelIntent, GoodVibesIntent,
-    FirstTimeSetupIntent, UpdateIntent, InitProjectIntent, ProfileIntent, RefreshIntent,
+    FirstTimeSetupIntent, UpdateIntent, InitProjectIntent, ProfileIntent, RefreshIntent, StalkIntent,
+    AttributionsIntent,
 )
 from .fileops   import grabPaths, formCheck, fileCreation, HasContent, MapFile, ReadMolecule, WriteXyz
 from .jobs      import runJob
@@ -26,18 +27,21 @@ from .          import jobs
 from .workflows import genBench, genSinglePoint, genReRun, gimmeCubes
 from .analysis  import goodVibesProcessor, GoodVibesArguments, SpcPartners, GOODVIBES_OUTPUT
 from .notify    import CheckAndBroadcast
-from .stalk     import jobStalking
+from .stalk     import TrackedJob, TrackJobs, LoadTracked, jobStalking
 from .spin      import ClassifySpin
 
 
-def Dispatch(intent: Intent) -> None:
-    """Single execution path. Routes to the per-action handler."""
+def Dispatch(intent: Intent) -> list[TrackedJob]:
+    """Single execution path. Routes to the per-action handler. Returns the jobs it submitted (already tracked), so the
+    caller decides how to stalk them: the CLI with -st, the TUI by offering its Job Stalker."""
+    # Counted per dispatch: the TUI dispatches many times in one process
+    jobs.submittedJobs = 0
     match intent:
-        case RunIntent():             _DispatchRun(intent)
-        case SinglePointIntent():     _DispatchSinglePoint(intent)
-        case BenchmarkIntent():       _DispatchBenchmark(intent)
+        case RunIntent():             return _DispatchRun(intent)
+        case SinglePointIntent():     return _DispatchSinglePoint(intent)
+        case BenchmarkIntent():       return _DispatchBenchmark(intent)
         case CubeIntent():            _DispatchCube(intent)
-        case ReRunIntent():           _DispatchReRun(intent)
+        case ReRunIntent():           return _DispatchReRun(intent)
         case FormCheckIntent():       _DispatchFormCheck(intent)
         case ExcelIntent():           _DispatchExcel(intent)
         case GoodVibesIntent():       _DispatchGoodVibes(intent)
@@ -46,8 +50,11 @@ def Dispatch(intent: Intent) -> None:
         case InitProjectIntent():     _DispatchInitProject(intent)
         case ProfileIntent():         _DispatchProfile(intent)
         case RefreshIntent():         _DispatchRefresh(intent)
+        case StalkIntent():           jobStalking(LoadTracked(), Defaults.stalkDuration, Defaults.stalkFrequency, intent.loop)
+        case AttributionsIntent():    _DispatchAttributions()
         case _:
             raise ValueError(f"Unknown intent: {type(intent).__name__}")
+    return []
 
 
 # ─── SLURM-submitting dispatchers ─────────────────────────────────────
@@ -82,51 +89,53 @@ def _FileMolecules(files: list):
             yield Molecule(jobPath, baseName, 0, 0, 0, extension, baseName)
 
 
-def _AfterSubmission(intent, stalkingSet: set) -> None:
-    # Broadcast before stalking (which can take hours). Every job went through jobs.SubmitJob, so this is the total
+# Every submitted job is tracked, so it can be stalked now (-st) or re-hooked into later (bare -st, the TUI)
+def _AfterSubmission(trackedJobs: list[TrackedJob]) -> list[TrackedJob]:
+    TrackJobs(trackedJobs)
+    # Every job went through jobs.SubmitJob, so this is the total
     CheckAndBroadcast(jobs.submittedJobs)
-    if intent.stalk and stalkingSet:
-        jobStalking(stalkingSet, Defaults.stalkDuration, Defaults.stalkFrequency, intent.stalkLoop)
+    return trackedJobs
 
 
-# SP, Benchmark and Re-run: load each file's molecule (skipping unusable ones), generate and submit, then broadcast/stalk
-def _GenerateBatch(intent, workflow, coordExtra: str = "") -> None:
-    stalkingSet: set = set()
+# SP, Benchmark and Re-run: load each file's molecule (skipping unusable ones), generate and submit, then track/broadcast
+def _GenerateBatch(intent, workflow, coordExtra: str = "") -> list[TrackedJob]:
+    trackedJobs: list[TrackedJob] = []
     for jobPath in intent.files:
         molecule = _LoadMolecule(jobPath, coordExtra)
         if molecule is not None:
-            workflow(molecule, intent, stalkingSet)
-    _AfterSubmission(intent, stalkingSet)
+            workflow(molecule, intent, trackedJobs)
+    return _AfterSubmission(trackedJobs)
 
 
-def _DispatchRun(intent: RunIntent) -> None:
-    stalkingSet: set = set()
+def _DispatchRun(intent: RunIntent) -> list[TrackedJob]:
+    trackedJobs: list[TrackedJob] = []
     for molecule in _FileMolecules(intent.files):
-        runJob(molecule, intent, stalkingSet)
-    _AfterSubmission(intent, stalkingSet)
+        runJob(molecule, intent, trackedJobs)
+    return _AfterSubmission(trackedJobs)
 
 
-def _DispatchSinglePoint(intent: SinglePointIntent) -> None:
-    _GenerateBatch(intent, genSinglePoint)
+def _DispatchSinglePoint(intent: SinglePointIntent) -> list[TrackedJob]:
+    return _GenerateBatch(intent, genSinglePoint)
 
 
-def _DispatchBenchmark(intent: BenchmarkIntent) -> None:
+def _DispatchBenchmark(intent: BenchmarkIntent) -> list[TrackedJob]:
     if not Catalog.canBench:
         console.print("[error]Notice: Benchmarking requires at least 2 entries in benchmarkMethods (programs.toml).[/error]")
-        return
-    _GenerateBatch(intent, genBench)
+        return []
+    return _GenerateBatch(intent, genBench)
 
 
-def _DispatchReRun(intent: ReRunIntent) -> None:
-    _GenerateBatch(intent, genReRun, "_failed")
+def _DispatchReRun(intent: ReRunIntent) -> list[TrackedJob]:
+    return _GenerateBatch(intent, genReRun, "_failed")
 
 
+# Cube jobs write .cube files, not outputs with a termination line, so they aren't tracked
 def _DispatchCube(intent: CubeIntent) -> None:
     for molecule in _FileMolecules(intent.files):
-        if molecule.extensionType == ".chk":
-            formCheck(molecule)
+        if molecule.extensionType == ".chk" and not formCheck(molecule):
+            continue
         gimmeCubes(molecule, intent)
-    _AfterSubmission(intent, set())
+    CheckAndBroadcast(jobs.submittedJobs)
 
 
 # ─── Non-SLURM dispatchers ────────────────────────────────────────────
@@ -172,12 +181,13 @@ def _DispatchFirstTimeSetup(intent: FirstTimeSetupIntent) -> None:
 
 
 def _InstalledBranch() -> str:
-    """The branch CompUtils was pip-installed from (pip records it in direct_url.json), else main."""
+    """The branch CompUtils was pip-installed from (pip records it in direct_url.json), else dev (the only branch until
+    the first release; then main)."""
     try:
         record = json.loads(importlib.metadata.distribution("compchem-utilities").read_text("direct_url.json") or "{}")
     except (importlib.metadata.PackageNotFoundError, ValueError):
-        return "main"
-    return record.get("vcs_info", {}).get("requested_revision") or "main"
+        return "dev"
+    return record.get("vcs_info", {}).get("requested_revision") or "dev"
 
 
 def _DispatchUpdate(intent: UpdateIntent) -> None:
@@ -216,6 +226,11 @@ def _DispatchInitProject(intent: InitProjectIntent) -> None:
 def _DispatchProfile(intent: ProfileIntent) -> None:
     from .profile import ApplyProfile
     ApplyProfile(intent.profileFile)
+
+
+def _DispatchAttributions() -> None:
+    from .attributions import AttributionText
+    console.print(AttributionText())
 
 
 def _DispatchRefresh(intent: RefreshIntent) -> None:

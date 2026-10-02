@@ -8,6 +8,11 @@ from .project  import LoadProjectConfig
 
 
 def Main() -> None:
+    # Help touches nothing: no config is written and no setup is asked (conda-installer.py checks the install with it)
+    if any(arg in ("-h", "--help") for arg in sys.argv[1:]):
+        from .cli import BuildParser
+        BuildParser().print_help()
+        return
     # Load configs and lookup data BEFORE handing control to the CLI.
     Defaults.Load()
     # Project overrides must land before the Catalog derives route templates from benchmarkMethods
@@ -35,6 +40,10 @@ def Main() -> None:
         if not appliesProfile and sys.stdin.isatty():
             from .profile import CheckProfileSource
             CheckProfileSource()
+        # Files the endings of tracked jobs that left the queue since the last run, so a stalker's first ping only
+        # covers live jobs (one squeue call, and only while some tracked job is still live)
+        from .stalk import CheckTracked
+        CheckTracked()
         if opensTUI and "notifications.toml" in Defaults.generatedFiles:
             from .wizards import NotificationSetup
             NotificationSetup()
@@ -55,7 +64,11 @@ def Main() -> None:
         raise SystemExit(2)
     else:
         intent = ParseCLI(argv)
-    Dispatch(intent)
+    submitted = Dispatch(intent)
+    # Every submitted job is tracked; -st stalks them right away
+    if getattr(intent, "stalk", False):
+        from .stalk import jobStalking
+        jobStalking(submitted, Defaults.stalkDuration, Defaults.stalkFrequency, intent.stalkLoop)
 
 
 if __name__ == "__main__":

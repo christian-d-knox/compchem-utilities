@@ -1,14 +1,16 @@
-import os, functools, regex, subprocess
+import os, functools, regex, subprocess, time
 from pathlib import Path
 from .console  import console
 from rich.markup import escape
 from .defaults import Defaults
 from .catalog  import RenderRoute, ROUTE_LEAK_PATTERN
 from .fileops  import (fileCreation, ExtractFrom, ExtractFromText, HasContent, ExtractResources, ExtractOrcaBlocks,
+                       MapFile, StageCount,
                        ExtractMixedBasis, MixedBasis, BasisEntry, NormalizeElement, MoleculeElements)
 from .molecule import Molecule
 from .project  import ResolveProjectFile, FindProjectRoot, ProjectFilePath
 from .intent import JobIntent
+from .stalk    import TrackedJob, Stage, jobLocation
 
 # Parsed once per run, however many jobs use it
 @functools.cache
@@ -211,14 +213,26 @@ $(which orca) {inputName}
 # Every job reaches the queue through here, so the group broadcast can count the whole invocation (dispatch)
 submittedJobs = 0
 
-def SubmitJob(queueName: Path) -> None:
+# --parsable prints just 'ID' or 'ID;cluster'. Output is captured: sbatch must never write to the TUI's screen. Returns
+# (job ID, cluster), or None (after saying why) if sbatch refused the job: the caller skips only that job
+def SubmitJob(queueName: Path) -> tuple[str, str] | None:
     global submittedJobs
-    subprocess.run(["sbatch", queueName], check=True)
+    try:
+        result = subprocess.run(["sbatch", "--parsable", str(queueName)], capture_output=True, text=True)
+    except FileNotFoundError:
+        console.print(f"[error]sbatch isn't available here, so {queueName} wasn't submitted.[/error]")
+        return None
+    if result.returncode != 0:
+        console.print(f"[error]sbatch refused {queueName}: {escape(result.stderr.strip())}[/error]")
+        return None
     #os.remove(queueName)
     submittedJobs += 1
+    jobID, _, cluster = result.stdout.strip().splitlines()[-1].partition(";")
+    return jobID.strip(), cluster.strip()
 
-# This routine is for job submission to the cluster
-def runJob(molecule: Molecule, intent: JobIntent, stalkingSet: set) -> None:
+# This routine is for job submission to the cluster. Every submitted job is tracked (trackedJobs, recorded by
+# dispatch), so any later stalker can re-hook into it
+def runJob(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
     # Sets up all the basic filenames for the rest of submission
     outputName = fileCreation(molecule.baseName, Defaults.outputExtension)
     queueName = fileCreation(molecule.baseName, Defaults.queueExtension)
@@ -228,8 +242,10 @@ def runJob(molecule: Molecule, intent: JobIntent, stalkingSet: set) -> None:
         console.print(f"[error]Job file {molecule.baseName} is empty or blank. Skipping submission.[/error]")
         return
 
-    # Extract CPU and RAM from the input file via mmap regex
-    cpus, jobRam = ExtractFrom(molecule.fullPath, ExtractResources, molecule.extensionType)
+    # Extract CPU and RAM from the input file via mmap regex, and how many --Link1-- stages it runs (for the stalker)
+    with MapFile(molecule.fullPath) as data:
+        cpus, jobRam = ExtractResources(data, molecule.extensionType)
+        stageCount = StageCount(data, molecule.extensionType)
 
     slurmHandler(molecule, queueName, outputName, cpus, jobRam)
 
@@ -253,9 +269,12 @@ def runJob(molecule: Molecule, intent: JobIntent, stalkingSet: set) -> None:
         case _:
             return
 
-    SubmitJob(queueName)
-    console.print(f"[good]Submitted job {molecule.baseName} to {program}[/good]")
-    if intent.stalk:
-        molecule.fullPath = outputName
-        stalkingSet.add((molecule.baseName,molecule.fullPath))
+    submitted = SubmitJob(queueName)
+    if submitted is None:
+        console.print(f"[error]Skipping {molecule.baseName}.[/error]")
+        return
+    jobID, cluster = submitted
+    console.print(f"[good]Submitted job {molecule.baseName} to {program} (ID {jobID})[/good]")
+    trackedJobs.append(TrackedJob(jobID, cluster, molecule.baseName, str(Path(outputName).resolve()), jobLocation(),
+                                  molecule.extensionType, time.time(), [Stage() for _ in range(stageCount)]))
 

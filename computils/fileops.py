@@ -176,23 +176,31 @@ def ExtractRouteLine(data, program: str) -> str:
     """The route card of an input or output file (program from ExtractProgram), without its leading marker."""
     if program == Defaults.orcaExtension:
         return OrcaRouteLine(ExtractOrcaInput(data))
-    # Gaussian outputs echo the route between two dashed lines, wrapped mid-word at a fixed width:
-    #  -------------------------------------------------------------
-    #  #p opt freq=noraman b3lyp genecp scrf=(smd,solvent=water) 5d empiricald
-    #  ispersion=gd3bj
-    #  -------------------------------------------------------------
-    blockMatch = FindInMap(data, r"(?m)^ *-{20,}\r?\n( *#[^\r\n]*\r?\n(?:[^\r\n]*\r?\n){0,20}?) *-{20,}\r?$")
-    if blockMatch:
-        # Each echoed line has one leading space; the rest is the route verbatim, so rejoin without a separator
-        wrappedLines = blockMatch.group(1).decode().splitlines()
-        routeLine = "".join(line[1:] if line.startswith(" ") else line for line in wrappedLines).strip()
-        return _StripRouteMarker(routeLine)
+    echoed = ExtractRouteEcho(data)
+    if echoed is not None:
+        return echoed
     # A Gaussian input: the first '#' line
     routeMatch = FindInMap(data, r"#")
     if routeMatch is None:
         return ""
     data.seek(routeMatch.start())
     return _StripRouteMarker(data.readline().decode())
+
+def ExtractRouteEcho(data, start: int = 0) -> str | None:
+    """The first route a Gaussian output echoes after start, or None if none is written there yet. From a bookmark, the
+    route of the step that follows it (a --Link1-- stage, or Gaussian's internal freq step)."""
+    # Gaussian outputs echo the route between two dashed lines, wrapped mid-word at a fixed width:
+    #  -------------------------------------------------------------
+    #  #p opt freq=noraman b3lyp genecp scrf=(smd,solvent=water) 5d empiricald
+    #  ispersion=gd3bj
+    #  -------------------------------------------------------------
+    blockMatch = FindInMap(data, r"(?m)^ *-{20,}\r?\n( *#[^\r\n]*\r?\n(?:[^\r\n]*\r?\n){0,20}?) *-{20,}\r?$",
+                           start=start)
+    if blockMatch is None:
+        return None
+    # Each echoed line has one leading space; the rest is the route verbatim, so rejoin without a separator
+    wrappedLines = blockMatch.group(1).decode().splitlines()
+    return _StripRouteMarker("".join(line[1:] if line.startswith(" ") else line for line in wrappedLines))
 
 # Strip only the leading marker ('#', '!', or a '#p'/'#n'/'#t' print-level flag). The flag letter must be followed by
 # whitespace, so method names starting with P/N/T (e.g. '#p PBEPBE', '#PBEPBE', '! PBE0') survive intact
@@ -232,15 +240,73 @@ def SplitRoute(routeLine: str) -> tuple[str, str, str]:
         keys.append(token)
     return method, basis, " ".join(keys)
 
-def ExtractTermination(data, start: int = 0) -> str:
-    """The LAST termination line in an output, as its terminationVariants entry ('' if none: running, killed, or empty).
-    Multi-link Gaussian jobs print one per link, so only the last one says how the job ended."""
+# What a job step reports while it runs, judged from its route (and, for ORCA, its % blocks). Route keywords only:
+# Gaussian's 'stable=opt' is a stability option, not an optimization. Keyed by 'is ORCA' (extensions are user config)
+_STEP_KEYWORDS = {
+    "optimizes": {False: r"(?i)(?:^|\s)opt(?=$|[\s=(])",
+                  True:  r"(?i)(?:^|\s)(?:(?:tight|loose|verytight|normal)?opt(?:ts)?|copt|zopt|scants)"
+                         r"(?=\s|$)"},
+    "stability": {False: r"(?i)(?:^|\s)stable(?=$|[\s=(])",
+                  True:  r"(?i)(?:^|\s)stability(?=\s|$)"},
+    "freq":      {False: r"(?i)(?:^|\s)freq(?=$|[\s=(])",
+                  True:  r"(?i)(?:^|\s)(?:num|ana)?freq(?=\s|$)"},
+}
+
+@dataclass
+class StepChecks:
+    """What one job step reports: convergence while it optimizes, a verdict if it runs a stability analysis."""
+    optimizes: bool
+    stability: bool
+    label:     str     # Opt, Stability, Freq or SP
+
+def JobChecks(route: str, program: str, inputText: str = "") -> StepChecks:
+    """The checks a step with this route needs. inputText: ORCA's input, whose %scf block can ask for the analysis."""
+    isOrca = program == Defaults.orcaExtension
+    found = {check: bool(regex.search(patterns[isOrca], route)) for check, patterns in _STEP_KEYWORDS.items()}
+    if isOrca and regex.search(r"(?i)stabperform\s+true", inputText):
+        found["stability"] = True
+    label = ("Opt" if found["optimizes"] else "Stability" if found["stability"] else "Freq" if found["freq"]
+             else "SP")
+    return StepChecks(found["optimizes"], found["stability"], label)
+
+def StageCount(data, program: str) -> int:
+    """How many stages an input runs: Gaussian's --Link1-- separators + 1. ORCA's multi-step inputs aren't tracked yet."""
+    if program != Defaults.gaussianExtension:
+        return 1
+    return 1 + len(regex.findall(rb"(?im)^\s*--link1--\s*$", data))
+
+def FindTermination(data, start: int = 0, end: int | None = None, reverse: bool = True) -> regex.Match | None:
+    """The last (or, reverse=False, the first) termination line in data[start:end]. Its offsets are the stalker's
+    bookmarks: a later step's reporting is never searched for before one."""
     pattern = "|".join(regex.escape(variant) for variant in Defaults.terminationVariants)
-    termLine = FindInMap(data, pattern, True, True, start)
+    return FindInMap(data, pattern, reverse, True, start, end)
+
+def TerminationVariant(termLine: regex.Match | None) -> str:
+    """The terminationVariants entry a FindTermination match is, or '' for None."""
     if termLine is None:
         return ""
     found = termLine.group().decode().lower()
     return next(variant for variant in Defaults.terminationVariants if variant.lower() == found)
+
+def ExtractTermination(data, start: int = 0) -> str:
+    """The LAST termination line in an output, as its terminationVariants entry ('' if none: running, killed, or empty).
+    Multi-link Gaussian jobs print one per link, so only the last one says how the job ended."""
+    return TerminationVariant(FindTermination(data, start))
+
+# What Gaussian prints right after the termination line of a step it added itself (opt freq's freq), but not after a
+# --Link1-- stage the input asked for, which starts with 'Initial command:' instead
+INTERNAL_STEP = r"[ \t]*Link1:\s+Proceeding to internal job step"
+
+def IsInternalStep(data, termLine: regex.Match) -> bool | None:
+    """Whether the step after this termination line is Gaussian's own (same stage), or None if the next line isn't
+    complete yet (it can't be told apart until it is)."""
+    lineEnd = data.find(b"\n", termLine.end())
+    if lineEnd < 0:
+        return None
+    nextEnd = data.find(b"\n", lineEnd + 1)
+    if nextEnd < 0:
+        return None
+    return regex.match(INTERNAL_STEP.encode(), data[lineEnd + 1:nextEnd]) is not None
 
 # Stability analysis section headers, Gaussian then ORCA. Case-sensitive: ORCA also prints 'stability analysis' (its
 # contributor list) and 'SCF Stability Analysis' (its timings)
@@ -248,18 +314,17 @@ STABILITY_HEADER = r"Stability analysis|WAVEFUNCTION STABILITY ANALYSIS"
 ORCA_STABLE_VERDICT = r"The stability analysis shows that the wavefunction is stable"
 STABLE_VERDICT = r"The wavefunction is already stable\.|" + ORCA_STABLE_VERDICT
 
-def ExtractStability(data) -> str:
-    # An analysis without a stable verdict is read as not stabilized, so the unstable wording never has to be matched
-    if FindInMap(data, STABILITY_HEADER) is None:
-        return ""
-    if FindInMap(data, STABLE_VERDICT, True) is not None:
-        return "Wavefunction has stabilized."
-    return "Wavefunction has not stabilized."
+def ExtractStability(data, start: int = 0, end: int | None = None) -> bool | None:
+    """Whether the last stability analysis in data[start:end] found the wave function stable; None if there is none.
+    An analysis without a stable verdict counts as not stabilized, so the unstable wording never has to be matched."""
+    if FindInMap(data, STABILITY_HEADER, True, start=start, end=end) is None:
+        return None
+    return FindInMap(data, STABLE_VERDICT, True, start=start, end=end) is not None
 
-def ExtractConvergence(data) -> tuple[int, int] | None:
-    """(criteria met, criteria) in the last optimization convergence table, or None if there is no complete row yet.
-    Gaussian's table has 4 rows; ORCA's 4 or 5 (its first cycle has no energy change row)."""
-    finalTableHeader = FindInMap(data, r"Item\s+Value\s+(?:Threshold|Tolerance)\s+Converged", True, True)
+def ExtractConvergence(data, start: int = 0, end: int | None = None) -> tuple[int, int] | None:
+    """(criteria met, criteria) in the last optimization convergence table in data[start:end], or None if there is no
+    complete row yet. Gaussian's table has 4 rows; ORCA's 4 or 5 (its first cycle has no energy change row)."""
+    finalTableHeader = FindInMap(data, r"Item\s+Value\s+(?:Threshold|Tolerance)\s+Converged", True, True, start, end)
     if finalTableHeader is None:
         return None
     SkipInMap(data, finalTableHeader, 0)
@@ -555,9 +620,22 @@ def IncrementSuffix(baseName: str, extra: str) -> str:
     return f"{suffixMatch.group(1)}{extra}{count}"
 
 # Formats checkpoints automatically
-def formCheck(molecule: Molecule) -> None:
-    subprocess.run(["bash", "-l", "-c", f"module load gaussian && formchk {molecule.fullPath}"], check=True)
+# formchk's own output is captured and printed through the console (the TUI can't have it written to its screen).
+# Returns False, after saying why, if it failed: the caller skips that molecule
+def formCheck(molecule: Molecule) -> bool:
+    try:
+        result = subprocess.run(["bash", "-l", "-c", f"module load gaussian && formchk {molecule.fullPath}"],
+                                capture_output=True, text=True)
+    except FileNotFoundError:
+        console.print(f"[error]Couldn't run formchk on {molecule.baseName} (no bash). Skipping it.[/error]")
+        return False
+    if result.stdout.strip():
+        console.print(escape(result.stdout.strip()))
+    if result.returncode != 0:
+        console.print(f"[error]formchk failed on {molecule.baseName}: {escape(result.stderr.strip())}. Skipping it.[/error]")
+        return False
     Retarget(molecule, molecule.rootName, extensionType=".fchk")
+    return True
 
 # Everything CompUtils reads from a source output, from ONE open map (the caller manages MapFile, and runs ClassifySpin
 # on the same map): program, charge/multiplicity, final coordinates, route card and ORCA's input as written.

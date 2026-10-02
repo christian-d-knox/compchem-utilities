@@ -11,7 +11,7 @@ from .molecule import Molecule
 from .prompts import AskStr
 
 # Also runs the first job of a benchmark, which passes its BenchmarkIntent (same fields)
-def genSinglePoint(molecule: Molecule, intent: JobIntent, stalkingSet: set) -> None:
+def genSinglePoint(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
     startTime = time.monotonic()
 
     # The job's name, route template and program, from the method chosen by -ovr
@@ -19,14 +19,14 @@ def genSinglePoint(molecule: Molecule, intent: JobIntent, stalkingSet: set) -> N
 
     # Calls the separate file generation method, feeds directly into runJob. Skip this job if generation failed
     if genFile(molecule, intent):
-        runJob(molecule, intent, stalkingSet)
+        runJob(molecule, intent, trackedJobs)
     endTime = time.monotonic()
     totalTime = round(endTime - startTime,2)
     console.print(f"[operation]Total single point time is {totalTime} seconds.[/operation]")
 
-def genBench(molecule: Molecule, intent: BenchmarkIntent, stalkingSet: set) -> None:
+def genBench(molecule: Molecule, intent: BenchmarkIntent, trackedJobs: list) -> None:
     # First, make the original Single Point
-    genSinglePoint(molecule, intent, stalkingSet)
+    genSinglePoint(molecule, intent, trackedJobs)
     # Since methodFile is defined globally, no need to iterate a line to catch-up after genSinglePoint
     startTime = time.monotonic()
     for index in range(intent.indexOverride + 1, len(Catalog.templates)):
@@ -38,7 +38,7 @@ def genBench(molecule: Molecule, intent: BenchmarkIntent, stalkingSet: set) -> N
         # Only this benchmark variant is skipped on failure; the molecule's other methods still run
         if not genFile(molecule, intent):
             continue
-        runJob(molecule, intent, stalkingSet)
+        runJob(molecule, intent, trackedJobs)
     endTime = time.monotonic()
     totalTime = round(endTime - startTime,2)
     console.print(f"[operation]Total time for non-SP benchmark generation is: {totalTime} seconds.[/operation]")
@@ -72,11 +72,13 @@ def gimmeCubes(molecule: Molecule, intent: CubeIntent) -> None:
             # Writes the specifics for running the Density Cube
             queueFile.write(f"cubegen 1 {keyWord} {molecule.fullPath} {outputName} 0\n\n")
 
-        SubmitJob(queueName)
-        console.print(f"[good]Submitted cube job {molecule.baseName} {cubeOption.value} to the cluster.[/good]")
+        submitted = SubmitJob(queueName)
+        if submitted is not None:
+            console.print(f"[good]Submitted cube job {molecule.baseName} {cubeOption.value} to the cluster (ID "
+                          f"{submitted[0]}).[/good]")
 
 # Because jobs don't always work the first time
-def genReRun(molecule: Molecule, intent: ReRunIntent, stalkingSet: set) -> None:
+def genReRun(molecule: Molecule, intent: ReRunIntent, trackedJobs: list) -> None:
     template, problem = ReRunTemplate(molecule)
     if template is None:
         console.print(f"[error]{problem}. Skipping {molecule.baseName}.[/error]")
@@ -87,4 +89,4 @@ def genReRun(molecule: Molecule, intent: ReRunIntent, stalkingSet: set) -> None:
 
     # Calls the separate file generation method, feeds directly into runJob. Skip this job if generation failed
     if genFile(molecule, intent):
-        runJob(molecule, intent, stalkingSet)
+        runJob(molecule, intent, trackedJobs)

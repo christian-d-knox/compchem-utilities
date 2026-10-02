@@ -22,10 +22,9 @@ ACTION_LABELS = {
     Action.RUN: "Run as Written", Action.SINGLE_POINT: "Single Point", Action.BENCHMARK: "Benchmark",
     Action.RERUN: "Re-Run", Action.CUBE: "Cube Files", Action.FORM_CHECK: "FormChk", Action.GOODVIBES: "GoodVibes",
 }
-# Screens below the divider, opened with ␣, ⏎ or a click: item id -> (label, the Config section it opens).
-# The later ones are listed so the layout matches the design
-SCREEN_ITEMS = {"screen-config": ("Config", "SLURM"), "screen-files": ("Project Files", "Project Files")}
-LATER_SCREENS = ["Queue Monitor"]
+# Screens below the divider, opened with ␣, ⏎ or a click (HomeScreen.OpenScreenItem): item id -> label
+SCREEN_ITEMS = {"screen-stalker": "Job Stalker", "screen-config": "Config", "screen-files": "Project Files",
+                "screen-attributions": "Attributions"}
 _COLLAPSE = Binding.Group("Collapse")
 _ALL_NONE = Binding.Group("All/None")
 _FOLD = Binding.Group("Fold", compact=True)
@@ -36,7 +35,7 @@ STATUS_STYLES = {"Normal": "good", "Error": "error", "Unknown": "warning"}
 
 # Help lines are labels, so Title Case (round 31)
 HELP = {
-    "actions": "↑/↓ Highlight an Action · space Choose It and Go to the Folders · enter Continue to the File List · space / enter on Config or Project Files: Open the Config Editor · 1 Collapse Actions",
+    "actions": "↑/↓ Highlight an Action · space Choose It and Go to the Folders · enter Continue to the File List · space / enter on Job Stalker: Open the Job Stalker · space / enter on Config or Project Files: Open the Config Editor · space / enter on Attributions: Show the License, Disclaimer and Credits · 1 Collapse Actions",
     "folders": "↑/↓ Move · space Open the Folder (It Becomes the CWD) · ←/→ Fold · enter Continue · 2 Collapse Folders",
     "glob":    "Type a Pattern to Select Matching Files · enter / esc Return to the File List",
     "files":   "space Select · a All · n None · / Glob · enter Continue to the Builder",
@@ -172,8 +171,7 @@ class HomeScreen(Screen):
                 with Vertical(id="actions-panel", classes="pane"):
                     items = [ListItem(Label(label), id=f"action-{action.value}") for action, label in ACTION_LABELS.items()]
                     items.append(ListItem(Label("──────────────"), disabled=True))
-                    items += [ListItem(Label(label), id=itemId) for itemId, (label, _) in SCREEN_ITEMS.items()]
-                    items += [ListItem(Label(f"{name} (Later)"), disabled=True, classes="later") for name in LATER_SCREENS]
+                    items += [ListItem(Label(label), id=itemId) for itemId, label in SCREEN_ITEMS.items()]
                     yield ActionList(*items, initial_index=1, id="actions")
                     yield Static("(Collapsed)", classes="collapsed-note")
                 with Vertical(id="folders-panel", classes="pane"):
@@ -198,7 +196,7 @@ class HomeScreen(Screen):
         self.query_one("#files-pane").border_title = f"{Path.cwd().name} · {' '.join(ActionExtensions(self.action))}"
         # A screen item (Config, Project Files) highlighted names itself, and dims the file pane it doesn't use (4.1)
         screenItem = self.ScreenItemHighlighted()
-        label = SCREEN_ITEMS[screenItem][0] if screenItem else ACTION_LABELS[self.action]
+        label = SCREEN_ITEMS[screenItem] if screenItem else ACTION_LABELS[self.action]
         self.query_one("#actions-panel").border_title = f"Actions: {label}"
         for pane in ("#files-pane", "#details"):
             self.query_one(pane).set_class(screenItem is not None, "-dimmed")
@@ -302,7 +300,7 @@ class HomeScreen(Screen):
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.item.id in SCREEN_ITEMS:
-            self.OpenConfig(SCREEN_ITEMS[event.item.id][1])
+            self.OpenScreenItem(event.item.id)
             return
         # Next stop after the action is the folder; with Folders collapsed, the file list
         self.query_one("#files" if self.Collapsed("folders") else "#folders").focus()
@@ -368,6 +366,18 @@ class HomeScreen(Screen):
         Notice(self.app, "Help", HELP.get(focused, "tab / shift+tab Move Between Panes · ↑/↓ Move · 1 / 2 Collapse Panels · "
                                                     "ctrl+q Quit").replace(" · ", "\n"))
 
+    def OpenScreenItem(self, itemId: str) -> None:
+        match itemId:
+            case "screen-stalker":
+                self.app.OpenStalker()
+            case "screen-config":
+                self.OpenConfig("SLURM")
+            case "screen-files":
+                self.OpenConfig("Project Files")
+            case "screen-attributions":
+                from .attributions import AttributionsScreen
+                self.app.push_screen(AttributionsScreen())
+
     def OpenConfig(self, section: str = "SLURM") -> None:
         from .config import ConfigScreen
         keep = set(self.query_one("#files", FileList).selected)
@@ -381,7 +391,7 @@ class HomeScreen(Screen):
     def action_continue(self) -> None:
         screenItem = self.ScreenItemHighlighted()
         if self.query_one("#actions", ActionList).has_focus and screenItem:
-            self.OpenConfig(SCREEN_ITEMS[screenItem][1])
+            self.OpenScreenItem(screenItem)
             return
         files = [Path(name) for name in self.query_one("#files", FileList).selected]
         if self.action not in FILE_ACTIONS:

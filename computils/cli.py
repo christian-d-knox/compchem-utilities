@@ -12,7 +12,7 @@ ACTION_FLAGS = {
     "run": Action.RUN, "singlePoint": Action.SINGLE_POINT, "bench": Action.BENCHMARK, "cube": Action.CUBE,
     "rerun": Action.RERUN, "formcheck": Action.FORM_CHECK, "excel": Action.EXCEL, "goodvibes": Action.GOODVIBES,
     "first": Action.FIRST_TIME_SETUP, "update": Action.UPDATE, "init": Action.INIT_PROJECT,
-    "profile": Action.PROFILE, "refresh": Action.REFRESH,
+    "profile": Action.PROFILE, "refresh": Action.REFRESH, "attributions": Action.ATTRIBUTIONS,
 }
 
 
@@ -40,11 +40,14 @@ def BuildParser() -> argparse.ArgumentParser:
     actionGroup.add_argument('-refresh', '--refresh', nargs='?', const="", metavar="project",
                              help="Rewrite the config files in the current layout, keeping your values (old defaults and "
                                   "invalid values become the current default). With 'project', also the nearest project.toml.")
+    actionGroup.add_argument('-attributions', '--attributions', action='store_true',
+                             help="Show the license, disclaimer and credits: every program, library, method and service CompUtils relies on, with licenses and citations.")
     # Handled in Main() before parsing; listed here for --help and so argparse rejects it alongside another action
     actionGroup.add_argument('-tui', '--tui', action='store_true', help="Open the TUI. Cannot be combined with any other flag.")
 
     # Modifiers (apply to whichever action was chosen, where relevant)
-    parser.add_argument('-st', '--stalk', action='store_true', help="Enable job stalking.")
+    parser.add_argument('-st', '--stalk', action='store_true',
+                        help="Stalk the submitted jobs. On its own, stalk every tracked job (any directory).")
     parser.add_argument('-ch', '--checkpoint', action='store_true', help="Enable Gaussian checkpoint files.")
     parser.add_argument('-nbo', '--nbo7', action='store_true', help="Enable NBO7 keylist.")
     parser.add_argument('-ovr', '--override', type=int, default=0, help="Index override for benchmark methods (zero-indexed).")
@@ -65,10 +68,11 @@ def ParseCLI(argv: list[str]) -> Intent:
     # Set the action from whichever action flag was given
     # Given, not truthy: a bare -gv parses as []
     flag = next((dest for dest in ACTION_FLAGS if getattr(args, dest) not in (None, False)), None)
-    if flag is None:
+    if flag is None and not args.stalk:
         console.print("[error]No action specified. Run `cu --help` for usage.[/error]")
         raise SystemExit(2)
-    draft.action = ACTION_FLAGS[flag]
+    # -st on its own stalks every tracked job
+    draft.action = ACTION_FLAGS[flag] if flag else Action.STALK
 
     # File-bearing actions: expand globs if the shell didn't, collect all files
     if draft.action in FILE_ACTIONS:

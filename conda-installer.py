@@ -3,18 +3,21 @@
 CompUtils Installer.
 
 The one file to download. Run it on the cluster's login node:
-  python3 conda-installer.py                  # asks which branch (default: main)
-  python3 conda-installer.py --branch dev     # no questions
-  python3 conda-installer.py --yes            # no questions, main
-  python3 conda-installer.py --profile FILE   # also set up your lab's profile
+  python3 conda-installer.py
 
-It finds conda (or installs Miniconda to ~/miniconda3), builds or updates the
-'compUtils' environment from the branch's compUtils.yml, installs CompUtils
-itself from that branch, and adds the 'con' alias to activate it. Every step
-is safe to repeat, so a failed run is fixed by running it again.
+This is the dev branch's installer: it installs CompUtils from the dev branch.
+It finds conda (or installs Miniconda to ~/miniconda3, set to use conda-forge
+only), builds or updates the 'compUtils' environment from the branch's
+compUtils.yml, installs CompUtils itself, and adds the 'con' alias to activate
+it. It asks nothing, and every step is safe to repeat, so a failed run is fixed
+by running it again.
 
-A lab profile (a file your lab shares privately: its clusters and shared
-settings) is copied to ~/bin/profile.toml and applied by the first 'cu' run.
+The first 'cu' run sets CompUtils up, and asks for your lab's profile (a file
+your lab shares privately: its clusters and shared settings) if it has one.
+
+CompUtils' environment comes from conda-forge only, so it never needs
+Anaconda's package channels or their Terms of Service. This installer never
+accepts any terms on your behalf.
 
 Power users:
   --conda-dir PATH   find or install conda here instead of the usual places
@@ -43,25 +46,21 @@ DEFAULT_CONDA_DIR = HOME / "miniconda3"
 KNOWN_CONDA_DIRS = [DEFAULT_CONDA_DIR, HOME / "anaconda3", HOME / "miniforge3"]
 MINICONDA_URL = "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-{arch}.sh"
 MINICONDA_ARCHES = {"x86_64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}
-# Anaconda's channels, whose Terms of Service recent Miniconda asks to accept
-TOS_CHANNELS = ["https://repo.anaconda.com/pkgs/main", "https://repo.anaconda.com/pkgs/r"]
 REPO_OWNER = "christian-d-knox"
 REPO_NAME = "compchem-utilities"
-DEFAULT_BRANCH = "main"
+# This is the dev branch's installer, so it installs dev (main's installer installs main)
+BRANCH = "dev"
 ENV_NAME = "compUtils"
-# Where CompUtils looks for the lab profile copy (its default binDirectory), and the header lines it reads (profile.py)
-PROFILE_COPY = HOME / "bin" / "profile.toml"
-PROFILE_NOTE = "#@ A copy of your lab profile, kept by CompUtils. Edit the original, then run: cu -profile"
 
 
-def YmlUrlFor(branch: str) -> str:
-    """The raw-content URL of compUtils.yml on a branch."""
-    return f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{branch}/compUtils.yml"
+def YmlUrl() -> str:
+    """The raw-content URL of the branch's compUtils.yml."""
+    return f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/compUtils.yml"
 
 
-def PackageUrlFor(branch: str) -> str:
+def PackageUrl() -> str:
     """What pip installs CompUtils from (cu --update in dispatch.py builds the same URL)."""
-    return f"git+https://github.com/{REPO_OWNER}/{REPO_NAME}.git@{branch}"
+    return f"git+https://github.com/{REPO_OWNER}/{REPO_NAME}.git@{BRANCH}"
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -124,60 +123,39 @@ def InstallMiniconda(condaDir: Path) -> Path:
     conda = condaDir / "bin" / "conda"
     # Registers conda in ~/.bashrc for future shells (this one is handled by calling conda directly)
     Run([conda, "init", "bash"])
+    UseCondaForgeOnly(conda)
     print("✓ Miniconda installed.")
     return conda
 
 
-def AcceptTerms(conda: Path) -> None:
-    """Accept the Terms of Service of Anaconda's channels, which recent conda asks for before any install."""
-    print("Accepting the Terms of Service of Anaconda's package channels.")
-    channels = [arg for channel in TOS_CHANNELS for arg in ("--channel", channel)]
-    # An older conda has no 'tos' command, and doesn't need one
-    Run([conda, "tos", "accept", "--override-channels", *channels], check=False)
+def UseCondaForgeOnly(conda: Path) -> None:
+    """Set a Miniconda this installer just installed to use conda-forge only. Anaconda's own channels (and the Terms
+    of Service they ask to be accepted) are then never used; CompUtils' environment comes from conda-forge anyway.
+    An existing conda's settings are never changed."""
+    print("Setting the new conda to use conda-forge only.")
+    # Adding a channel to a fresh config writes the implicit 'defaults' after it, which is then removed (a failure there
+    # means it was never set, which is fine)
+    Run([conda, "config", "--add", "channels", "conda-forge"])
+    Run([conda, "config", "--remove", "channels", "defaults"], check=False)
+    Run([conda, "config", "--set", "channel_priority", "strict"])
 
 
-def ListBranches() -> list:
-    """The repository's branch names, or [] if GitHub can't be reached."""
-    url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/branches?per_page=100"
-    try:
-        with urllib.request.urlopen(url, timeout=30) as response:
-            return [branch["name"] for branch in json.loads(response.read().decode())]
-    except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError):
-        return []
+def TermsNote() -> None:
+    """Said before the environment is built: conda's own Terms of Service prompt (if any) is the user's to answer."""
+    print("\nCompUtils' environment uses only the conda-forge channel. If conda asks you to accept Anaconda's Terms "
+          "of Service, that is for Anaconda's channels your conda is set up with, not for CompUtils: the choice is "
+          "yours. To avoid them instead, answer no and run:\n    conda config --remove channels defaults\n"
+          "then run this installer again.")
 
 
-def ChooseBranch(given, assumeYes: bool) -> str:
-    """The branch to install from: --branch if given, else asked (default: main). Checked against GitHub."""
-    branches = ListBranches()
-    if not branches:
-        print("(Couldn't list the branches from GitHub, so the branch can't be checked.)")
-    if given:
-        if branches and given not in branches:
-            Fail(f"There is no branch '{given}'. Branches: {', '.join(branches)}")
-        return given
-    if assumeYes:
-        return DEFAULT_BRANCH
-    if branches:
-        print(f"\nBranches: {', '.join(branches)}")
-    while True:
-        try:
-            answer = input(f"Install from which branch? [{DEFAULT_BRANCH}]: ").strip()
-        except EOFError:
-            return DEFAULT_BRANCH  # no terminal to answer from (piped input)
-        branch = answer or DEFAULT_BRANCH
-        if not branches or branch in branches:
-            return branch
-        print(f"There is no branch '{branch}'.")
-
-
-def FetchYml(branch: str, scratch: Path) -> Path:
+def FetchYml(scratch: Path) -> Path:
     """Download the branch's compUtils.yml into scratch (fresh every run, never kept)."""
     target = scratch / "compUtils.yml"
-    print(f"Downloading compUtils.yml from branch '{branch}'...")
+    print(f"Downloading compUtils.yml from branch '{BRANCH}'...")
     try:
-        Download(YmlUrlFor(branch), target)
+        Download(YmlUrl(), target)
     except urllib.error.HTTPError as error:
-        Fail(f"Couldn't download compUtils.yml from branch '{branch}' ({error.code} {error.reason}).")
+        Fail(f"Couldn't download compUtils.yml from branch '{BRANCH}' ({error.code} {error.reason}).")
     return target
 
 
@@ -195,15 +173,16 @@ def BuildEnv(conda: Path, yml: Path) -> None:
     print(f"✓ Conda environment '{ENV_NAME}' is ready.")
 
 
-def InstallCompUtils(conda: Path, branch: str) -> None:
+def InstallCompUtils(conda: Path) -> None:
     """Install CompUtils from the branch. Its dependencies come from compUtils.yml (hence --no-deps)."""
-    print(f"Installing CompUtils from branch '{branch}'.")
+    print(f"Installing CompUtils from branch '{BRANCH}'.")
     Run(InEnv(conda, "python", "-m", "pip", "install", "--upgrade", "--force-reinstall",
-              "--no-deps", "--no-cache-dir", PackageUrlFor(branch)))
+              "--no-deps", "--no-cache-dir", PackageUrl()))
 
 
 def CheckInstall(conda: Path) -> bool:
-    """Whether 'cu' runs inside the environment."""
+    """Whether 'cu' runs inside the environment. 'cu --help' prints its help without touching the config, so setup
+    is left to the first real run."""
     works = Run(InEnv(conda, "cu", "--help"), check=False) == 0
     print("✓ 'cu' runs." if works else "✗ 'cu' did not run; see the output above.")
     return works
@@ -258,46 +237,14 @@ def RemoveLegacyCuAlias() -> None:
         print("✓ Removed legacy 'alias cu=...' from ~/.alias.")
 
 
-def AskProfile(given, assumeYes: bool):
-    """The lab profile file: --profile if given, else asked (Enter for none). None without one."""
-    if given is None and not assumeYes:
-        try:
-            answer = input("Lab profile file, if your lab gave you one [none]: ").strip()
-        except EOFError:
-            answer = ""
-        given = Path(answer) if answer else None
-    if given is None:
-        return None
-    given = given.expanduser().resolve()
-    if not given.is_file():
-        Fail(f"No lab profile file at {given}.")
-    return given
-
-
-def CopyProfile(profile: Path) -> None:
-    """Copy the lab profile where CompUtils finds it (readable by you only: it can hold the bot token).
-    The first 'cu' run checks and applies it, and later runs offer the lab's changes to it."""
-    header = "\n".join([PROFILE_NOTE, "#@source " + str(profile), "#@pending"]) + "\n"
-    text = profile.read_text(encoding="utf-8")
-    PROFILE_COPY.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(str(PROFILE_COPY), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as out:
-        out.write(header + text)
-    os.chmod(str(PROFILE_COPY), 0o600)
-    print(f"✓ Lab profile copied to {PROFILE_COPY}.")
-
-
 # ─── Entry point ───────────────────────────────────────────────────────────────
 
 def ParseArgs():
-    parser = argparse.ArgumentParser(description="CompUtils installer.")
-    parser.add_argument("--branch", help=f"Git branch to install from (default: ask; '{DEFAULT_BRANCH}' with --yes).")
-    parser.add_argument("--yes", action="store_true", help="Ask nothing; use the defaults.")
+    parser = argparse.ArgumentParser(description=f"CompUtils installer (installs the {BRANCH} branch).")
     parser.add_argument("--conda-dir", type=Path,
                         help=f"Where to find conda, or install Miniconda if it isn't there (default: search, "
                              f"then install to {DEFAULT_CONDA_DIR}).")
     parser.add_argument("--yml", type=Path, help="Build the environment from this env file instead of the branch's.")
-    parser.add_argument("--profile", type=Path, help="Your lab's profile file (default: ask; none with --yes).")
     return parser.parse_args()
 
 
@@ -309,9 +256,7 @@ def Main() -> None:
 
     if args.yml is not None and not args.yml.is_file():
         Fail(f"No env file at {args.yml}.")
-    branch = ChooseBranch(args.branch, args.yes)
-    print(f"\nInstalling from branch: {branch}")
-    profile = AskProfile(args.profile, args.yes)
+    print(f"\nInstalling from branch: {BRANCH}")
 
     installed = False
     try:
@@ -321,15 +266,13 @@ def Main() -> None:
             installed = True
         else:
             print(f"✓ Using conda at {conda}.")
-        AcceptTerms(conda)
+        TermsNote()
         with tempfile.TemporaryDirectory() as scratch:
-            BuildEnv(conda, args.yml or FetchYml(branch, Path(scratch)))
-        InstallCompUtils(conda, branch)
+            BuildEnv(conda, args.yml or FetchYml(Path(scratch)))
+        InstallCompUtils(conda)
         works = CheckInstall(conda)
         RemoveLegacyCuAlias()
         AddAliases()
-        if profile is not None:
-            CopyProfile(profile)
     except (subprocess.CalledProcessError, OSError) as error:  # OSError covers failed downloads
         Fail(f"A step failed: {error}\n  Run the installer again; it picks up where it stopped.")
 
@@ -343,12 +286,12 @@ def Main() -> None:
     print("  2. Activate the environment:     con")
     print(f"       (or equivalently:           conda activate {ENV_NAME})")
     print("  3. Run CompUtils:                cu")
-    print("       (the first run walks you through setting it up" + (", using your lab profile)" if profile else ")"))
+    print("       (the first run walks you through setting it up, and asks for your lab's profile if it has one)")
     print()
     print("Notes:")
     print("  • The 'cu' command is installed inside the conda environment.")
     print("    It is only on PATH after the environment is activated.")
-    print(f"  • Update later with 'cu --update' (it stays on branch '{branch}'),")
+    print(f"  • Update later with 'cu --update' (it stays on branch '{BRANCH}'),")
     print("    or run this installer again.")
 
 

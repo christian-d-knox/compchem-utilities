@@ -133,6 +133,8 @@ class Defaults:
     # Job stalking related
     stalkDuration = 120
     stalkFrequency = 3
+    # Hours an ended job stays in the tracked-jobs list (the Job Stalker, bare cu -st) before it is dropped
+    trackedJobHours = 24
     # Job submission related. Edit this across clusters
     gaussianNonVariant = ["\nmodule purge\nmodule load gaussian\n\n",
                           "export GAUSS_SCRDIR=$SLURM_SCRATCH\nulimit -s unlimited\nexport LC_COLLATE=C\n"]
@@ -188,7 +190,7 @@ class Defaults:
             "broadcastThreshold",
         ],
         "qol.toml": [
-            "colorMode", "bareCommandOpensTUI",
+            "colorMode", "bareCommandOpensTUI", "trackedJobHours",
         ]
     }
 
@@ -265,6 +267,7 @@ class Defaults:
         "broadcastThreshold": "Minimum jobs in a single submission to trigger a broadcast alert.",
         "colorMode": "Determined the level of color accuracy used in terminal output.",
         "bareCommandOpensTUI": "Set to true to open the TUI when `cu` is run with no arguments. `cu -tui` always opens it.",
+        "trackedJobHours": "Hours an ended job stays in the Job Stalker (and bare `cu -st`) before it is dropped.",
     }
 
     # Expected Python type for each config key, used by _CoerceValue to validate values loaded from user-editable TOML.

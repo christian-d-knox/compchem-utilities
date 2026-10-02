@@ -5,6 +5,8 @@
 name: compUtilsDebug
 channels:
   - conda-forge
+  # Never Anaconda's own channels (or their Terms of Service): conda-forge only
+  - nodefaults
 dependencies:
   - python=3.11
   - goodvibes=3.2
