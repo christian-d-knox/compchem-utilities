@@ -1,6 +1,7 @@
-# The CompUtils environment. conda-installer.py builds it and then pip-installs
-# CompUtils from the chosen branch with --no-deps, so this list must cover
-# pyproject.toml's dependencies.
+# The CompUtils environment. conda-installer.py builds it (with only these
+# channels: --override-channels) and then pip-installs CompUtils from its branch
+# with --no-deps, so this list must cover pyproject.toml's dependencies. It reads
+# flat lists only: no nested entries such as '- pip:'.
 name: compUtils
 channels:
   - conda-forge

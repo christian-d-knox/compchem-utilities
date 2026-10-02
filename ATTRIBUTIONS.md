@@ -415,7 +415,7 @@ What CompUtils is installed with, runs on and talks to.
 
 - **Use:** Installed by conda-installer.py when no conda is found, and set to use conda-forge only.
 - **By:** Anaconda, Inc.
-- **License:** Free to install; Anaconda's Terms of Service apply to its package repositories, which CompUtils' environment doesn't use (nodefaults)
+- **License:** Free to install; Anaconda's Terms of Service apply to its package repositories, which CompUtils' environment doesn't use (it is built from conda-forge only)
 - **Link:** https://www.anaconda.com/docs/getting-started/miniconda/main
 
 ### conda-forge

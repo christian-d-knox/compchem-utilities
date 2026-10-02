@@ -250,7 +250,7 @@ SECTIONS = [
                copyright="Copyright (c) 2012, Anaconda, Inc."),
         Credit("Miniconda", "Installed by conda-installer.py when no conda is found, and set to use conda-forge only.",
                "Anaconda, Inc.", "Free to install; Anaconda's Terms of Service apply to its package repositories, "
-               "which CompUtils' environment doesn't use (nodefaults)",
+               "which CompUtils' environment doesn't use (it is built from conda-forge only)",
                "https://www.anaconda.com/docs/getting-started/miniconda/main"),
         Credit("conda-forge", "Every package in the environment comes from its channel.", "The conda-forge community",
                "Recipes BSD-3-Clause; each package keeps its own license", "https://conda-forge.org"),
