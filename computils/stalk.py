@@ -117,6 +117,10 @@ def LoadTracked() -> list[TrackedJob]:
     """Every tracked job, in submission order (ended ones past trackedJobHours dropped)."""
     return sorted(_Prune(_ReadStore()).values(), key=lambda job: job.submitted)
 
+def HasLiveJobs() -> bool:
+    """Whether any tracked job hasn't ended yet (the TUI's stalking routine only pings while one hasn't)."""
+    return any(not job.ended for job in LoadTracked())
+
 # A CLI stalker and the TUI can run at once, each holding its own copies. A record further along wins (ended beats
 # running, a later bookmark beats an earlier one), and a notification sent by either one counts for both
 def _Progress(job: TrackedJob) -> tuple:
@@ -154,25 +158,21 @@ def DismissJobs(keys: set[str]) -> None:
 
 def _ReadQueue(jobs: list[TrackedJob]) -> dict[tuple[str, str], list[str]] | None:
     """{(cluster, job ID): [state, start time, current duration]} for the user's queued jobs, or None if squeue failed.
-    Jobs submitted with -M are looked up on their clusters; the others on the default one, in a call of its own (adding
-    -M would hide the default cluster's jobs, which would then read as ended)."""
+    Each cluster jobs were submitted to with -M is asked in a call of its own, and the jobs without one on the default
+    cluster in another (adding -M would hide the default cluster's jobs). A call's rows are filed under the cluster it
+    asked: squeue only labels them with 'CLUSTER: name' lines when headers are shown, and -h hides them."""
     clusters = sorted({job.cluster for job in jobs if job.cluster})
-    calls = ([QUEUE_COMMAND] if any(not job.cluster for job in jobs) else []) + \
-            ([QUEUE_COMMAND + ["-M", ",".join(clusters)]] if clusters else [])
+    calls = ([("", QUEUE_COMMAND)] if any(not job.cluster for job in jobs) else []) + \
+            [(cluster, QUEUE_COMMAND + ["-M", cluster]) for cluster in clusters]
     queue = {}
-    for command in calls:
+    for cluster, command in calls:
         try:
             result = subprocess.run(command, capture_output=True, text=True)
         except FileNotFoundError:
             return None
         if result.returncode != 0:
             return None
-        cluster = ""
         for line in result.stdout.splitlines():
-            # With -M, each cluster's rows follow a 'CLUSTER: name' line
-            if line.startswith("CLUSTER:"):
-                cluster = line.split(":", 1)[1].strip()
-                continue
             fields = line.split("|")
             if len(fields) == 5:
                 queue[(cluster, fields[0].strip())] = fields[2:]

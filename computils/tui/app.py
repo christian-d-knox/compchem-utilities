@@ -135,6 +135,9 @@ class CompUtilsApp(App):
 
     def _Submitted(self, tracked: bool, submitted: int, expected: int, log) -> None:
         self.pop_screen()
+        # An idle routine (its jobs all ended) picks the new ones up at the end of a fresh interval
+        if tracked:
+            self.stalking.Resume()
         title = f"Submitted {submitted} of {expected} Job{'s' if expected != 1 else ''}"
         severity = "" if submitted == expected else "warning" if submitted else "error"
         # Every submitted job is tracked: offer the stalker; esc (or ⏎ without jobs) returns Home
