@@ -274,10 +274,15 @@ class HomeScreen(Screen):
         if path is None or fields is None:
             details.update("")
             return
-        status = fields["Status"]
-        statusStyle = "error" if "error" in status.lower() else "good" if "normal" in status.lower() else ""
+        # An input has no status (it hasn't run): its stages instead
+        if fields["Stages"] != "—":
+            firstRow = Text(f"Stages: {fields['Stages']}")
+        else:
+            status = fields["Status"]
+            statusStyle = "error" if "error" in status.lower() else "good" if "normal" in status.lower() else ""
+            firstRow = Text.assemble("Status: ", Styled(status, statusStyle))
         details.update(Text.assemble(
-            "Status: ", Styled(status, statusStyle), "\n",
+            firstRow, "\n",
             f"Charge: {fields['Charge']}   Mult: {fields['Mult']}   Spin: {fields['Spin']}\n",
             f"Method: {fields['Method']} ({fields['Program']})   CPU: {fields['CPU']}   Mem: {fields['Mem']}\n",
             f"Keys:   {fields['Keys']}"))

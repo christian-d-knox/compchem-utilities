@@ -13,8 +13,8 @@ from ..console  import console
 from ..catalog  import Catalog, RenderRoute, RouteTemplate
 from ..defaults import Defaults
 from ..fileops  import (MapFile, FindInMap, HasContent, ExtractFrom, ExtractTermination, ExtractResources, IdentifyMethod,
-                        SplitRoute, MoleculeElements, extensionGetter, ReadMolecule, ReRunTemplate, OrcaBlockName,
-                        PROGRAMS)
+                        InputRoutes, JobChecks, SplitRoute, MoleculeElements, extensionGetter, ReadMolecule,
+                        ReRunTemplate, OrcaBlockName, PROGRAMS)
 from ..jobs     import JobFileProblem
 from ..molecule import Molecule
 from ..spin     import ClassifySpin
@@ -71,8 +71,9 @@ def _SourceProgramName(program: str) -> str:
 
 
 def FileDetails(path: Path) -> dict[str, str]:
-    """The Details pane fields for one file (D12). Missing values are '—'. The file is mapped once for all of them."""
-    details = {"Status": "—", "Charge": "—", "Mult": "—", "Spin": "—", "Method": "—", "Program": "—",
+    """The Details pane fields for one file (D12). Missing values are '—'. The file is mapped once for all of them. An
+    input shows only what it says itself: its Stages (what each one runs) in place of an output's Status."""
+    details = {"Status": "—", "Stages": "—", "Charge": "—", "Mult": "—", "Spin": "—", "Method": "—", "Program": "—",
                "CPU": "—", "Mem": "—", "Keys": "—"}
     if not HasContent(path):
         return details
@@ -80,6 +81,10 @@ def FileDetails(path: Path) -> dict[str, str]:
         if path.suffix in OutputExtensions():
             details["Status"] = ExtractTermination(data, -TERMINATION_TAIL).title() or "Unknown (No Termination Line)"
         molecule = ReadMolecule(data, path)
+        if path.suffix == molecule.sourceProgram:
+            kinds = [JobChecks(route, molecule.sourceProgram, molecule.sourceInput).kinds
+                     for route in InputRoutes(data, molecule.sourceProgram)]
+            details["Stages"] = f"{len(kinds)} ({' → '.join(kinds)})"
         if molecule.multiplicity:
             details["Charge"], details["Mult"] = molecule.charge, molecule.multiplicity
             spinState, reason = ClassifySpin(molecule, data)

@@ -114,8 +114,9 @@ def ExtractCoords(data, program: str) -> tuple[list[str], list[str], list[str], 
         fields = data.readline().decode().split()
     return symbols, X, Y, Z
 
-def ExtractCharge(data, program: str) -> tuple[str, str]:
-    """(charge, multiplicity), or ('', '') if not found."""
+def ExtractCharge(data, program: str, fromInput: bool = False) -> tuple[str, str]:
+    """(charge, multiplicity), or ('', '') if not found. fromInput: the file is an input (a Gaussian input has no
+    'Charge =' line: its first stage's charge/multiplicity line follows the route and title sections)."""
     if program == Defaults.orcaExtension:
         # The input's coordinate line ('* xyz 0 1', '*xyzfile 0 1 geom.xyz'), echoed in an output
         chargeMatch = FindInMap(data, r"\*\s*(?:xyzfile|xyz|internal|int|gzmtfile|gzmt|pdbfile)\s+(-?\d+)\s+(\d+)",
@@ -123,6 +124,8 @@ def ExtractCharge(data, program: str) -> tuple[str, str]:
         if chargeMatch is None:
             return "", ""
         return chargeMatch.group(1).decode(), chargeMatch.group(2).decode()
+    if fromInput:
+        return _GaussianInputCharge(data)
     # 'Charge =  0 Multiplicity = 1'. \W also spans non-breaking spaces (bytes C2 A0), which some outputs contain.
     # Anchored on the whole line, so a 'Charge' keyword earlier in the file (or any other file) can't be misread
     chargeMatch = FindInMap(data, r"Charge\W*?(-?\d+)\W+Multiplicity\W*?(\d+)")
@@ -179,12 +182,49 @@ def ExtractRouteLine(data, program: str) -> str:
     echoed = ExtractRouteEcho(data)
     if echoed is not None:
         return echoed
-    # A Gaussian input: the first '#' line
-    routeMatch = FindInMap(data, r"#")
-    if routeMatch is None:
-        return ""
-    data.seek(routeMatch.start())
-    return _StripRouteMarker(data.readline().decode())
+    # A Gaussian input: its first stage's route section
+    return InputRoutes(data, program)[0]
+
+# A Gaussian input's stages are separated by '--Link1--' lines
+LINK1_SEPARATOR = r"(?im)^\s*--link1--\s*$"
+# A Gaussian input's route section: the '#' line and any lines continuing it, up to the blank line ending the section
+GAUSSIAN_INPUT_ROUTE = r"(?m)^[ \t]*(#[^\r\n]*(?:\r?\n[ \t]*[^\s#%][^\r\n]*)*)"
+
+def _GaussianSections(data) -> list[tuple[int, int]]:
+    """(start, end) of each stage of a Gaussian input."""
+    bounds = [0]
+    for separator in regex.finditer(LINK1_SEPARATOR.encode(), data):
+        bounds += [separator.start(), separator.end()]
+    bounds.append(len(data))
+    return list(zip(bounds[::2], bounds[1::2]))
+
+def _GaussianInputRoute(data, start: int, end: int) -> regex.Match | None:
+    return FindInMap(data, GAUSSIAN_INPUT_ROUTE, start=start, end=end)
+
+def InputRoutes(data, program: str) -> list[str]:
+    """One route per stage of an input file, without the leading marker ('' for a Gaussian stage without one). A
+    Gaussian route continued over several lines is joined with spaces. ORCA's multi-step inputs are one stage."""
+    if program == Defaults.orcaExtension:
+        return [OrcaRouteLine(ExtractOrcaInput(data))]
+    routes = []
+    for start, end in _GaussianSections(data):
+        routeMatch = _GaussianInputRoute(data, start, end)
+        routes.append(_StripRouteMarker(" ".join(line.strip() for line in routeMatch.group(1).decode().splitlines()))
+                      if routeMatch else "")
+    return routes
+
+def _GaussianInputCharge(data) -> tuple[str, str]:
+    """A Gaussian input's first charge/multiplicity pair: after the route section, a blank line, the title section and
+    another blank line. ('', '') without one (e.g. Geom=AllCheck, which reads both from the checkpoint)."""
+    start, end = _GaussianSections(data)[0]
+    routeMatch = _GaussianInputRoute(data, start, end)
+    if routeMatch is None or regex.search(rb"(?i)allcheck", routeMatch.group(1)):
+        return "", ""
+    chargeMatch = regex.match(rb"[ \t]*\r?\n(?:[ \t]*\r?\n)*(?:[ \t]*\S[^\r\n]*\r?\n)+[ \t]*\r?\n[ \t]*(-?\d+)[ \t,]+(\d+)",
+                              data, pos=routeMatch.end(), endpos=end)
+    if chargeMatch is None:
+        return "", ""
+    return chargeMatch.group(1).decode(), chargeMatch.group(2).decode()
 
 def ExtractRouteEcho(data, start: int = 0) -> str | None:
     """The first route a Gaussian output echoes after start, or None if none is written there yet. From a bookmark, the
@@ -258,6 +298,13 @@ class StepChecks:
     optimizes: bool
     stability: bool
     label:     str     # Opt, Stability, Freq or SP
+    freq:      bool = False
+
+    @property
+    def kinds(self) -> str:
+        """Everything the step runs, e.g. 'Opt+Freq', 'Stability' or 'SP'."""
+        return "+".join(kind for kind, runs in (("Stability", self.stability), ("Opt", self.optimizes),
+                                                ("Freq", self.freq)) if runs) or "SP"
 
 def JobChecks(route: str, program: str, inputText: str = "") -> StepChecks:
     """The checks a step with this route needs. inputText: ORCA's input, whose %scf block can ask for the analysis."""
@@ -267,13 +314,13 @@ def JobChecks(route: str, program: str, inputText: str = "") -> StepChecks:
         found["stability"] = True
     label = ("Opt" if found["optimizes"] else "Stability" if found["stability"] else "Freq" if found["freq"]
              else "SP")
-    return StepChecks(found["optimizes"], found["stability"], label)
+    return StepChecks(found["optimizes"], found["stability"], label, found["freq"])
 
 def StageCount(data, program: str) -> int:
     """How many stages an input runs: Gaussian's --Link1-- separators + 1. ORCA's multi-step inputs aren't tracked yet."""
     if program != Defaults.gaussianExtension:
         return 1
-    return 1 + len(regex.findall(rb"(?im)^\s*--link1--\s*$", data))
+    return len(_GaussianSections(data))
 
 def FindTermination(data, start: int = 0, end: int | None = None, reverse: bool = True) -> regex.Match | None:
     """The last (or, reverse=False, the first) termination line in data[start:end]. Its offsets are the stalker's
@@ -643,7 +690,7 @@ def formCheck(molecule: Molecule) -> bool:
 # cluster's PERL bullshit
 def ReadMolecule(data, path: Path) -> Molecule:
     program = ExtractProgram(data, path.suffix)
-    charge, multiplicity = ExtractCharge(data, program)
+    charge, multiplicity = ExtractCharge(data, program, fromInput=path.suffix == program)
     symbols, X, Y, Z = ExtractCoords(data, program)
     # The lines are written to the .xyz (WriteXyz) and kept for the input files
     coordinateList = [f"{symbol}   {x}   {y}   {z}\n" for symbol, x, y, z in zip(symbols, X, Y, Z)]

@@ -2,7 +2,9 @@
 
 The stalking routine belongs to the app, not this screen: it starts the first time stalking is opened (an immediate
 ping, then one every stalkFrequency minutes), keeps pinging while the TUI is open (Home included), and is never pinged
-early by new jobs, which wait for the next scheduled ping. Only `p` pings early, and it restarts the interval."""
+early by new jobs, which wait for the next scheduled ping. Only `p` pings early, and it restarts the interval. It only
+runs while a tracked job is live: once none is, it goes idle (no timer, no pings) until a submission resumes it (no
+ping) or opening the stalker with live jobs starts it again (an immediate ping)."""
 import time
 from pathlib import Path
 
@@ -14,8 +16,8 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Static
 
 from ..defaults import Defaults
-from ..stalk    import (AWAITING_PING, LoadTracked, PollQueue, DismissJobs, HeadLine, ProgressLines, StagePosition,
-                        TrackedJob)
+from ..stalk    import (AWAITING_PING, LoadTracked, HasLiveJobs, PollQueue, DismissJobs, HeadLine, ProgressLines,
+                        StagePosition, TrackedJob)
 from .common    import NAV_BINDINGS, NavFooter, Notice, Popup
 from .home      import ShortPath, TitleLine
 from .inspect   import Styled
@@ -52,10 +54,12 @@ def Cells(job: TrackedJob) -> list:
 
 
 class StalkingRoutine:
-    """The app's one stalking routine: the interval timer, and when it last and next pings."""
+    """The app's one stalking routine: the interval timer, and when it last and next pings. The timer only runs while a
+    tracked job is live: it stops (idle) once none is, and a submission resumes it."""
     def __init__(self, app) -> None:
         self.app = app
         self.timer = None
+        self.started = False
         self.nextPing = 0.0
         self.lastPing = ""
         self.failed = False
@@ -64,15 +68,36 @@ class StalkingRoutine:
     def interval(self) -> float:
         return Defaults.stalkFrequency * 60
 
+    @property
+    def idle(self) -> bool:
+        return self.timer is None
+
+    def _StartTimer(self) -> None:
+        self.started = True
+        self.timer = self.app.set_interval(self.interval, self.Ping)
+        self.nextPing = time.monotonic() + self.interval
+
     def Start(self) -> None:
-        """Starts the routine with an immediate ping; a running routine keeps its interval (no ping)."""
-        if self.timer is None:
-            self.timer = self.app.set_interval(self.interval, self.Ping)
+        """Starts an idle routine with an immediate ping, if any job is live; a running routine keeps its interval."""
+        if self.idle and HasLiveJobs():
+            self._StartTimer()
             self.Ping()
 
+    def Resume(self) -> None:
+        """After a submission: an idle routine that has run this session starts its interval again, without a ping
+        (new jobs wait for the next scheduled one). Before the first open, the first open starts it."""
+        if self.started and self.idle and HasLiveJobs():
+            self._StartTimer()
+
+    def Idle(self) -> None:
+        """Stops the timer once no job is live."""
+        if not self.idle and not HasLiveJobs():
+            self.timer.stop()
+            self.timer, self.nextPing = None, 0.0
+
     def PingNow(self) -> None:
-        """Pings now and starts a fresh interval."""
-        if self.timer is None:
+        """Pings now and starts a fresh interval (idle: starts the routine, if any job is live)."""
+        if self.idle:
             self.Start()
             return
         self.timer.reset()
@@ -89,6 +114,7 @@ class StalkingRoutine:
 
     def _Polled(self, failed: bool) -> None:
         self.failed, self.lastPing = failed, time.strftime("%H:%M:%S")
+        self.Idle()
         for screen in self.app.screen_stack:
             if isinstance(screen, StalkerScreen):
                 screen.Reload()
@@ -150,8 +176,12 @@ class StalkerScreen(Screen):
     def RefreshTitle(self) -> None:
         live = sum(1 for job in self.jobs.values() if not job.ended)
         seconds = self.routine.SecondsLeft()
-        status = Styled("Squeue Failed at the Last Ping", "warning") if self.routine.failed else Text(
-            f"Next Ping {seconds // 60}:{seconds % 60:02d}")
+        if self.routine.failed:
+            status = Styled("Squeue Failed at the Last Ping", "warning")
+        elif self.routine.idle:
+            status = Text("Idle (No Live Jobs)")
+        else:
+            status = Text(f"Next Ping {seconds // 60}:{seconds % 60:02d}")
         self.query_one("#title", Static).update(TitleLine("Job Stalker", Styled(f"Stalking {live} Job{'s' if live != 1 else ''}", "info"), status))
 
     def Reload(self) -> None:
@@ -201,8 +231,9 @@ class StalkerScreen(Screen):
         where = " · ".join(part for part in (f"Job ID {job.jobID}", job.cluster, job.location) if part)
         lines = [Text(f"Output: {ShortPath(Path(job.outputPath))}"), Text(where), Text(""), Styled(head, style)]
         lines += [Text(line) for line in ProgressLines(job)]
-        lines += [Text(""), Text(f"Last ping {self.routine.lastPing}" if self.routine.lastPing else "Awaiting first ping",
-                                 "dim")]
+        footer = ("No pings while no job is live" if self.routine.idle else
+                  f"Last ping {self.routine.lastPing}" if self.routine.lastPing else "Awaiting first ping")
+        lines += [Text(""), Text(footer, "dim")]
         details.update(Text("\n").join(lines))
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
@@ -227,6 +258,8 @@ class StalkerScreen(Screen):
         def Answered(result: str) -> None:
             if result == "stop":
                 DismissJobs({job.key})
+                # The last live job: nothing left to ping for
+                self.routine.Idle()
                 self.Reload()
         self.app.push_screen(Popup("Stop Stalking?", f"{job.name} keeps running in the queue, but the Job Stalker and "
                                    f"`cu -st` won't follow it any more.", [("s", "Stop Stalking", "stop")], "warning"),
