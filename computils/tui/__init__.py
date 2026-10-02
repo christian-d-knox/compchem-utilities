@@ -1,5 +1,11 @@
 """The CompUtils TUI. Job actions submit inside the app; the others (FormChk, GoodVibes) return their Intent for Main() to
-dispatch exactly as it would a CLI invocation."""
+dispatch exactly as it would a CLI invocation. After an in-app update the app returns RELAUNCH, and Main() starts the
+TUI again in a fresh process (the new code)."""
+
+# What RunTUI returns after a successful in-app update
+RELAUNCH = "relaunch"
+# Set by the app before relaunching, read by the relaunched one: what was installed (e.g. 'dev @ 8be04d7')
+UPDATED_VARIABLE = "COMPUTILS_UPDATED"
 
 
 def RunTUI():

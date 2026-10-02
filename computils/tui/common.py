@@ -7,8 +7,9 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import Checkbox, DataTable, Footer, Static
+from textual.widgets import Checkbox, DataTable, Footer, OptionList, Static
 from textual.widgets._footer import FooterKey
+from textual.widgets.option_list import Option
 
 from ..console import console
 
@@ -170,6 +171,51 @@ class Popup(ModalScreen[str]):
                 event.stop()
                 self.dismiss(result)
                 return
+
+
+class ChoiceList(Popup):
+    """A Popup asking for one of several entries: the message, then the list. ␣ or ⏎ picks the highlighted entry
+    (dismissed with its value), esc cancels ("cancel"). entries are (value, label)."""
+    DEFAULT_CSS = """
+    ChoiceList OptionList, ChoiceList OptionList:focus { height: auto; max-height: 12; border: none; padding: 0; }
+    """
+
+    def __init__(self, title: str, message: str, entries: list[tuple[str, str]], highlighted: str | None = None) -> None:
+        super().__init__(title, message)
+        self.entries, self.highlighted = entries, highlighted
+
+    def compose(self):
+        with Vertical():
+            yield FrameRule("┌┐", Text(self.title_))
+            with Vertical(classes="side"):
+                yield Static(f"\n{self.message}\n")
+                yield OptionList(*(Option(label, id=value) for value, label in self.entries))
+            yield FrameRule("└┘", id="popup-keys")
+
+    def KeyHints(self) -> list[tuple[str, str]]:
+        return [("␣", "Choose"), ("esc", "Cancel")]
+
+    def on_mount(self) -> None:
+        super().on_mount()
+        options = self.query_one(OptionList)
+        values = [value for value, _ in self.entries]
+        if self.highlighted in values:
+            options.highlighted = values.index(self.highlighted)
+        options.focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        self.dismiss(event.option.id)
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            event.stop()
+            self.dismiss("cancel")
+        elif event.key == "space":
+            event.stop()
+            options = self.query_one(OptionList)
+            if options.highlighted is not None:
+                self.dismiss(options.get_option_at_index(options.highlighted).id)
 
 
 class Busy(Popup):

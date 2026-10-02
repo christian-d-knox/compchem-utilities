@@ -1,5 +1,8 @@
 """The TUI application: Home -> Builder -> submitted in the app (Results pop-up), then Home or the Job Stalker.
-FormChk and GoodVibes still exit with their Intent for Main() to dispatch (D23)."""
+FormChk and GoodVibes still exit with their Intent for Main() to dispatch (D23). Update CompUtils installs in the app,
+then the app exits with RELAUNCH and Main() starts it again on the new code."""
+import os
+
 from rich.markup import escape
 from textual.app import App
 from textual.containers import Center, Middle
@@ -9,7 +12,9 @@ from textual.widgets import Static
 from ..console import console
 from ..intent  import Intent
 from ..        import jobs
-from .common   import CAPTURE, Busy, Popup
+from ..        import update
+from .         import RELAUNCH, UPDATED_VARIABLE
+from .common   import CAPTURE, Busy, ChoiceList, Notice, Popup
 from .home     import HomeScreen
 from .stalker  import StalkerScreen, StalkingRoutine
 
@@ -113,6 +118,10 @@ class CompUtilsApp(App):
     def on_mount(self) -> None:
         self.stalking = StalkingRoutine(self)
         self.push_screen(HomeScreen())
+        # Relaunched after an in-app update: say what was installed
+        updated = os.environ.pop(UPDATED_VARIABLE, "")
+        if updated:
+            Notice(self, "Updated", f"CompUtils is now {updated}.", "good")
 
     # ─── Submitting in the app ────────────────────────────────────────
 
@@ -157,6 +166,77 @@ class CompUtilsApp(App):
         """The Job Stalker; the first time, this starts the stalking routine (an immediate ping)."""
         self.stalking.Start()
         self.push_screen(StalkerScreen())
+
+    # ─── Updating CompUtils ───────────────────────────────────────────
+
+    def OpenUpdate(self) -> None:
+        """Compares the installed commit with GitHub's latest on the remembered branch, then offers the update."""
+        self.push_screen(Busy("Update CompUtils", "Checking GitHub..."))
+
+        def Check() -> None:
+            source = update.InstalledSource()
+            latest = None if source.localPath else update.LatestCommit(source.branch)
+            self.call_from_thread(self._Checked, source, latest)
+        self.run_worker(Check, thread=True, group="update", exit_on_error=False)
+
+    def _Checked(self, source: update.Source, latest) -> None:
+        self.pop_screen()
+        if source.localPath:
+            Notice(self, "Update CompUtils", update.LocalInstallMessage(source), "warning")
+            return
+        upToDate = update.UpToDate(source, latest)
+        choices = [("⏎", "Reinstall" if upToDate else "Update", "install"), ("b", "Other Branch", "branch")]
+
+        def Answered(result: str) -> None:
+            if result == "install":
+                self._Install(source.branch)
+            elif result == "branch":
+                self._ChooseBranch(source)
+        self.push_screen(Popup("Update CompUtils", "\n".join(update.SourceLines(source, latest)), choices), Answered)
+
+    def _ChooseBranch(self, source: update.Source) -> None:
+        """Any branch on GitHub; installing from it makes it the remembered one."""
+        self.push_screen(Busy("Other Branch", "Reading the branches on GitHub..."))
+
+        def Read() -> None:
+            branches = update.Branches()
+            self.call_from_thread(self._BranchesRead, source, branches)
+        self.run_worker(Read, thread=True, group="update", exit_on_error=False)
+
+    def _BranchesRead(self, source: update.Source, branches) -> None:
+        self.pop_screen()
+        if isinstance(branches, str):
+            Notice(self, "Other Branch", f"Couldn't read the branches on GitHub ({branches}).", "error")
+            return
+        entries = [(name, f"{name} (Installed)" if name == source.branch else name) for name in branches]
+
+        def Chosen(branch: str) -> None:
+            if branch == "cancel":
+                return
+            self.push_screen(Popup("Other Branch", f"Install CompUtils from branch {branch}? Later updates will use "
+                                   f"{branch}.", [("⏎", "Install", "install")]),
+                             lambda result: self._Install(branch) if result == "install" else None)
+        self.push_screen(ChoiceList("Other Branch", "Install CompUtils from which branch?", entries, source.branch),
+                         Chosen)
+
+    def _Install(self, branch: str) -> None:
+        self.push_screen(Busy("Update CompUtils", f"Installing from branch {branch}..."))
+
+        def Install() -> None:
+            with CAPTURE.Capture() as log:
+                done = update.Install(branch)
+            self.call_from_thread(self._Installed, branch, done, log[0])
+        self.run_worker(Install, thread=True, group="update", exit_on_error=False)
+
+    def _Installed(self, branch: str, done: bool, log) -> None:
+        self.pop_screen()
+        if not done:
+            self.push_screen(Popup("Update Failed", log, severity="error"))
+            return
+        # The new install's own record says which commit it is
+        source = update.InstalledSource()
+        os.environ[UPDATED_VARIABLE] = f"{source.branch} @ {source.commit[:7]}" if source.commit else branch
+        self.exit(RELAUNCH)
 
     def action_quit(self) -> None:
         # A screen holding unsaved work (the config editor) asks first

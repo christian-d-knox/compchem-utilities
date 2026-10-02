@@ -256,6 +256,9 @@ SECTIONS = [
                "Recipes BSD-3-Clause; each package keeps its own license", "https://conda-forge.org"),
         Credit("Git", "Installs CompUtils from GitHub (pip install git+..., cu --update).", "Linus Torvalds, Junio C "
                "Hamano and the Git contributors", "GPL-2.0-only", "https://git-scm.com"),
+        Credit("GitHub", "Hosts CompUtils; updates read its REST API for the latest commit and the branches.",
+               "GitHub, Inc.", "GitHub Terms of Service (REST API use under GitHub's API terms)",
+               "https://docs.github.com/en/rest"),
         Credit("pip", "Installs CompUtils itself.", "The pip developers", "MIT", "https://pip.pypa.io",
                distribution="pip", copyright="Copyright (c) 2008-present The pip developers (see AUTHORS.txt file)"),
         Credit("setuptools", "Builds CompUtils (pyproject.toml's build backend).", "Python Packaging Authority",

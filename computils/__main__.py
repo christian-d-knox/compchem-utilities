@@ -55,8 +55,12 @@ def Main() -> None:
 
     if opensTUI:
         # The TUI only builds the Intent; it then runs here exactly as a CLI invocation would
-        from .tui import RunTUI
+        from .tui import RunTUI, RELAUNCH
         intent = RunTUI()
+        if intent == RELAUNCH:
+            # Updated in the app: start again on the new code, in the folder the app was in
+            import os
+            os.execv(sys.executable, [sys.executable, "-m", "computils", "-tui"])
         if intent is None:
             return
     elif "-tui" in argv or "--tui" in argv:
