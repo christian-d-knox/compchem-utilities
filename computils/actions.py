@@ -23,6 +23,11 @@ class Action(Enum):
     INIT_PROJECT     = "init"       # -init
     PROFILE          = "profile"    # -profile
     REFRESH          = "refresh"    # -refresh
+    STALK            = "stalk"      # -st on its own
+    ATTRIBUTIONS     = "attributions"  # -attributions
+
+# Actions that submit SLURM jobs, which -st can follow
+JOB_ACTIONS = (Action.RUN, Action.SINGLE_POINT, Action.BENCHMARK, Action.CUBE, Action.RERUN)
 
 # Actions that take a batch of files (IntentDraft.Validate, and the TUI's Continue)
 FILE_ACTIONS = (Action.RUN, Action.SINGLE_POINT, Action.BENCHMARK, Action.CUBE, Action.RERUN, Action.FORM_CHECK,

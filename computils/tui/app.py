@@ -1,10 +1,17 @@
-"""The TUI application: Home -> Builder, then exit with the Intent for Main() to dispatch (D23)."""
+"""The TUI application: Home -> Builder -> submitted in the app (Results pop-up), then Home or the Job Stalker.
+FormChk and GoodVibes still exit with their Intent for Main() to dispatch (D23)."""
+from rich.markup import escape
 from textual.app import App
 from textual.containers import Center, Middle
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
-from .home import HomeScreen
+from ..console import console
+from ..intent  import Intent
+from ..        import jobs
+from .common   import CAPTURE, Busy, Popup
+from .home     import HomeScreen
+from .stalker  import StalkerScreen, StalkingRoutine
 
 MIN_WIDTH, MIN_HEIGHT = 84, 24
 
@@ -54,7 +61,6 @@ class CompUtilsApp(App):
     #body.stacked { layout: vertical; }
     #body.stacked #left { width: 100%; height: auto; layout: horizontal; }
     #body.stacked #left .pane { width: 1fr; }
-    .later { color: $text-muted; }
     /* Home's file pane and Details while a screen item (Config) is highlighted in Actions */
     .-dimmed { text-opacity: 45%; }
 
@@ -64,9 +70,6 @@ class CompUtilsApp(App):
     #form { height: auto; }
     .side { border: none; border-left: solid $secondary; border-right: solid $secondary; padding: 0 1; height: auto; }
     #form Checkbox { margin-right: 2; }
-    #form .nest { width: auto; }
-    /* Stalk ( [ ] Loop ): a checkbox label already carries one space either side */
-    #form Checkbox#stalk, #form Checkbox#loop { margin-right: 0; }
     #methods { height: auto; max-height: 12; }
     #range { width: 24; height: 1; border: none; }
     /* GoodVibes settings: [X] label, value + unit, meaning; the current row is highlighted while the list has focus */
@@ -94,11 +97,63 @@ class CompUtilsApp(App):
     NavFooter KeyGroup.-compact { padding-left: 0; }
     NavFooter KeyGroup.-compact FooterKey.-grouped { margin: 0; }
 
+    /* The Job Stalker: the state panes on the left (each as tall as its jobs), Details on the right */
+    #stalker-body { height: 1fr; }
+    #stalker-left { width: 46; }
+    .state-pane { padding: 0; }
+    .state-pane DataTable { height: auto; max-height: 12; }
+    #stalker-details { width: 1fr; height: 1fr; }
+
+    /* Attributions: one page, scrolling within the screen */
+    #attributions { height: 1fr; }
+
     #too-small { text-align: center; padding: 1 2; border: solid $warning; width: auto; }
     """
 
     def on_mount(self) -> None:
+        self.stalking = StalkingRoutine(self)
         self.push_screen(HomeScreen())
+
+    # ─── Submitting in the app ────────────────────────────────────────
+
+    def Submit(self, intent: Intent, expected: int) -> None:
+        """Dispatches a job Intent in a worker (behind a Busy pop-up), then shows what happened: the CLI's messages,
+        captured with their colours."""
+        self.push_screen(Busy("Submitting", f"Submitting {expected} job{'s' if expected != 1 else ''}..."))
+        self.run_worker(lambda: self._Dispatch(intent, expected), thread=True, group="submit", exit_on_error=False)
+
+    def _Dispatch(self, intent: Intent, expected: int) -> None:
+        from ..dispatch import Dispatch
+        with CAPTURE.Capture() as log:
+            try:
+                tracked = Dispatch(intent)
+            except Exception as error:
+                # A crash must still reach the screen, with what was submitted before it
+                console.print(f"[error]Submission stopped: {escape(repr(error))}[/error]")
+                tracked = []
+        self.call_from_thread(self._Submitted, bool(tracked), jobs.submittedJobs, expected, log[0])
+
+    def _Submitted(self, tracked: bool, submitted: int, expected: int, log) -> None:
+        self.pop_screen()
+        title = f"Submitted {submitted} of {expected} Job{'s' if expected != 1 else ''}"
+        severity = "" if submitted == expected else "warning" if submitted else "error"
+        # Every submitted job is tracked: offer the stalker; esc (or ⏎ without jobs) returns Home
+        choices = [("⏎", "Job Stalker", "stalker")] if tracked else []
+        self.push_screen(Popup(title, log, choices, severity, cancel="Home", ok="Home"), self._AfterResults)
+
+    def _AfterResults(self, result: str) -> None:
+        # Back to Home (the Builder is done), which re-lists its files: the submission wrote new ones
+        while not isinstance(self.screen, HomeScreen):
+            self.pop_screen()
+        home = self.screen
+        home.RefreshFiles(set(home.query_one("#files").selected))
+        if result == "stalker":
+            self.OpenStalker()
+
+    def OpenStalker(self) -> None:
+        """The Job Stalker; the first time, this starts the stalking routine (an immediate ping)."""
+        self.stalking.Start()
+        self.push_screen(StalkerScreen())
 
     def action_quit(self) -> None:
         # A screen holding unsaved work (the config editor) asks first

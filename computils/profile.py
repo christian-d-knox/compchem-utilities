@@ -1,7 +1,8 @@
 """
 Lab profiles: a lab's own clusters and shared settings, kept out of the public repo.
 
-A profile is a TOML file the lab shares privately (e.g. readable only by its group on the cluster). The layout is in
+A profile is a TOML file the lab shares privately (e.g. readable only by its group on the cluster). First-time setup
+asks for it (SetupProfile); `cu -profile FILE` applies one any time. The layout is in
 example-profile.toml:
     name = "..."          shown when the profile is applied
     [settings]            global config keys (the notification bot, the benchmark suite, ...)
@@ -27,10 +28,10 @@ from .prompts  import AskBool, AskStr
 PROFILE_FILE = "profile.toml"
 # Keys a profile can't set: the cluster comes from [clusters], and the others belong to this account
 _NOT_SETTINGS = {"hpcType", "submissionList", "binDirectory", "colorMode"}
-# The copy's header lines. TOML comments, so the copy still parses; conda-installer.py writes the same ones
+# The copy's header lines: TOML comments, so the copy still parses. Any other '#@' line (e.g. the '#@pending' older
+# installers wrote) is skipped as a header line
 _NOTE_LINE = "#@ A copy of your lab profile, kept by CompUtils. Edit the original, then run: cu -profile"
 _SOURCE_PREFIX = "#@source "
-_PENDING_LINE = "#@pending"
 _DECLINED_PREFIX = "#@declined "
 
 
@@ -46,7 +47,6 @@ class InstalledCopy:
     """<binDirectory>/profile.toml: the profile's text, plus what its header records."""
     body: str
     source: str = ""      # where it was applied from
-    pending: bool = False  # placed by the installer, not applied yet
     declined: str = ""    # digest of a changed source the user chose not to apply
 
 
@@ -69,8 +69,6 @@ def _ReadCopy() -> InstalledCopy | None:
         line = lines[index].rstrip("\r\n")
         if line.startswith(_SOURCE_PREFIX):
             copy.source = line[len(_SOURCE_PREFIX):].strip()
-        elif line == _PENDING_LINE:
-            copy.pending = True
         elif line.startswith(_DECLINED_PREFIX):
             copy.declined = line[len(_DECLINED_PREFIX):].strip()
         index += 1
@@ -81,7 +79,7 @@ def _ReadCopy() -> InstalledCopy | None:
 def _WriteCopy(copy: InstalledCopy) -> bool:
     """Save the copy, readable by this account only (it can hold the bot token)."""
     header = [_NOTE_LINE] + ([_SOURCE_PREFIX + copy.source] if copy.source else []) \
-             + ([_PENDING_LINE] if copy.pending else []) + ([_DECLINED_PREFIX + copy.declined] if copy.declined else [])
+             + ([_DECLINED_PREFIX + copy.declined] if copy.declined else [])
     path = _CopyPath()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -211,14 +209,17 @@ def ApplyProfile(source: Path | None = None) -> bool:
 
 
 def SetupProfile(profileFile: Path | None = None) -> None:
-    """First-time setup's profile step: the file given, else the copy the installer left, else ask (Enter skips)."""
+    """First-time setup's profile step, which always asks: the file given (cu -profile FILE on a fresh install), else
+    the copy an earlier install left (applied if wanted), else a file to enter (Enter skips)."""
     if profileFile is not None and ApplyProfile(profileFile):
         return
     copy = _ReadCopy()
     if copy is not None:
-        if copy.pending:
-            ApplyProfile()
-        return
+        profile = ReadProfile(copy.body, str(_CopyPath()))
+        name = escape(profile.name) if profile is not None else "profile"
+        source = f" (from {escape(copy.source)})" if copy.source else ""
+        if AskBool(f"Apply your lab profile {name}{source}?", "y") and ApplyProfile():
+            return
     console.print("[info]If your lab gave you a CompUtils lab profile (its clusters and shared settings), "
                   "enter its file now.[/info]")
     while True:
@@ -228,14 +229,9 @@ def SetupProfile(profileFile: Path | None = None) -> None:
 
 
 def CheckProfileSource() -> None:
-    """Each interactive run (Main): apply a copy the installer left, and offer a source file that has changed."""
+    """Each interactive run (Main): offer a source file that has changed since it was applied."""
     copy = _ReadCopy()
-    if copy is None:
-        return
-    if copy.pending:
-        ApplyProfile()
-        return
-    if not copy.source:
+    if copy is None or not copy.source:
         return
     try:
         text = Path(copy.source).read_text(encoding="utf-8")

@@ -2,10 +2,10 @@
 #
 # A lab profile holds what a lab shares but shouldn't publish: its own clusters (e.g. a private partition) and shared
 # settings (e.g. the Telegram bot that alerts the group). Keep it somewhere only your lab can read, such as your
-# group's shared folder on the cluster (chgrp <group> + chmod 640), and give labmates its path:
+# group's shared folder on the cluster (chgrp <group> + chmod 640), and give labmates its path. CompUtils asks for
+# it during first-time setup (the first `cu` run after installing); afterwards, apply or change it with:
 #
-#   python3 conda-installer.py --profile /path/to/lab-profile.toml    (new installs)
-#   cu -profile /path/to/lab-profile.toml                              (existing installs)
+#   cu -profile /path/to/lab-profile.toml
 #
 # CompUtils keeps a copy in ~/bin/profile.toml, and offers to apply this file again whenever it changes.
 # Every value is checked like the config files; unknown keys are ignored with a warning.

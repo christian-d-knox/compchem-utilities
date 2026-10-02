@@ -9,7 +9,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import Screen
-from textual.widgets import Checkbox, Input, Label, OptionList, Static
+from textual.widgets import Checkbox, Input, OptionList, Static
 
 from ..actions  import Action, CubeOption
 from ..analysis import GoodVibesArguments, SpcPartners
@@ -317,24 +317,21 @@ class BuilderScreen(Screen):
         if self.action in USES_METHODS:
             yield FrameRule("├┤", "Methods (benchmarkMethods)")
             yield MethodList(*self.MethodPrompts(), id="methods", classes="side")
-        yield FrameRule("├┤", "Options")
-        # One tab stop per row: ←/→ move between the checkboxes (OptionRow)
-        with Horizontal(id="options-pane", classes="side"):
-            if self.action == Action.CUBE:
+        # One tab stop per row: ←/→ move between the checkboxes (OptionRow). There is no Stalk option: every submitted
+        # job is tracked, and the Results pop-up offers the Job Stalker. Run as Written has no options left
+        if self.action == Action.CUBE:
+            yield FrameRule("├┤", "Options")
+            with Horizontal(id="options-pane", classes="side"):
                 with OptionRow(id="options"):
                     for option in CubeOption:
                         yield Checkbox(option.value, id=f"cube-{option.value}", compact=True)
                 yield Input(placeholder="MO Range, e.g. 10-15", id="range", disabled=True)
-            else:
+        elif self.action in USES_GENERATION:
+            yield FrameRule("├┤", "Options")
+            with Horizontal(id="options-pane", classes="side"):
                 with OptionRow(id="options"):
-                    if self.action in USES_GENERATION:
-                        yield Checkbox("Checkpoint", id="checkpoint", compact=True)
-                        yield Checkbox("NBO", id="nbo", compact=True)
-                    yield Checkbox("Stalk", id="stalk", compact=True)
-                    # Loop is a sub-flag of Stalk (mock-up 4.2): Stalk ( [ ] Loop )
-                    yield Label("( ", classes="nest")
-                    yield Checkbox("Loop", id="loop", disabled=True, compact=True)
-                    yield Label(")", classes="nest")
+                    yield Checkbox("Checkpoint", id="checkpoint", compact=True)
+                    yield Checkbox("NBO", id="nbo", compact=True)
         if self.action != Action.RUN:
             yield FrameRule("├┤", "Resources")
             yield Static(self.ResourceLine(), id="resources", classes="side")
@@ -480,8 +477,6 @@ class BuilderScreen(Screen):
             draft.cubeOptions = self.CubeOptions()
             draft.orbitalRange = self.query_one("#range", Input).value.strip() or None
             return draft
-        draft.stalk = self.query_one("#stalk", Checkbox).value
-        draft.stalkLoop = draft.stalk and self.query_one("#loop", Checkbox).value
         if self.action in USES_GENERATION:
             draft.checkpoint = self.query_one("#checkpoint", Checkbox).value
             draft.nbo7 = self.query_one("#nbo", Checkbox).value
@@ -525,9 +520,7 @@ class BuilderScreen(Screen):
         self.Refresh()
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
-        # Loop only means something while stalking; Range needs its orbital range
-        if event.checkbox.id == "stalk":
-            self.query_one("#loop", Checkbox).disabled = not event.value
+        # Range needs its orbital range
         if event.checkbox.id == f"cube-{CubeOption.RANGE.value}":
             self.query_one("#range", Input).disabled = not event.value
         self.Refresh()
@@ -560,7 +553,11 @@ class BuilderScreen(Screen):
     def action_submit(self) -> None:
         if not self.ready:
             return
-        self.app.exit(self.Draft().Finalize())
+        # GoodVibes runs in the terminal (its own output); job actions submit inside the app
+        if self.action == Action.GOODVIBES:
+            self.app.exit(self.Draft().Finalize())
+            return
+        self.app.Submit(self.Draft().Finalize(), self.JobCount()[0])
 
     def action_run(self) -> None:
         self.action_submit()

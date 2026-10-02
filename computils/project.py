@@ -11,6 +11,7 @@ from pathlib import Path
 from .console  import ApplyTheme, console
 from .defaults import DELETE, BackUpFile, Defaults, loadToml, writeToml
 from .prompts  import AskBool, AskChoice
+from .        import prompts
 
 # Known shareable files. -init (and the auto-prompt) offer to move these from the CWD into a new marker.
 PROJECT_FILES = ["mixedbasis.txt", "orcablocks.txt", "spinstates.txt"]
@@ -164,6 +165,11 @@ def PromptCreateProject(missingFile: str) -> Path | None:
 
     here = Path.cwd().resolve()
     console.print(f"[warning]{missingFile} not found, and {here} is not inside a project.[/warning]")
+    # The TUI can't ask in the middle of a submission: say how instead (its builder already warned before Submit)
+    if not prompts.interactive:
+        console.print(f"[info]Run `cu -init` where the project should start, and place {missingFile} in its "
+                      f"{Defaults.projectMarker}.[/info]")
+        return None
     if not AskBool("Create a project root so reference files can be shared across subdirectories?", "y"):
         return None
     # Offer the CWD and its parents, excluding the filesystem root

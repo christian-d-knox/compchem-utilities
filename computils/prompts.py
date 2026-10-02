@@ -1,8 +1,17 @@
 from rich.markup import escape
 from .console import console
 
+# False while the TUI runs: its workers own the terminal, so a prompt would hang there. Code that can be reached from the
+# TUI checks this before asking (project.PromptCreateProject); any other Ask* raises, so a stray prompt fails loudly
+interactive = True
+
+def _CheckInteractive(prompt: str) -> None:
+    if not interactive:
+        raise RuntimeError(f"Prompt reached inside the TUI: {prompt}")
+
 def AskBool(prompt: str, default: str = "y", style: str = "prompt") -> bool:
     """Ask a y/n question with a default. Returns True for yes."""
+    _CheckInteractive(prompt)
     default = default.lower()
     if default not in ("y", "n"):
         raise ValueError(f"default must be 'y' or 'n', got {default!r}")
@@ -32,6 +41,7 @@ def AskFloat(prompt: str, default = None, style: str = "prompt") -> float:
 
 def AskStr(prompt: str, default = None, style: str = "prompt") -> str:
     """Ask for a non-empty string (or accept the default, which may be "" to make the answer optional), and return it"""
+    _CheckInteractive(prompt)
     if default:
         suffix = f" ({default}): "
     else:
@@ -47,6 +57,7 @@ def AskStr(prompt: str, default = None, style: str = "prompt") -> str:
 
 def AskChoice(prompt: str, options: list[str], default: int = 0, style: str = "prompt") -> int | None:
     """Ask the user to pick one option from a numbered list. Returns its index, or None if they enter q."""
+    _CheckInteractive(prompt)
     for index, option in enumerate(options):
         console.print(f"  [{style}]\\[{index}][/{style}] {escape(option)}")
     while True:

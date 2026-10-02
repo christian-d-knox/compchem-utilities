@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Optional
 
-from .actions import Action, CubeOption, FILE_ACTIONS
+from .actions import Action, CubeOption, FILE_ACTIONS, JOB_ACTIONS
 
 # CLI flags indicate a specific task. The parser populates an IntentDraft field-by-field as it reads each flag —
 # including setting draft.action to one of the Action enum values. After all fields are set, Validate() checks that the
@@ -148,12 +148,24 @@ class RefreshIntent(Intent):
     project: bool = False
 
 
+@dataclass
+class AttributionsIntent(Intent):
+    """`cu -attributions` — credit for everything CompUtils relies on (attributions.py)."""
+    pass
+
+
+@dataclass
+class StalkIntent(Intent):
+    """`cu -st` on its own — stalk every tracked job, whichever directory it was submitted from."""
+    loop: bool = False
+
+
 # The Intent each Action finalizes to. Excel and Update aren't listed: their fields are named differently on the draft
 _INTENT_TYPES = {
     Action.RUN: RunIntent, Action.SINGLE_POINT: SinglePointIntent, Action.BENCHMARK: BenchmarkIntent,
     Action.RERUN: ReRunIntent, Action.CUBE: CubeIntent, Action.FORM_CHECK: FormCheckIntent,
     Action.GOODVIBES: GoodVibesIntent, Action.FIRST_TIME_SETUP: FirstTimeSetupIntent,
-    Action.INIT_PROJECT: InitProjectIntent, Action.PROFILE: ProfileIntent,
+    Action.INIT_PROJECT: InitProjectIntent, Action.PROFILE: ProfileIntent, Action.ATTRIBUTIONS: AttributionsIntent,
 }
 
 
@@ -231,6 +243,10 @@ class IntentDraft:
         if self.action == Action.PROFILE and self.profileFile is not None and not self.profileFile.is_file():
             errors.append(f"No lab profile file at {self.profileFile}.")
 
+        if self.stalk and self.action not in (*JOB_ACTIONS, Action.STALK):
+            errors.append("-st follows submitted jobs: use it with -r, -sp, -b, -cu or -re, or on its own to stalk every "
+                          "tracked job.")
+
         if self.action == Action.REFRESH and self.refreshScope not in ("", "project"):
             errors.append(f"-refresh takes no argument, or 'project' (got '{self.refreshScope}').")
 
@@ -250,6 +266,8 @@ class IntentDraft:
                 return UpdateIntent(branch=self.updateBranch)
             case Action.REFRESH:
                 return RefreshIntent(project=self.refreshScope == "project")
+            case Action.STALK:
+                return StalkIntent(loop=self.stalkLoop)
         intentType = _INTENT_TYPES.get(self.action)
         if intentType is None:
             raise ValueError(f"Unknown action: {self.action}")
@@ -360,6 +378,21 @@ if __name__ == "__main__":
     draft.refreshScope = "banana"
     assert any("-refresh takes" in e for e in draft.Validate()), "Test 9 should reject another argument"
     print("Test 9 (REFRESH intent): PASS")
+
+    # Test 10: -st on its own stalks every tracked job; -st with a non-job action is rejected
+    draft = IntentDraft()
+    draft.action, draft.stalk, draft.stalkLoop = Action.STALK, True, True
+    assert draft.Validate() == [] and draft.Finalize() == StalkIntent(loop=True)
+    draft = IntentDraft()
+    draft.action, draft.stalk = Action.INIT_PROJECT, True
+    assert any("-st follows" in e for e in draft.Validate()), "Test 10 should reject -st with -init"
+    print("Test 10 (STALK intent): PASS")
+
+    # Test 11: Attributions needs nothing
+    draft = IntentDraft()
+    draft.action = Action.ATTRIBUTIONS
+    assert draft.Validate() == [] and draft.Finalize() == AttributionsIntent()
+    print("Test 11 (ATTRIBUTIONS intent): PASS")
 
     print("=" * 50)
     print("All smoke tests passed.")
