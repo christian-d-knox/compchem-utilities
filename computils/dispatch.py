@@ -4,11 +4,10 @@ Single execution path for all Intents.
 The CLI (argparse) and the TUI both build typed Intents, which arrive
 here. Dispatch() routes to the per-action handler based on intent type.
 """
-import importlib.metadata
-import json
 import subprocess
-import sys
 from pathlib import Path
+
+from rich.markup import escape
 
 from .console   import console
 from .defaults  import Defaults
@@ -180,29 +179,22 @@ def _DispatchFirstTimeSetup(intent: FirstTimeSetupIntent) -> None:
     firstTimeSetup()
 
 
-def _InstalledBranch() -> str:
-    """The branch CompUtils was pip-installed from (pip records it in direct_url.json), else dev (the only branch until
-    the first release; then main)."""
-    try:
-        record = json.loads(importlib.metadata.distribution("compchem-utilities").read_text("direct_url.json") or "{}")
-    except (importlib.metadata.PackageNotFoundError, ValueError):
-        return "dev"
-    return record.get("vcs_info", {}).get("requested_revision") or "dev"
-
-
 def _DispatchUpdate(intent: UpdateIntent) -> None:
-    branch = intent.branch or _InstalledBranch()
-    # The same install conda-installer.py runs
-    repoUrl = f"git+https://github.com/christian-d-knox/compchem-utilities.git@{branch}"
-    console.print(f"[operation]Updating from branch '{branch}'...[/operation]")
-    result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--upgrade", "--force-reinstall",
-         "--no-deps", "--no-cache-dir", repoUrl],
-    )
-    if result.returncode == 0:
-        console.print("[good]Update complete! Next launch of cu will use the new version.[/good]")
-    else:
-        console.print("[error]Update failed. See pip output.[/error]")
+    from . import update
+    from .prompts import AskBool
+    source = update.InstalledSource()
+    if source.localPath:
+        console.print(f"[warning]{escape(update.LocalInstallMessage(source))}[/warning]")
+        return
+    # --update-branch is a deliberate (re)install from that branch: no check
+    if intent.branch is None:
+        latest = update.LatestCommit(source.branch)
+        for line in update.SourceLines(source, latest):
+            console.print(f"[info]{escape(line)}[/info]")
+        if update.UpToDate(source, latest) and not AskBool("Reinstall anyway?", "n"):
+            return
+    if update.Install(intent.branch or source.branch):
+        console.print("[good]The next cu run uses the new version.[/good]")
 
 
 def _DispatchInitProject(intent: InitProjectIntent) -> None:

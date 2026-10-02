@@ -24,7 +24,7 @@ ACTION_LABELS = {
 }
 # Screens below the divider, opened with ␣, ⏎ or a click (HomeScreen.OpenScreenItem): item id -> label
 SCREEN_ITEMS = {"screen-stalker": "Job Stalker", "screen-config": "Config", "screen-files": "Project Files",
-                "screen-attributions": "Attributions"}
+                "screen-update": "Update CompUtils", "screen-attributions": "Attributions"}
 _COLLAPSE = Binding.Group("Collapse")
 _ALL_NONE = Binding.Group("All/None")
 _FOLD = Binding.Group("Fold", compact=True)
@@ -379,6 +379,8 @@ class HomeScreen(Screen):
                 self.OpenConfig("SLURM")
             case "screen-files":
                 self.OpenConfig("Project Files")
+            case "screen-update":
+                self.app.OpenUpdate()
             case "screen-attributions":
                 from .attributions import AttributionsScreen
                 self.app.push_screen(AttributionsScreen())

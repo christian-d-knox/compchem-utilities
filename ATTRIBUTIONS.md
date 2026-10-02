@@ -432,6 +432,13 @@ What CompUtils is installed with, runs on and talks to.
 - **License:** GPL-2.0-only
 - **Link:** https://git-scm.com
 
+### GitHub
+
+- **Use:** Hosts CompUtils; updates read its REST API for the latest commit and the branches.
+- **By:** GitHub, Inc.
+- **License:** GitHub Terms of Service (REST API use under GitHub's API terms)
+- **Link:** https://docs.github.com/en/rest
+
 ### pip (26.0.1)
 
 - **Use:** Installs CompUtils itself.

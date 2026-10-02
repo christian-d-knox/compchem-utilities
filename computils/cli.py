@@ -51,7 +51,7 @@ def BuildParser() -> argparse.ArgumentParser:
     parser.add_argument('-ch', '--checkpoint', action='store_true', help="Enable Gaussian checkpoint files.")
     parser.add_argument('-nbo', '--nbo7', action='store_true', help="Enable NBO7 keylist.")
     parser.add_argument('-ovr', '--override', type=int, default=0, help="Index override for benchmark methods (zero-indexed).")
-    parser.add_argument('--update-branch', type=str, default=None, help="With --update, install from this branch (default: the one CompUtils was installed from, else main).")
+    parser.add_argument('--update-branch', type=str, default=None, help="With --update, install from this branch (default: the one CompUtils was installed from, else dev).")
 
     return parser
 

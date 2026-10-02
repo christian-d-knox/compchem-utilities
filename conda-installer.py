@@ -60,7 +60,7 @@ def YmlUrl() -> str:
 
 
 def PackageUrl() -> str:
-    """What pip installs CompUtils from (cu --update in dispatch.py builds the same URL)."""
+    """What pip installs CompUtils from (computils/update.py's PackageUrl builds the same URL)."""
     return f"git+https://github.com/{REPO_OWNER}/{REPO_NAME}.git@{BRANCH}"
 
 
