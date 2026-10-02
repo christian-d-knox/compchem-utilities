@@ -15,9 +15,10 @@ by running it again.
 The first 'cu' run sets CompUtils up, and asks for your lab's profile (a file
 your lab shares privately: its clusters and shared settings) if it has one.
 
-CompUtils' environment comes from conda-forge only, so it never needs
-Anaconda's package channels or their Terms of Service. This installer never
-accepts any terms on your behalf.
+CompUtils' environment is built from conda-forge only (--override-channels,
+whatever channels your conda is set up with), so it never needs Anaconda's
+package channels or their Terms of Service. This installer never accepts any
+terms on your behalf.
 
 Power users:
   --conda-dir PATH   find or install conda here instead of the usual places
@@ -140,14 +141,6 @@ def UseCondaForgeOnly(conda: Path) -> None:
     Run([conda, "config", "--set", "channel_priority", "strict"])
 
 
-def TermsNote() -> None:
-    """Said before the environment is built: conda's own Terms of Service prompt (if any) is the user's to answer."""
-    print("\nCompUtils' environment uses only the conda-forge channel. If conda asks you to accept Anaconda's Terms "
-          "of Service, that is for Anaconda's channels your conda is set up with, not for CompUtils: the choice is "
-          "yours. To avoid them instead, answer no and run:\n    conda config --remove channels defaults\n"
-          "then run this installer again.")
-
-
 def FetchYml(scratch: Path) -> Path:
     """Download the branch's compUtils.yml into scratch (fresh every run, never kept)."""
     target = scratch / "compUtils.yml"
@@ -164,12 +157,47 @@ def EnvExists(conda: Path) -> bool:
     return any(Path(env).name == ENV_NAME for env in json.loads(output).get("envs", []))
 
 
+def ReadYml(yml: Path):
+    """The env file's channels (nodefaults left out) and package specs. Only the flat lists compUtils.yml uses are
+    read (no yaml module in the standard library); a nested entry such as '- pip:' stops the install."""
+    channels, specs, section = [], [], None
+    for raw in yml.read_text().splitlines():
+        line = raw.split("#", 1)[0].rstrip()
+        if not line.strip():
+            continue
+        if not line[0].isspace():
+            section = line.split(":", 1)[0].strip()
+            continue
+        item = line.strip()
+        if not item.startswith("- "):
+            continue
+        item = item[2:].strip()
+        if item.endswith(":"):
+            Fail(f"{yml} has a nested entry ('{item}'), which this installer can't read. Use a flat list of packages.")
+        if section == "channels" and item != "nodefaults":
+            channels.append(item)
+        elif section == "dependencies":
+            specs.append(item)
+    if not channels or not specs:
+        Fail(f"{yml} lists no channels or no dependencies.")
+    return channels, specs
+
+
 def BuildEnv(conda: Path, yml: Path) -> None:
-    """Create the environment, or bring an existing one up to date (packages you added are kept)."""
-    verb = "update" if EnvExists(conda) else "create"
-    print(f"{'Updating' if verb == 'update' else 'Creating'} the conda environment '{ENV_NAME}' "
-          f"(this can take several minutes; your terminal will be busy).")
-    Run([conda, "env", verb, "-n", ENV_NAME, "-f", yml])
+    """
+    Create the environment, or bring an existing one up to date (packages you
+    added are kept). Only the env file's channels are used (--override-channels):
+    conda's Terms of Service check reads the channels conda is configured with,
+    not an env file's, so 'conda env create' would ask about Anaconda's channels
+    even though nothing comes from them. With conda-forge alone there is
+    nothing to accept.
+    """
+    channels, specs = ReadYml(yml)
+    verb = "install" if EnvExists(conda) else "create"
+    print(f"{'Updating' if verb == 'install' else 'Creating'} the conda environment '{ENV_NAME}' from "
+          f"{', '.join(channels)} (this can take several minutes; your terminal will be busy).")
+    channelArgs = [arg for channel in channels for arg in ("-c", channel)]
+    Run([conda, verb, "-n", ENV_NAME, "--override-channels", *channelArgs, "-y", *specs])
     print(f"✓ Conda environment '{ENV_NAME}' is ready.")
 
 
@@ -266,7 +294,6 @@ def Main() -> None:
             installed = True
         else:
             print(f"✓ Using conda at {conda}.")
-        TermsNote()
         with tempfile.TemporaryDirectory() as scratch:
             BuildEnv(conda, args.yml or FetchYml(Path(scratch)))
         InstallCompUtils(conda)

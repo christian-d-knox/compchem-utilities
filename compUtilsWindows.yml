@@ -2,6 +2,8 @@
 #   conda env create -f compUtilsWindows.yml
 #   conda activate compUtils
 #   pip install -e .    (from a clone, or the git URL conda-installer.py uses)
+# If conda asks you to accept Anaconda's Terms of Service, it is checking the channels your conda is set up with
+# (not this file's): remove them with 'conda config --remove channels defaults', or accept them if you use them.
 name: compUtils
 channels:
   - conda-forge
