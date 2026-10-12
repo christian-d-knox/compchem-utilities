@@ -7,6 +7,7 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.reactive import var
 from textual.screen import Screen
 from textual.widgets import DirectoryTree, Input, Label, ListItem, ListView, SelectionList, Static
 from textual.widgets.selection_list import Selection
@@ -40,8 +41,8 @@ STATUS_STYLES = {"Normal": "good", "Error": "error", "Unknown": "warning"}
 
 # Help lines are labels, so Title Case (round 31)
 HELP = {
-    "actions": "↑/↓ Highlight an Action · space Choose It and Go to the Folders · enter Continue to the File List · space / enter on Scrapers: List the Scrapers (‹ Actions or esc to Go Back) · space / enter on SI Scraper: Open the SI Scraper · space / enter on Job Stalker: Open the Job Stalker ·space / enter on Config or Project Files: Open the Config Editor · space / enter on Attributions: Show the License, Disclaimer and Credits · 1 Collapse Actions",
-    "folders": "↑/↓ Move · space Open the Folder (It Becomes the CWD) · ←/→ Fold · enter Continue · 2 Collapse Folders",
+    "actions": "↑/↓ Highlight an Action · space Choose It and Go to the Folders (the File List Below the Project Root) · enter Continue to the File List · space / enter on Scrapers: List the Scrapers (‹ Actions or esc to Go Back) · space / enter on SI Scraper: Open the SI Scraper · space / enter on Job Stalker: Open the Job Stalker ·space / enter on Config or Project Files: Open the Config Editor · space / enter on Attributions: Show the License, Disclaimer and Credits · 1 Collapse Actions",
+    "folders": "↑/↓ Move · space / Click Open the Folder (It Becomes the CWD) and Go to the File List · ←/→ or Click the Arrow Fold · enter Continue · 2 Collapse Folders",
     "glob":    "Type a Pattern to Select Matching Files · enter / esc Return to the File List",
     "files":   "space Select · a All · n None · / Glob · enter Continue to the Builder",
 }
@@ -107,6 +108,9 @@ class FolderTree(DirectoryTree):
 
     # Plain glyphs: emoji folder icons render unreliably over SSH
     ICON_NODE, ICON_NODE_EXPANDED = "▸ ", "▾ "
+    # Opening a folder (␣, or a click on its name) only opens it; expanding is →/← or a click on its ▸/▾ arrow (Tree's
+    # own toggle target), so the mouse can do what the keys do
+    auto_expand = var(False)
     def filter_paths(self, paths):
         return [path for path in paths if path.is_dir() and not path.name.startswith(".")]
 
@@ -344,14 +348,19 @@ class HomeScreen(Screen):
         if event.item.id in ITEM_LABELS:
             self.OpenScreenItem(event.item.id)
             return
-        # Next stop after the action is the folder; with Folders collapsed, the file list
-        self.query_one("#files" if self.Collapsed("folders") else "#folders").focus()
+        # Next stop after the action is the folder, unless the CWD is already below the tree's root (a project's
+        # subfolder: where to work is known) or Folders is collapsed; then the file list
+        tree = self.query_one("#folders", FolderTree)
+        below = Path.cwd().resolve() != Path(tree.path).resolve()
+        self.query_one("#files" if below or self.Collapsed("folders") else "#folders").focus()
 
     def on_selection_list_selection_highlighted(self, event: SelectionList.SelectionHighlighted) -> None:
         self.ScheduleDetails(Path.cwd() / event.selection.value)
 
     def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
+        # Opening a folder moves on to its files
         self.MoveTo(event.path)
+        self.query_one("#files").focus()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         pattern = event.value.strip()
