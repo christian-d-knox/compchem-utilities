@@ -175,6 +175,22 @@ def ExtractGoodVibes(data) -> list:
         line = data.readline()
     return outputData
 
+def ExtractGoodVibesConditions(data) -> tuple[str, str | None]:
+    """(temperature in K, concentration in mol/l) GoodVibes' table was computed at, as it wrote them ('298.15', '1.0');
+    concentration None for its default 1 atm standard state. Read from the header block above the table."""
+    table = FindInMap(data, "Structure", ignoreCase=True)
+    end = table.start() if table else None
+    temperature = FindInMap(data, r"Temperature = (\S+) Kelvin", end=end)
+    concentration = FindInMap(data, r"Concentration = (\S+) mol/L", end=end)
+    return (temperature.group(1).decode() if temperature else "298.15",
+            concentration.group(1).decode() if concentration else None)
+
+def ExtractTemperature(data, program: str) -> float | None:
+    """The temperature (K) of an output's last thermochemistry, or None without one."""
+    if program == Defaults.orcaExtension:
+        return _LastNumber(data, r"Temperature(?=\s+\.\.\.\s+([\d.]+)\s+K)")
+    return _LastNumber(data, r"Temperature(?=\s+([\d.]+)\s+Kelvin)")
+
 def ExtractRouteLine(data, program: str) -> str:
     """The route card of an input or output file (program from ExtractProgram), without its leading marker."""
     if program == Defaults.orcaExtension:
