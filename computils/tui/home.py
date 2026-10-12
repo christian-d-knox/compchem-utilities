@@ -23,8 +23,13 @@ ACTION_LABELS = {
     Action.RERUN: "Re-Run", Action.CUBE: "Cube Files", Action.FORM_CHECK: "FormChk", Action.GOODVIBES: "GoodVibes",
 }
 # Screens below the divider, opened with ␣, ⏎ or a click (HomeScreen.OpenScreenItem): item id -> label
-SCREEN_ITEMS = {"screen-stalker": "Job Stalker", "screen-config": "Config", "screen-files": "Project Files",
-                "screen-update": "Update CompUtils", "screen-attributions": "Attributions"}
+SCREEN_ITEMS = {"screen-scrapers": "Scrapers ›", "screen-stalker": "Job Stalker", "screen-config": "Config",
+                "screen-files": "Project Files", "screen-update": "Update CompUtils", "screen-attributions": "Attributions"}
+# Scrapers swaps the Actions list for these (they read the whole CWD, so like the screens they dim the file pane);
+# "‹ Actions" (or esc) swaps back
+SCRAPER_ITEMS = {"scraper-si": "SI Scraper"}
+SCRAPERS_BACK = "scrapers-back"
+ITEM_LABELS = {**SCREEN_ITEMS, **SCRAPER_ITEMS, SCRAPERS_BACK: "Scrapers"}
 _COLLAPSE = Binding.Group("Collapse")
 _ALL_NONE = Binding.Group("All/None")
 _FOLD = Binding.Group("Fold", compact=True)
@@ -35,7 +40,7 @@ STATUS_STYLES = {"Normal": "good", "Error": "error", "Unknown": "warning"}
 
 # Help lines are labels, so Title Case (round 31)
 HELP = {
-    "actions": "↑/↓ Highlight an Action · space Choose It and Go to the Folders · enter Continue to the File List · space / enter on Job Stalker: Open the Job Stalker · space / enter on Config or Project Files: Open the Config Editor · space / enter on Attributions: Show the License, Disclaimer and Credits · 1 Collapse Actions",
+    "actions": "↑/↓ Highlight an Action · space Choose It and Go to the Folders · enter Continue to the File List · space / enter on Scrapers: List the Scrapers (‹ Actions or esc to Go Back) · space / enter on SI Scraper: Open the SI Scraper · space / enter on Job Stalker: Open the Job Stalker ·space / enter on Config or Project Files: Open the Config Editor · space / enter on Attributions: Show the License, Disclaimer and Credits · 1 Collapse Actions",
     "folders": "↑/↓ Move · space Open the Folder (It Becomes the CWD) · ←/→ Fold · enter Continue · 2 Collapse Folders",
     "glob":    "Type a Pattern to Select Matching Files · enter / esc Return to the File List",
     "files":   "space Select · a All · n None · / Glob · enter Continue to the Builder",
@@ -62,8 +67,16 @@ def TitleLine(label: str, *extra) -> Text:
 
 
 class ActionList(ListView):
-    # ␣ chooses the highlighted action and moves on to the Folders tree (on_list_view_selected), like a click
-    BINDINGS = [Binding("space", "select_cursor", "Choose", key_display="␣"), CONTINUE]
+    # ␣ chooses the highlighted action and moves on to the Folders tree (on_list_view_selected), like a click.
+    # While it lists the scrapers, esc goes back to the actions
+    BINDINGS = [Binding("space", "select_cursor", "Choose", key_display="␣"), CONTINUE,
+                Binding("escape", "back", "Actions")]
+
+    def check_action(self, action: str, parameters) -> bool | None:
+        return self.screen.scrapers if action == "back" else True
+
+    def action_back(self) -> None:
+        self.screen.call_later(self.screen.ShowScrapers, False)
 
 
 class GlobInput(Input, can_focus=False):
@@ -158,6 +171,7 @@ class HomeScreen(Screen):
     def __init__(self) -> None:
         super().__init__()
         self.action = Action.SINGLE_POINT
+        self.scrapers = False         # the Actions pane lists the scrapers (Scrapers ›)
         self._detailsTimer = None
         self._detailsPath: Path | None = None
         self._nameWidth = 0
@@ -169,10 +183,7 @@ class HomeScreen(Screen):
                 # Panes like Files and Details: the title is on the border, so it is never a tab stop or a click target.
                 # 1 / 2 collapse a pane to its title and a "(Collapsed)" line
                 with Vertical(id="actions-panel", classes="pane"):
-                    items = [ListItem(Label(label), id=f"action-{action.value}") for action, label in ACTION_LABELS.items()]
-                    items.append(ListItem(Label("──────────────"), disabled=True))
-                    items += [ListItem(Label(label), id=itemId) for itemId, label in SCREEN_ITEMS.items()]
-                    yield ActionList(*items, initial_index=1, id="actions")
+                    yield ActionList(*self.ActionItems(), initial_index=1, id="actions")
                     yield Static("(Collapsed)", classes="collapsed-note")
                 with Vertical(id="folders-panel", classes="pane"):
                     yield FolderTree(FindProjectRoot() or Path.cwd(), id="folders")
@@ -187,6 +198,29 @@ class HomeScreen(Screen):
     def on_mount(self) -> None:
         self.RefreshFiles()
         self.query_one("#files").focus()
+
+    @staticmethod
+    def ActionItems() -> list[ListItem]:
+        items = [ListItem(Label(label), id=f"action-{action.value}") for action, label in ACTION_LABELS.items()]
+        items.append(ListItem(Label("──────────────"), disabled=True))
+        return items + [ListItem(Label(label), id=itemId) for itemId, label in SCREEN_ITEMS.items()]
+
+    async def ShowScrapers(self, shown: bool) -> None:
+        """Swap the Actions list for the scrapers (‹ Actions first, the first scraper highlighted), or back (Scrapers
+        highlighted). The same list is refilled, so every #actions query and the collapse still apply."""
+        self.scrapers = shown
+        actions = self.query_one("#actions", ActionList)
+        await actions.clear()
+        if shown:
+            await actions.extend([ListItem(Label("‹ Actions"), id=SCRAPERS_BACK)] +
+                                 [ListItem(Label(label), id=itemId) for itemId, label in SCRAPER_ITEMS.items()])
+            actions.index = 1
+        else:
+            items = self.ActionItems()
+            await actions.extend(items)
+            actions.index = next(index for index, item in enumerate(items) if item.id == "screen-scrapers")
+        self.RefreshHeader()
+        actions.refresh_bindings()
     # ─── State ────────────────────────────────────────────────────────
 
     def RefreshHeader(self) -> None:
@@ -196,8 +230,11 @@ class HomeScreen(Screen):
         self.query_one("#files-pane").border_title = f"{Path.cwd().name} · {' '.join(ActionExtensions(self.action))}"
         # A screen item (Config, Project Files) highlighted names itself, and dims the file pane it doesn't use (4.1)
         screenItem = self.ScreenItemHighlighted()
-        label = SCREEN_ITEMS[screenItem] if screenItem else ACTION_LABELS[self.action]
-        self.query_one("#actions-panel").border_title = f"Actions: {label}"
+        label = ITEM_LABELS[screenItem].removesuffix(" ›") if screenItem else ACTION_LABELS[self.action]
+        if self.scrapers:
+            self.query_one("#actions-panel").border_title = f"Scrapers: {label}" if screenItem in SCRAPER_ITEMS else label
+        else:
+            self.query_one("#actions-panel").border_title = f"Actions: {label}"
         for pane in ("#files-pane", "#details"):
             self.query_one(pane).set_class(screenItem is not None, "-dimmed")
         self.query_one("#folders-panel").border_title = f"Folders: {Path.cwd().name}"
@@ -220,7 +257,7 @@ class HomeScreen(Screen):
 
     def ScreenItemHighlighted(self) -> str | None:
         item = self.query_one("#actions", ActionList).highlighted_child
-        return item.id if item is not None and item.id in SCREEN_ITEMS else None
+        return item.id if item is not None and item.id in ITEM_LABELS else None
 
     def FilePrompt(self, name: str, status: str) -> Text:
         return Text.assemble(name.ljust(self._nameWidth), Styled(status, STATUS_STYLES.get(status, "dim")))
@@ -304,7 +341,7 @@ class HomeScreen(Screen):
         self.RefreshFiles(previous)
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if event.item.id in SCREEN_ITEMS:
+        if event.item.id in ITEM_LABELS:
             self.OpenScreenItem(event.item.id)
             return
         # Next stop after the action is the folder; with Folders collapsed, the file list
@@ -373,6 +410,15 @@ class HomeScreen(Screen):
 
     def OpenScreenItem(self, itemId: str) -> None:
         match itemId:
+            case "screen-scrapers":
+                self.call_later(self.ShowScrapers, True)
+            case "scrapers-back":
+                self.call_later(self.ShowScrapers, False)
+            case "scraper-si":
+                from .scrapers import SIScraperScreen
+                keep = set(self.query_one("#files", FileList).selected)
+                # Writing the SI file (and GoodVibes' table) adds files to the CWD
+                self.app.push_screen(SIScraperScreen(), lambda _: self.RefreshFiles(keep))
             case "screen-stalker":
                 self.app.OpenStalker()
             case "screen-config":

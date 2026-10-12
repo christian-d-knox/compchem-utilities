@@ -1,13 +1,10 @@
 """Builder: one template for every job action, showing only what the action uses (TUI_DESIGN.md mock-up 4.2, D21)."""
-from dataclasses import dataclass
 from pathlib import Path
 
-import regex
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.message import Message
+from textual.containers import Horizontal, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Checkbox, Input, OptionList, Static
 
@@ -16,7 +13,8 @@ from ..analysis import GoodVibesArguments, SpcPartners
 from ..catalog  import Catalog
 from ..defaults import Defaults
 from ..intent   import IntentDraft
-from .common    import NAV_BINDINGS, FrameRule, KeyHint, NavFooter, Notice, OptionRow
+from .common    import (NAME, NAV_BINDINGS, TEXT, FrameRule, KeyHint, NavFooter, Notice, OptionRow, Setting,
+                        SettingsList)
 from .home      import ACTION_LABELS, TitleLine
 from .inspect   import MethodIndices, PreviewMolecule, PreviewRowFor, ProgramName, RowText, Styled
 
@@ -25,9 +23,6 @@ USES_METHODS = (Action.SINGLE_POINT, Action.BENCHMARK)
 USES_GENERATION = (Action.SINGLE_POINT, Action.BENCHMARK, Action.RERUN)
 SHOWN_NAMES = 6                  # the Files section lists this many names, then "… +N More"
 _FILE = Binding.Group("File", compact=True)
-_CHOOSE = Binding.Group("Choose", compact=True)
-# The characters a typed value takes. A box that never takes a space leaves ␣ to turn its row on/off
-NUMBER, NAME, TEXT = r"[\d.eE+-]", r"\w", None
 
 
 def NameList(paths: list[Path]) -> str:
@@ -36,21 +31,6 @@ def NameList(paths: list[Path]) -> str:
 
 
 # ─── GoodVibes settings (mock-up 4.2, GoodVibes) ──────────────────────
-
-@dataclass
-class Setting:
-    """One row of the GoodVibes settings list: [X] Label  value unit  meaning."""
-    key: str
-    label: str
-    meaning: str = ""
-    value: str | None = None    # a typed value; None: the row has no value box
-    unit: str = ""
-    fixed: str = ""             # a value that is shown, not typed (Enthalpy's Head-Gordon, a choice's name)
-    on: bool | None = None      # the checkbox; None: always applies, so no checkbox
-    accepts: str | None = NUMBER  # the characters it takes (a regex); TEXT: anything, a space included
-    choice: str = ""            # rows of one choice share this name, shown as (•) / ( )
-    under: str = ""             # the row this one is a sub-option of: it applies only while that row is on
-
 
 def GoodVibesSettings() -> list[Setting]:
     """Defaults match the CLI wizard's, and Single Point is on: GoodVibes runs once both the opt and the SP are done.
@@ -68,188 +48,6 @@ def GoodVibesSettings() -> list[Setting]:
         Setting("check", "Check", "Check for Level of Theory Consistency", on=False),
         Setting("extra", "Extra Keys", "Passed Directly to GoodVibes", "", on=False, accepts=TEXT),
     ]
-
-
-class ValueInput(Input):
-    """A setting's typed value: one line, as wide as its text, so the unit follows it (298.15 K).
-    A box takes only its setting's characters (a number, a name), so ␣ (on/off) and ? (help) still reach the list and
-    the screen, and the footer keeps showing them. ⏎ runs, like every Builder field (Input's own hidden ⏎ would hide the hint)."""
-    BINDINGS = [Binding("enter", "screen.run", "Run")]
-
-    def __init__(self, row: "SettingRow", value: str) -> None:
-        super().__init__(value, compact=True)
-        self.row = row
-        self.can_focus = False
-        self.Fit(value)
-
-    def Fit(self, value: str) -> None:
-        # One cell past the text, for the cursor; capped to the value column
-        self.styles.width = min(len(value) + 1, 17)
-
-    def check_consume_key(self, key: str, character: str | None) -> bool:
-        if self.row.setting.accepts is None:
-            return super().check_consume_key(key, character)
-        return character is not None and regex.fullmatch(self.row.setting.accepts, character) is not None
-
-    async def _on_key(self, event) -> None:
-        # Other printable keys are left to the bindings (Input would type them)
-        if event.is_printable and not self.check_consume_key(event.key, event.character):
-            event.prevent_default()
-
-
-class SettingBox(Static):
-    def on_click(self) -> None:
-        self.parent.parent.Choose(self.parent)
-        self.parent.parent.action_toggle()
-
-
-class SettingRow(Horizontal, can_focus=False):
-    """Rows without a typed value take the focus themselves (the list keeps only its current row focusable)."""
-    def __init__(self, setting: Setting) -> None:
-        # A choice's rows carry one shared note, which is never greyed with an unselected option
-        super().__init__(classes="setting -choice" if setting.choice else "setting", id=f"setting-{setting.key}")
-        self.setting, self.on = setting, setting.on
-        self.typing = False
-
-    def compose(self) -> ComposeResult:
-        yield SettingBox(classes="setting-box")
-        yield Static(self.setting.label, classes="setting-label")
-        with Horizontal(classes="setting-value"):
-            if self.setting.value is not None:
-                yield ValueInput(self, self.setting.value)
-                yield Static(self.setting.unit, classes="setting-unit")
-            else:
-                yield Static(classes="setting-fixed")
-        yield Static(self.setting.meaning, classes="setting-meaning")
-
-    def on_mount(self) -> None:
-        self.Show()
-        # An Input posts Changed for its initial value too; only typing turns a row on
-        self.call_after_refresh(setattr, self, "typing", True)
-
-    @property
-    def target(self):
-        return self.query_one(ValueInput) if self.setting.value is not None else self
-
-    @property
-    def value(self) -> str:
-        return self.query_one(ValueInput).value if self.setting.value is not None else ""
-
-    def Show(self) -> None:
-        box = "   " if self.on is None or self.setting.choice else "[X]" if self.on else "[ ]"
-        # Text, not str: a str "[X]" is read as markup
-        self.query_one(".setting-box", Static).update(Text(box))
-        if self.setting.value is None:
-            fixed = f"({'•' if self.on else ' '}) {self.setting.fixed}" if self.setting.choice else self.setting.fixed
-            self.query_one(".setting-fixed", Static).update(fixed)
-        # Whatever won't apply (off, an unselected choice, a sub-option of an off row) is greyed out
-        self.set_class(not self.parent.Applies(self), "-off")
-
-    def SetMeaning(self, text: str) -> None:
-        self.query_one(".setting-meaning", Static).update(text)
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        event.input.Fit(event.value)
-        # Typing a value turns its row on; free text (Extra keys) is on whenever it holds something
-        if self.typing:
-            if self.on is not None:
-                self.on = bool(event.value.strip()) if self.setting.accepts is TEXT else True
-            # ...and a sub-option's value turns on the row it belongs to
-            if self.setting.under:
-                self.parent.Row(self.setting.under).on = True
-            self.parent.ShowAll()
-
-    def on_click(self) -> None:
-        self.parent.Choose(self)
-
-
-class SettingsList(Vertical):
-    """The GoodVibes settings: one tab stop, ↑↓ move between rows, ␣ turns the current one on/off (or selects a
-    choice), ←→ switch a choice, and a row with a value is typed into directly."""
-    BINDINGS = [
-        Binding("up", "move(-1)", "Move", show=False),
-        Binding("down", "move(1)", "Move", show=False),
-        Binding("space", "toggle", "On/Off", key_display="␣"),
-        Binding("left", "choose(-1)", "Choose", group=_CHOOSE),
-        Binding("right", "choose(1)", "Choose", group=_CHOOSE),
-    ]
-
-    class Changed(Message):
-        """A row was turned on or off, or a choice changed (typed values post Input.Changed)."""
-
-    def __init__(self, settings: list[Setting], **kwargs) -> None:
-        super().__init__(**kwargs)
-        self.settings, self.index = settings, 0
-
-    def compose(self) -> ComposeResult:
-        for setting in self.settings:
-            yield SettingRow(setting)
-
-    def on_mount(self) -> None:
-        self.Choose(self.rows[0])
-
-    @property
-    def rows(self) -> list[SettingRow]:
-        return list(self.query_children(SettingRow))
-
-    @property
-    def current(self) -> SettingRow:
-        return self.rows[self.index]
-
-    def Row(self, key: str) -> SettingRow:
-        return self.query_one(f"#setting-{key}", SettingRow)
-
-    def Applies(self, row: SettingRow) -> bool:
-        """Whether the row takes part in the run: not off, and not under a row that is off."""
-        return row.on is not False and (not row.setting.under or self.Applies(self.Row(row.setting.under)))
-
-    def ShowAll(self) -> None:
-        # A row's change can grey out (or bring back) its sub-options
-        for row in self.rows:
-            row.Show()
-
-    def Choose(self, row: SettingRow) -> None:
-        """Make row current: the only focusable one, so Tab enters and leaves the list in one stop."""
-        hadFocus = self.screen.focused is not None and self in self.screen.focused.ancestors_with_self
-        self.index = self.rows.index(row)
-        for other in self.rows:
-            other.set_class(other is row, "-current")
-            other.target.can_focus = other is row
-        if hadFocus or self.screen.focused is None:
-            row.target.focus()
-
-    def check_action(self, action: str, parameters) -> bool | None:
-        # Shown dimmed where they do nothing: ←→ off a choice, ␣ on a row that always applies (or Extra keys)
-        if action == "choose":
-            return True if self.current.setting.choice else None
-        if action == "toggle":
-            return True if self.current.on is not None and self.current.setting.accepts is not TEXT else None
-        return True
-
-    def action_move(self, step: int) -> None:
-        self.Choose(self.rows[max(0, min(self.index + step, len(self.rows) - 1))])
-        self.refresh_bindings()
-
-    def action_toggle(self) -> None:
-        row = self.current
-        if row.setting.choice:
-            self.Select(row)
-        elif row.on is not None and row.setting.accepts is not TEXT:
-            row.on = not row.on
-            self.ShowAll()
-            self.post_message(self.Changed())
-
-    def action_choose(self, step: int) -> None:
-        options = [row for row in self.rows if row.setting.choice == self.current.setting.choice]
-        selected = next(index for index, row in enumerate(options) if row.on)
-        self.Select(options[(selected + step) % len(options)])
-
-    def Select(self, chosen: SettingRow) -> None:
-        for row in self.rows:
-            if row.setting.choice == chosen.setting.choice:
-                row.on = row is chosen
-        self.ShowAll()
-        self.post_message(self.Changed())
 
 
 
@@ -277,15 +75,18 @@ class BuilderScreen(Screen):
     BINDINGS = [
         Binding("escape", "back", "Back"),
         Binding("enter", "submit", "Submit"),
-        # GoodVibes runs in the terminal rather than submitting to SLURM; check_action shows one of the two
+        # GoodVibes runs rather than submitting to SLURM; check_action shows one of the two
         Binding("enter", "run", "Run"),
         Binding("question_mark", "help", "Help"),
         *NAV_BINDINGS,
     ]
 
-    def __init__(self, action: Action, files: list[Path]) -> None:
+    def __init__(self, action: Action, files: list[Path], preset: dict[str, str] | None = None,
+                 returns: bool = False) -> None:
+        """preset: GoodVibes setting values to start from (turned on), e.g. {"singlePoint": "SP"}. returns: another
+        screen opened this one and waits for it (dismissed with whether the run succeeded) instead of going Home."""
         super().__init__()
-        self.action, self.files = action, files
+        self.action, self.files, self.preset, self.returns = action, files, preset or {}, returns
         self.methodIndex = 0          # -ovr: Benchmark starts here, Single Point uses only this one
         self.previewIndex = 0         # the highlighted method row
         self.previewFile = 0          # Benchmark: the file previewed across its methods
@@ -342,6 +143,14 @@ class BuilderScreen(Screen):
     def on_mount(self) -> None:
         if self.action in USES_GENERATION:
             self.molecules = {path.name: PreviewMolecule(path) for path in self.files}
+        if self.preset:
+            settings = self.query_one("#settings", SettingsList)
+            for key, value in self.preset.items():
+                row = settings.Row(key)
+                row.SetValue(value)
+                if row.on is not None:
+                    row.on = True
+            settings.ShowAll()
         self.Refresh()
         # Auto-focus scrolls the form when it's taller than the screen; always open at the top (the Files section)
         form = self.query_one("#form", VerticalScroll)
@@ -538,8 +347,8 @@ class BuilderScreen(Screen):
     # ─── Actions ──────────────────────────────────────────────────────
 
     def action_back(self) -> None:
-        # Home keeps its selection, since it was never unmounted
-        self.app.pop_screen()
+        # Home keeps its selection, since it was never unmounted; a screen waiting on this one hears nothing ran
+        self.dismiss(False)
 
     def check_action(self, action: str, parameters) -> bool | None:
         # ⏎ Submit shows dimmed in the footer while nothing can be submitted; ←→ File only for a multi-file Benchmark
@@ -553,9 +362,9 @@ class BuilderScreen(Screen):
     def action_submit(self) -> None:
         if not self.ready:
             return
-        # GoodVibes runs in the terminal (its own output); job actions submit inside the app
+        # Both run inside the app: GoodVibes (its output in the Results pop-up), and job actions
         if self.action == Action.GOODVIBES:
-            self.app.exit(self.Draft().Finalize())
+            self.app.RunGoodVibes(self.Draft().Finalize(), self)
             return
         self.app.Submit(self.Draft().Finalize(), self.JobCount()[0])
 

@@ -1,5 +1,5 @@
-"""The CompUtils TUI. Job actions submit inside the app; the others (FormChk, GoodVibes) return their Intent for Main() to
-dispatch exactly as it would a CLI invocation. After an in-app update the app returns RELAUNCH, and Main() starts the
+"""The CompUtils TUI. Job actions and GoodVibes run inside the app; FormChk returns its Intent for Main() to dispatch
+exactly as it would a CLI invocation. After an in-app update the app returns RELAUNCH, and Main() starts the
 TUI again in a fresh process (the new code)."""
 
 # What RunTUI returns after a successful in-app update
@@ -15,7 +15,7 @@ def RunTUI():
     from .app import CompUtilsApp
     from .common import CAPTURE
     # The extractors the TUI reuses print CLI messages; written to the terminal they would corrupt the screen. Only an
-    # in-app submission's messages are kept (CAPTURE), to be shown in the app. Nothing may prompt in a worker either
+    # in-app run's messages are kept (CAPTURE), to be shown in the app. Nothing may prompt in a worker either
     terminal = console.file
     console.file, prompts.interactive = CAPTURE, False
     try:

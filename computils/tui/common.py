@@ -1,13 +1,17 @@
 """Pieces every TUI screen shares, so navigation looks and works the same everywhere (TUI_DESIGN.md P2)."""
 import io, threading
 from contextlib import contextmanager
+from dataclasses import dataclass
 
+import regex
 from rich.text import Text
+from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.message import Message
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import Checkbox, DataTable, Footer, OptionList, Static
+from textual.widgets import Checkbox, DataTable, Footer, Input, OptionList, Static
 from textual.widgets._footer import FooterKey
 from textual.widgets.option_list import Option
 
@@ -235,20 +239,301 @@ def Notice(app, title: str, message: str, severity: str = "", then=None) -> None
 class FrameRule(Static):
     """One edge of a framed form, drawn to its width: ┌─ label ───── right ─┐ (corners ┌┐, ├┤ or └┘).
     Textual's borders have no ├/┤ junctions, so a form's section dividers are drawn here (P2).
-    label and right are text or Text; setting either redraws the rule."""
+    label and right are text or Text; setting either redraws the rule. split: a form in two columns, the junction
+    (┬ ┼ ┴) at that column; label2 is then the right column's label."""
     label = reactive("")
+    label2 = reactive("")
     right = reactive("")
 
-    def __init__(self, corners: str, label: str = "", **kwargs) -> None:
+    def __init__(self, corners: str, label: str = "", split: int | None = None, label2: str = "", **kwargs) -> None:
         super().__init__(**kwargs)
-        self.corners, self.label = corners, label
+        self.corners, self.label, self.split, self.label2 = corners, label, split, label2
 
     def render(self) -> Text:
         line = self.app.theme_variables["secondary"]
         label = Text.assemble(" ", self.label, " ") if self.label else Text()
         right = Text.assemble(" ", self.right, " ") if self.right else Text()
-        fill = "─" * max(0, self.size.width - 4 - label.cell_len - right.cell_len)
-        return Text.assemble((self.corners[0] + "─", line), label, (fill, line), right, ("─" + self.corners[1], line))
+        if self.split is None:
+            fill = "─" * max(0, self.size.width - 4 - label.cell_len - right.cell_len)
+            return Text.assemble((self.corners[0] + "─", line), label, (fill, line), right, ("─" + self.corners[1], line))
+        junction = {"┌┐": "┬", "├┤": "┼", "└┘": "┴"}[self.corners]
+        label2 = Text.assemble(" ", self.label2, " ") if self.label2 else Text()
+        leftFill = "─" * max(0, self.split - 2 - label.cell_len)
+        rightFill = "─" * max(0, self.size.width - self.split - 4 - label2.cell_len - right.cell_len)
+        return Text.assemble((self.corners[0] + "─", line), label, (leftFill + junction + "─", line), label2,
+                             (rightFill, line), right, ("─" + self.corners[1], line))
+
+# ─── Settings lists (GoodVibes Builder 4.2b, SI Scraper 4.10) ─────────
+
+_CHOOSE = Binding.Group("Choose", compact=True)
+# The characters a typed value takes. A box that never takes a space leaves ␣ to turn its row on/off
+NUMBER, NAME, TEXT = r"[\d.eE+-]", r"\w", None
+
+
+@dataclass
+class Setting:
+    """One row of a settings list: [X] Label  value unit  meaning."""
+    key: str
+    label: str
+    meaning: str = ""
+    value: str | None = None    # a typed value; None: the row has no value box
+    unit: str = ""
+    fixed: str = ""             # a value that is shown, not typed (Enthalpy's Head-Gordon, a choice's name)
+    on: bool | None = None      # the checkbox; None: always applies, so no checkbox
+    accepts: str | None = NUMBER  # the characters it takes (a regex); TEXT: anything, a space included
+    choice: str = ""            # rows of one choice share this name, shown as (•) / ( )
+    under: str = ""             # the row this one is a sub-option of: it applies only while that row is on
+
+
+class ValueInput(Input):
+    """A setting's typed value: one line, as wide as its text, so the unit follows it (298.15 K).
+    A box takes only its setting's characters (a number, a name), so ␣ (on/off) and ? (help) still reach the list and
+    the screen, and the footer keeps showing them. ⏎ runs, like every Builder field (Input's own hidden ⏎ would hide the hint)."""
+    BINDINGS = [Binding("enter", "screen.run", "Run")]
+
+    def __init__(self, row: "SettingRow", value: str, widest: int) -> None:
+        super().__init__(value, compact=True)
+        self.row, self.widest = row, widest
+        self.can_focus = False
+        self.Fit(value)
+
+    def Fit(self, value: str) -> None:
+        # One cell past the text, for the cursor; capped to the value column
+        self.styles.width = min(len(value) + 1, self.widest)
+
+    def check_consume_key(self, key: str, character: str | None) -> bool:
+        if self.row.setting.accepts is None:
+            return super().check_consume_key(key, character)
+        return character is not None and regex.fullmatch(self.row.setting.accepts, character) is not None
+
+    async def _on_key(self, event) -> None:
+        # Other printable keys are left to the bindings (Input would type them)
+        if event.is_printable and not self.check_consume_key(event.key, event.character):
+            event.prevent_default()
+
+
+class SettingBox(Static):
+    def on_click(self) -> None:
+        row = next(ancestor for ancestor in self.ancestors if isinstance(ancestor, SettingRow))
+        row.parent.Choose(row)
+        row.parent.action_toggle()
+
+
+class SettingRow(Horizontal, can_focus=False):
+    """Rows without a typed value take the focus themselves (the list keeps only its current row focusable).
+    Stacked (a narrow column): the label on its own line, the value under it, then the meaning."""
+    def __init__(self, setting: Setting, stacked: bool, widest: int, inputClass: type["ValueInput"]) -> None:
+        # A choice's rows carry one shared note, which is never greyed with an unselected option
+        classes = "setting -choice" if setting.choice else "setting"
+        super().__init__(classes=classes + (" -stacked" if stacked else ""), id=f"setting-{setting.key}")
+        self.setting, self.on, self.stacked, self.widest = setting, setting.on, stacked, widest
+        self.inputClass = inputClass
+        self.typing = False
+
+    def compose(self) -> ComposeResult:
+        if self.stacked:
+            with Horizontal(classes="setting-head" + ("" if self.setting.label else " -empty")):
+                yield SettingBox(classes="setting-box")
+                yield Static(self.setting.label, classes="setting-label")
+        else:
+            yield SettingBox(classes="setting-box")
+            yield Static(self.setting.label, classes="setting-label")
+        with Horizontal(classes="setting-value"):
+            if self.setting.value is not None:
+                yield self.inputClass(self, self.setting.value, self.widest)
+                yield Static(self.setting.unit, classes="setting-unit")
+            else:
+                yield Static(classes="setting-fixed")
+        yield Static(self.setting.meaning, classes="setting-meaning" + ("" if self.setting.meaning else " -empty"))
+
+    def on_mount(self) -> None:
+        self.Show()
+        # An Input posts Changed for its initial value too; only typing turns a row on
+        self.call_after_refresh(setattr, self, "typing", True)
+
+    @property
+    def target(self):
+        return self.query_one(ValueInput) if self.setting.value is not None else self
+
+    @property
+    def value(self) -> str:
+        return self.query_one(ValueInput).value if self.setting.value is not None else ""
+
+    def SetValue(self, value: str) -> None:
+        # Set from code (a preset, a detected value): like the initial value, it doesn't count as typing
+        typing, self.typing = self.typing, False
+        self.query_one(ValueInput).value = value
+        self.call_after_refresh(setattr, self, "typing", typing)
+
+    def Show(self) -> None:
+        box = "   " if self.on is None or self.setting.choice else "[X]" if self.on else "[ ]"
+        # Text, not str: a str "[X]" is read as markup. Stacked, a row without a checkbox starts at the edge
+        self.query_one(".setting-box", Static).update(Text(box))
+        self.query_one(".setting-box", Static).display = not (self.stacked and not box.strip())
+        if self.setting.value is None:
+            fixed = f"({'•' if self.on else ' '}) {self.setting.fixed}" if self.setting.choice else self.setting.fixed
+            self.query_one(".setting-fixed", Static).update(fixed)
+        # Whatever won't apply (off, an unselected choice, a sub-option of an off row) is greyed out
+        self.set_class(not self.parent.Applies(self), "-off")
+
+    def SetMeaning(self, text: str) -> None:
+        meaning = self.query_one(".setting-meaning", Static)
+        meaning.update(text)
+        meaning.set_class(not text, "-empty")
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        event.input.Fit(event.value)
+        # Typing a value turns its row on; free text (Extra keys) is on whenever it holds something
+        if self.typing:
+            if self.on is not None:
+                self.on = bool(event.value.strip()) if self.setting.accepts is TEXT else True
+            # ...and a sub-option's value turns on the row it belongs to
+            if self.setting.under:
+                self.parent.Row(self.setting.under).on = True
+            self.parent.ShowAll()
+
+    def on_click(self) -> None:
+        self.parent.Choose(self)
+
+
+class SettingsList(Vertical):
+    """A settings list: one tab stop, ↑↓ move between rows, ␣ turns the current one on/off (or selects a choice), ←→
+    switch a choice, and a row with a value is typed into directly. stacked: for a narrow column (label above value);
+    widest caps a typed value's box."""
+    BINDINGS = [
+        Binding("up", "move(-1)", "Move", show=False),
+        Binding("down", "move(1)", "Move", show=False),
+        Binding("space", "toggle", "On/Off", key_display="␣"),
+        Binding("left", "choose(-1)", "Choose", group=_CHOOSE),
+        Binding("right", "choose(1)", "Choose", group=_CHOOSE),
+    ]
+
+    class Changed(Message):
+        """A row was turned on or off, or a choice changed (typed values post Input.Changed)."""
+
+    def __init__(self, settings: list[Setting], stacked: bool = False, widest: int = 17,
+                 inputClass: type["ValueInput"] | None = None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.settings, self.index, self.stacked, self.widest = settings, 0, stacked, widest
+        # A screen whose ⏎ isn't Run (the SI Scraper's Write) gives its own ValueInput subclass
+        self.inputClass = inputClass or ValueInput
+
+    def compose(self) -> ComposeResult:
+        for setting in self.settings:
+            yield SettingRow(setting, self.stacked, self.widest, self.inputClass)
+
+    def on_mount(self) -> None:
+        self.Choose(self.rows[0])
+
+    @property
+    def rows(self) -> list[SettingRow]:
+        return list(self.query_children(SettingRow))
+
+    @property
+    def current(self) -> SettingRow:
+        return self.rows[self.index]
+
+    def Row(self, key: str) -> SettingRow:
+        return self.query_one(f"#setting-{key}", SettingRow)
+
+    def Chosen(self, choice: str) -> str:
+        """The key of a choice's selected row."""
+        return next(row.setting.key for row in self.rows if row.setting.choice == choice and row.on)
+
+    def Applies(self, row: SettingRow) -> bool:
+        """Whether the row takes part: not off, and not under a row that is off."""
+        return row.on is not False and (not row.setting.under or self.Applies(self.Row(row.setting.under)))
+
+    def ShowAll(self) -> None:
+        # A row's change can grey out (or bring back) its sub-options
+        for row in self.rows:
+            row.Show()
+
+    def Choose(self, row: SettingRow) -> None:
+        """Make row current: the only focusable one, so Tab enters and leaves the list in one stop."""
+        hadFocus = self.screen.focused is not None and self in self.screen.focused.ancestors_with_self
+        self.index = self.rows.index(row)
+        for other in self.rows:
+            other.set_class(other is row, "-current")
+            other.target.can_focus = other is row
+        if hadFocus or self.screen.focused is None:
+            row.target.focus()
+
+    def check_action(self, action: str, parameters) -> bool | None:
+        # Shown dimmed where they do nothing: ←→ off a choice, ␣ on a row that always applies (or Extra keys)
+        if action == "choose":
+            return True if self.current.setting.choice else None
+        if action == "toggle":
+            return True if self.current.on is not None and self.current.setting.accepts is not TEXT else None
+        return True
+
+    def action_move(self, step: int) -> None:
+        self.Choose(self.rows[max(0, min(self.index + step, len(self.rows) - 1))])
+        self.refresh_bindings()
+
+    def action_toggle(self) -> None:
+        row = self.current
+        if row.setting.choice:
+            self.Select(row)
+        elif row.on is not None and row.setting.accepts is not TEXT:
+            row.on = not row.on
+            self.ShowAll()
+            self.post_message(self.Changed())
+
+    def action_choose(self, step: int) -> None:
+        options = [row for row in self.rows if row.setting.choice == self.current.setting.choice]
+        selected = next(index for index, row in enumerate(options) if row.on)
+        self.Select(options[(selected + step) % len(options)])
+
+    def Select(self, chosen: SettingRow) -> None:
+        for row in self.rows:
+            if row.setting.choice == chosen.setting.choice:
+                row.on = row is chosen
+        self.ShowAll()
+        self.post_message(self.Changed())
+
+
+# ─── Re-orderable tables (List editor, SI Scraper species) ────────────
+
+def MoveRow(rows: list, index: int, target: int) -> bool:
+    """Move rows[index] to target (in place), the others shifting; False if either is out of range or they're equal."""
+    if not (0 <= index < len(rows) and 0 <= target < len(rows)) or index == target:
+        return False
+    rows.insert(target, rows.pop(index))
+    return True
+
+
+class ReorderableTable(EditableTable):
+    """A table whose rows [ ] move (the screen's move action) and the mouse drags: press on a row, move to where it
+    goes (it follows the pointer), release. A press without movement stays a click. The screen's move(step) and
+    drag_to(index, target) actions do the moving, so its own row list stays the one source of order."""
+    _dragRow: int | None = None
+
+    def _RowAt(self, event) -> int | None:
+        row = event.style.meta.get("row") if event.style else None
+        return row if isinstance(row, int) and row >= 0 else None
+
+    def on_mouse_down(self, event) -> None:
+        self._dragRow = self._RowAt(event)
+        if self._dragRow is not None:
+            self.capture_mouse()
+
+    def on_mouse_move(self, event) -> None:
+        if self._dragRow is None:
+            return
+        # While captured, the row under the pointer comes from its position (above or below the table included)
+        offset = event.get_content_offset_capture(self)
+        target = offset.y - (self.header_height if self.show_header else 0) + self.scroll_offset.y
+        target = max(0, min(target, self.row_count - 1))
+        if target != self._dragRow:
+            self.screen.DragRow(self._dragRow, target)
+            self._dragRow = target
+
+    def on_mouse_up(self, event) -> None:
+        if self._dragRow is not None:
+            self._dragRow = None
+            self.release_mouse()
+
 
 class OutputCapture(io.TextIOBase):
     """Stands in for the console's file while the TUI runs. CLI messages written by a thread inside Capture() (an

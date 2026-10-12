@@ -4,7 +4,7 @@ Single execution path for all Intents.
 The CLI (argparse) and the TUI both build typed Intents, which arrive
 here. Dispatch() routes to the per-action handler based on intent type.
 """
-import subprocess
+import os, subprocess
 from pathlib import Path
 
 from rich.markup import escape
@@ -161,11 +161,18 @@ def _DispatchGoodVibes(intent: GoodVibesIntent) -> None:
     # A stale table from an earlier run must never be converted after a failed one
     Path(GOODVIBES_OUTPUT).unlink(missing_ok=True)
     console.print("[operation]Running GoodVibes...[/operation]")
+    # Its output goes through the console: the terminal still shows it, and inside the TUI the Results pop-up does
+    # (a subprocess writing to the real terminal under Textual would corrupt the screen)
     try:
-        result = subprocess.run(["goodvibes", *GoodVibesArguments(intent), *(str(path) for path in inputs)])
+        result = subprocess.run(["goodvibes", *GoodVibesArguments(intent), *(str(path) for path in inputs)],
+                                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     except FileNotFoundError:
         console.print("[error]GoodVibes isn't installed, or isn't on PATH.[/error]")
         return
+    for output in (result.stdout, result.stderr):
+        if output.strip():
+            console.print(escape(output.rstrip()), highlight=False)
     if result.returncode != 0:
         console.print("[error]GoodVibes stopped with an error (see above). No Excel file was written.[/error]")
         return

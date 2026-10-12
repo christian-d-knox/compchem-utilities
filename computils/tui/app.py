@@ -1,7 +1,8 @@
-"""The TUI application: Home -> Builder -> submitted in the app (Results pop-up), then Home or the Job Stalker.
-FormChk and GoodVibes still exit with their Intent for Main() to dispatch (D23). Update CompUtils installs in the app,
+"""The TUI application: Home -> Builder -> submitted (or GoodVibes run) in the app (Results pop-up), then Home or the
+Job Stalker. FormChk still exits with its Intent for Main() to dispatch (D23). Update CompUtils installs in the app,
 then the app exits with RELAUNCH and Main() starts it again on the new code."""
-import os
+import os, time
+from pathlib import Path
 
 from rich.markup import escape
 from textual.app import App
@@ -9,6 +10,7 @@ from textual.containers import Center, Middle
 from textual.screen import ModalScreen
 from textual.widgets import Static
 
+from ..analysis import GOODVIBES_OUTPUT, SpcPartners
 from ..console import console
 from ..intent  import Intent
 from ..        import jobs
@@ -90,6 +92,19 @@ class CompUtilsApp(App):
     .setting.-off Static, .setting.-off Input { text-opacity: 45%; }
     .setting.-off.-choice .setting-meaning { text-opacity: 100%; }
     #settings:focus-within .setting.-current { background: $boost; }
+    /* Stacked (a narrow column, the SI Scraper): the label, then the value, then the note, each on its own line */
+    .setting.-stacked { layout: vertical; height: auto; }
+    .setting.-stacked .setting-head { height: 1; }
+    .setting.-stacked .setting-label { width: 1fr; }
+    .setting.-stacked .setting-value { width: 1fr; padding-left: 1; }
+    .setting.-stacked .setting-meaning { padding-left: 1; }
+    .setting.-stacked .-empty { display: none; }
+
+    /* The SI Scraper: Settings and Species side by side in one frame (the rules draw the ┬ ┴ junctions) */
+    #si-body { height: 1fr; }
+    #si-left { width: 30; height: 1fr; }
+    #si-right { width: 1fr; height: 1fr; border-right: solid $secondary; }
+    #species { height: 1fr; }
 
     /* The config editor: the table takes the height the details strip leaves */
     #config-table { height: 1fr; }
@@ -125,22 +140,55 @@ class CompUtilsApp(App):
 
     # ─── Submitting in the app ────────────────────────────────────────
 
-    def Submit(self, intent: Intent, expected: int) -> None:
-        """Dispatches a job Intent in a worker (behind a Busy pop-up), then shows what happened: the CLI's messages,
-        captured with their colours."""
-        self.push_screen(Busy("Submitting", f"Submitting {expected} job{'s' if expected != 1 else ''}..."))
-        self.run_worker(lambda: self._Dispatch(intent, expected), thread=True, group="submit", exit_on_error=False)
+    def RunInApp(self, intent: Intent, busy: tuple[str, str], Finished) -> None:
+        """Dispatches an Intent in a worker (behind a Busy pop-up), then Finished(tracked jobs, log): the CLI's
+        messages, captured with their colours."""
+        self.push_screen(Busy(*busy))
+        self.run_worker(lambda: self._Dispatch(intent, Finished), thread=True, group="submit", exit_on_error=False)
 
-    def _Dispatch(self, intent: Intent, expected: int) -> None:
+    def _Dispatch(self, intent: Intent, Finished) -> None:
         from ..dispatch import Dispatch
         with CAPTURE.Capture() as log:
             try:
-                tracked = Dispatch(intent)
+                tracked = Dispatch(intent) or []
             except Exception as error:
-                # A crash must still reach the screen, with what was submitted before it
-                console.print(f"[error]Submission stopped: {escape(repr(error))}[/error]")
+                # A crash must still reach the screen, with what ran before it
+                console.print(f"[error]Stopped: {escape(repr(error))}[/error]")
                 tracked = []
-        self.call_from_thread(self._Submitted, bool(tracked), jobs.submittedJobs, expected, log[0])
+        self.call_from_thread(self._Ran, Finished, tracked, log[0])
+
+    def _Ran(self, Finished, tracked: list, log) -> None:
+        self.pop_screen()
+        Finished(tracked, log)
+
+    def Submit(self, intent: Intent, expected: int) -> None:
+        """A job Intent: submitted in the app, then the Results pop-up."""
+        self.RunInApp(intent, ("Submitting", f"Submitting {expected} job{'s' if expected != 1 else ''}..."),
+                      lambda tracked, log: self._Submitted(bool(tracked), jobs.submittedJobs, expected, log))
+
+    def RunGoodVibes(self, intent: Intent, builder) -> None:
+        """GoodVibes, run in the app; its output shows in the Results pop-up. Dismissing it goes Home, or, for a
+        Builder another screen opened (the SI Scraper), back to that screen with whether the run succeeded."""
+        started = time.time()
+        count = len(SpcPartners(intent.files, intent.singlePointPattern)[0])
+        self.RunInApp(intent, ("GoodVibes", f"Running GoodVibes on {count} structure{'s' if count != 1 else ''}..."),
+                      lambda tracked, log: self._GoodVibesRan(builder, started, log))
+
+    def _GoodVibesRan(self, builder, started: float, log) -> None:
+        # A run that stopped (a missing SP file, a crash) leaves no new table: the old one was deleted, or is older
+        table = Path.cwd() / GOODVIBES_OUTPUT
+        succeeded = table.is_file() and table.stat().st_mtime >= started
+        title, severity = ("GoodVibes Finished", "") if succeeded else ("GoodVibes Stopped", "error")
+        back = "Back" if builder.returns else "Home"
+
+        def Dismissed(_) -> None:
+            if builder.returns:
+                while self.screen is not builder:
+                    self.pop_screen()
+                builder.dismiss(succeeded)
+            else:
+                self._AfterResults("home")
+        self.push_screen(Popup(title, log, severity=severity, cancel=back, ok=back), Dismissed)
 
     def _Submitted(self, tracked: bool, submitted: int, expected: int, log) -> None:
         self.pop_screen()
