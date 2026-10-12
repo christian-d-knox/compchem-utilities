@@ -11,9 +11,10 @@ from textual.screen import Screen
 from textual.widgets import Input, Static
 
 from ..actions import Action
-from ..analysis import GOODVIBES_OUTPUT
-from ..scrape  import (ORDER_FILE, PROGRAM_NAMES, SI_FILE, DetectSuffix, FindSpecies, GoodVibesNeeded, GoodVibesRun,
-                       GoodVibesTable, NaturalKey, Outputs, ReadOrder, ReadSpecies, SIText, SPThermo, Species,
+from ..analysis import GOODVIBES_OUTPUT, DetectSuffix, Outputs
+from ..defaults import Defaults
+from ..scrape  import (ORDER_FILE, PROGRAM_NAMES, SI_FILE, FindSpecies, GoodVibesNeeded, GoodVibesRun,
+                       GoodVibesTable, NaturalKey, ReadOrder, ReadSpecies, SIText, SPThermo, Species,
                        TableUsed, WriteOrder)
 from .common   import (NAME, NAV_BINDINGS, TEXT, FrameRule, KeyHint, MoveRow, NavFooter, Notice, Popup,
                        ReorderableTable, Setting, SettingsList, ValueInput)
@@ -63,8 +64,8 @@ class SIScraperScreen(Screen):
     def __init__(self) -> None:
         super().__init__()
         self.folder = Path.cwd()
-        outputs = Outputs(self.folder)
-        self.detected = DetectSuffix(outputs)
+        self.detected = DetectSuffix(Outputs(self.folder))     # None: nothing pairs up, so the default suffix
+        self.suffix = self.detected or Defaults.singlePointExtra.lstrip("_")
         self.species: list[Species] = []    # in the order they'll be written
         self.included: set[str] = set()
         self.touched: set[str] = set()      # included or left out by hand: the defaults no longer apply to them
@@ -77,7 +78,7 @@ class SIScraperScreen(Screen):
         yield FrameRule("┌┐", "Settings", split=LEFT_WIDTH - 1, id="si-top")
         with Horizontal(id="si-body"):
             with VerticalScroll(id="si-left", classes="side"):
-                yield SettingsList(SISettings(self.detected), stacked=True, widest=LEFT_WIDTH - 5,
+                yield SettingsList(SISettings(self.suffix), stacked=True, widest=LEFT_WIDTH - 5,
                                    inputClass=WriteInput, id="settings")
             with Vertical(id="si-right"):
                 yield SpeciesTable(id="species", cursor_type="row", zebra_stripes=False)
@@ -88,7 +89,7 @@ class SIScraperScreen(Screen):
         table = self.query_one("#species", SpeciesTable)
         for title, width in (("", 3), ("Species", 14), ("", 4), ("SP", 5), ("Flags", 16)):
             table.add_column(title, width=width)
-        self.Relist(self.detected)
+        self.Relist(self.suffix)
 
     # ─── Species ──────────────────────────────────────────────────────
 
@@ -297,7 +298,9 @@ class SIScraperScreen(Screen):
                                  settings.Row("phase").value, thermo))
         WriteOrder(self.folder, [one.name for one in included])
         self.listed, self.dropped = [one.name for one in included], []
-        Notice(self.app, "SI File Written", f"Wrote {target.name} ({len(included)} Species) and {ORDER_FILE}.", "good")
+        # Done: back to Home, which re-lists its files
+        Notice(self.app, "SI File Written", f"Wrote {target.name} ({len(included)} Species) and {ORDER_FILE}.", "good",
+               then=lambda: self.dismiss(None))
         self.Refresh()
 
     def action_back(self) -> None:
