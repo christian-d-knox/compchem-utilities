@@ -9,7 +9,7 @@ from textual.screen import Screen
 from textual.widgets import Checkbox, Input, OptionList, Static
 
 from ..actions  import Action, CubeOption
-from ..analysis import GoodVibesArguments, SpcPartners
+from ..analysis import DetectSuffix, GoodVibesArguments, Outputs, SpcPartners
 from ..catalog  import Catalog
 from ..defaults import Defaults
 from ..intent   import IntentDraft
@@ -32,8 +32,9 @@ def NameList(paths: list[Path]) -> str:
 
 # ─── GoodVibes settings (mock-up 4.2, GoodVibes) ──────────────────────
 
-def GoodVibesSettings() -> list[Setting]:
-    """Defaults match the CLI wizard's, and Single Point is on: GoodVibes runs once both the opt and the SP are done.
+def GoodVibesSettings(suffix: str) -> list[Setting]:
+    """Defaults match the CLI wizard's, and Single Point is on (suffix: detected, preset, or the default): GoodVibes
+    runs once both the opt and the SP are done.
     This screen's text is in Title Case (Christian). A choice's notes read as one note across its rows, the later
     ones indented as its hanging lines."""
     return [
@@ -44,7 +45,7 @@ def GoodVibesSettings() -> list[Setting]:
         Setting("enthalpy", "Enthalpy (qh-H)", "Off: RRHO Enthalpy", fixed="Head-Gordon", on=True),
         Setting("cutoff", "  └ qh Cutoff", "Softer Modes Are Corrected", "100", "cm⁻¹", under="enthalpy"),
         Setting("scale", "Vib Scale Factor", "Off: GV Auto-Detect from Method", "1.0", on=True),
-        Setting("singlePoint", "Single Point", "", Defaults.singlePointExtra.lstrip("_"), on=True, accepts=NAME),
+        Setting("singlePoint", "Single Point", "", suffix, on=True, accepts=NAME),
         Setting("check", "Check", "Check for Level of Theory Consistency", on=False),
         Setting("extra", "Extra Keys", "Passed Directly to GoodVibes", "", on=False, accepts=TEXT),
     ]
@@ -95,6 +96,12 @@ class BuilderScreen(Screen):
         self.ready = False            # the draft is valid and at least one job would run
         self.valueErrors = []         # GoodVibes: typed values that aren't numbers
         self.selectionErrors = []     # GoodVibes: problems fixed by changing the selection (esc Change)
+        # GoodVibes: the single point suffix the selection's structures pair with in this folder (as the SI Scraper
+        # detects it; None: nothing pairs). A selected SP file counts for its structure
+        self.detected = None
+        if action == Action.GOODVIBES:
+            selected = {path.stem for path in files} | {path.stem.rsplit("_", 1)[0] for path in files}
+            self.detected = DetectSuffix(Outputs(Path.cwd()), selected)
 
     def compose(self) -> ComposeResult:
         # One framed form (P2): Files on the top edge, a titled rule per section, Submit on the bottom edge
@@ -105,7 +112,8 @@ class BuilderScreen(Screen):
             if self.action == Action.GOODVIBES:
                 yield FrameRule("├┤", Text.assemble("Settings · ", KeyHint(self.app, "␣", "On/Off or Select"), " · ",
                                                     KeyHint(self.app, "←→", "Choose"), " · Type a Value"))
-                yield SettingsList(GoodVibesSettings(), id="settings", classes="side")
+                yield SettingsList(GoodVibesSettings(self.detected or Defaults.singlePointExtra.lstrip("_")), id="settings",
+                                   classes="side")
                 yield FrameRule("├┤", "Command")
                 yield Static(id="command", classes="side")
             else:
@@ -264,7 +272,9 @@ class BuilderScreen(Screen):
         # The count follows the typed suffix even while Single Point is off, so turning it on holds no surprise
         suffix = settings.Row("singlePoint").value.strip().lstrip("_")
         structures, _, missing = SpcPartners(self.files, suffix)
-        settings.Row("singlePoint").SetMeaning(f"{len(structures) - len(missing)} of {len(structures)} Structures Have One")
+        detected = "Detected · " if suffix == self.detected else ""
+        settings.Row("singlePoint").SetMeaning(f"{detected}{len(structures) - len(missing)} of {len(structures)} "
+                                               "Structures Have One")
         inputs, _, missing = self.Structures()
         command = " ".join(["goodvibes", *GoodVibesArguments(draft)]) + " " + NameList(inputs).replace(", ", " ")
         self.query_one("#command", Static).update(command)

@@ -1,3 +1,4 @@
+from collections import Counter
 from pathlib import Path
 
 import pandas
@@ -67,6 +68,19 @@ def SpcPartners(files: list[Path], suffix: str | None) -> tuple[list[Path], list
     inputs = [path for path in files if not path.stem.endswith(marker)]
     missing = [path for path in inputs if not path.with_name(path.stem + marker + path.suffix).exists()]
     return inputs, partners, missing
+
+
+def Outputs(folder: Path) -> list[Path]:
+    return sorted(path for path in folder.iterdir() if path.is_file() and path.suffix == Defaults.outputExtension)
+
+
+def DetectSuffix(outputs: list[Path], among: set[str] | None = None) -> str | None:
+    """The single point suffix the outputs use (without the underscore): the most common Y among stems X_Y whose X is
+    also an output (among: only these X, e.g. a selection's structures). None when nothing pairs up."""
+    stems = {path.stem for path in outputs}
+    found = Counter(stem.rsplit("_", 1)[1] for stem in stems if "_" in stem
+                    and stem.rsplit("_", 1)[0] in stems and (among is None or stem.rsplit("_", 1)[0] in among))
+    return found.most_common(1)[0][0] if found else None
 
 
 # An improved version of goodVibesToExcelv3 that now properly formats the numbers in Excel as numbers

@@ -2,13 +2,12 @@
 group's coordinates2.sh, without a GoodVibes run per structure). No Textual import: the TUI's SI Scraper screen
 (tui/scrapers.py) and any later CLI flag share this."""
 import math
-from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import regex
 
-from .analysis import DEFAULT_TEMPERATURE, GOODVIBES_OUTPUT, SpcPartners
+from .analysis import DEFAULT_TEMPERATURE, GOODVIBES_OUTPUT, Outputs, SpcPartners
 from .defaults import Defaults
 from .fileops  import (ExtractCoords, ExtractEnergy, ExtractFrequencies, ExtractGoodVibes, ExtractGoodVibesConditions,
                        ExtractProgram, ExtractTermination, ExtractThermalCorrections, HasContent, MapFile)
@@ -79,18 +78,6 @@ class Species:
 def NaturalKey(name: str) -> list:
     # 8a, 8b, 10 (not 10, 8a, 8b)
     return [int(part) if part.isdigit() else part.lower() for part in regex.split(r"(\d+)", name)]
-
-
-def Outputs(folder: Path) -> list[Path]:
-    return sorted(path for path in folder.iterdir() if path.is_file() and path.suffix == Defaults.outputExtension)
-
-
-def DetectSuffix(outputs: list[Path]) -> str:
-    """The single point suffix the folder uses (without the underscore): the most common Y among stems X_Y whose X is
-    also an output here. The CompUtils default when nothing pairs up."""
-    stems = {path.stem for path in outputs}
-    found = Counter(stem.rsplit("_", 1)[1] for stem in stems if "_" in stem and stem.rsplit("_", 1)[0] in stems)
-    return found.most_common(1)[0][0] if found else Defaults.singlePointExtra.lstrip("_")
 
 
 def FindSpecies(folder: Path, suffix: str) -> list[Species]:
