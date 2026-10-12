@@ -12,9 +12,9 @@ from textual.widgets import Input, Static
 
 from ..actions import Action
 from ..analysis import GOODVIBES_OUTPUT
-from ..scrape  import (ORDER_FILE, PROGRAM_NAMES, SI_FILE, DetectSuffix, FindSpecies, FreeEnergies, GoodVibesNeeded,
-                       GoodVibesRun, GoodVibesTable, NaturalKey, Outputs, ReadOrder, ReadSpecies, SIText, Species,
-                       UsesTable, WriteOrder)
+from ..scrape  import (ORDER_FILE, PROGRAM_NAMES, SI_FILE, DetectSuffix, FindSpecies, GoodVibesNeeded, GoodVibesRun,
+                       GoodVibesTable, NaturalKey, Outputs, ReadOrder, ReadSpecies, SIText, SPThermo, Species,
+                       TableUsed, WriteOrder)
 from .common   import (NAME, NAV_BINDINGS, TEXT, FrameRule, KeyHint, MoveRow, NavFooter, Notice, Popup,
                        ReorderableTable, Setting, SettingsList, ValueInput)
 from .home     import TitleLine
@@ -134,10 +134,9 @@ class SIScraperScreen(Screen):
         table = self.query_one("#species", SpeciesTable)
         row = table.cursor_row if cursor is None else cursor
         table.clear()
-        temperature = self.TableTemperature()
         for one in self.species:
             included = one.name in self.included
-            flags = one.Flags(self.quasiHarmonic, temperature)
+            flags = one.Flags(self.quasiHarmonic)
             # Text, not str: "[X]" would be read as markup. No SP shows in its own column, so not again as a flag
             if one.read:
                 sp = Styled("No SP", "error") if one.spPath is None else Styled("✓", "good")
@@ -172,15 +171,10 @@ class SIScraperScreen(Screen):
         return [one for one in self.species if one.name in self.included]
 
     def Source(self) -> tuple[GoodVibesRun, GoodVibesRun | None]:
-        """The folder's GoodVibes run, and the one the free energies would come from (None: the outputs)."""
+        """The folder's GoodVibes run, and the one the single point lines would come from (None: the outputs)."""
         run = GoodVibesTable(self.folder)
         readable = [one for one in self.Included() if one.read]
-        return run, UsesTable(readable, self.folder, self.quasiHarmonic, run)
-
-    def TableTemperature(self) -> str | None:
-        # A lone atom's G can't follow a table at another temperature (Species.Flags)
-        used = self.Source()[1]
-        return used.temperature if used is not None else None
+        return run, TableUsed(readable, self.folder, self.quasiHarmonic, run)
 
     def Problems(self) -> list[str]:
         """What stops writing, in the order to fix it."""
@@ -196,9 +190,8 @@ class SIScraperScreen(Screen):
         if any(not one.read for one in included):
             problems.append("Reading Outputs…")
         blocked: dict[str, list[str]] = {}
-        temperature = self.TableTemperature()
         for one in included:
-            reason = one.Blocks(self.quasiHarmonic, temperature)
+            reason = one.Blocks(self.quasiHarmonic)
             if reason:
                 blocked.setdefault(reason, []).append(one.name)
         problems += [f"{reason}: {', '.join(names)}" for reason, names in blocked.items()]
@@ -208,8 +201,8 @@ class SIScraperScreen(Screen):
         settings = self.settings
         suffix = settings.Row("suffix")
         suffix.SetMeaning("(Detected)" if suffix.value.strip() == self.detected else "")
-        # Where the free energies come from, at what conditions: the folder's GoodVibes table (qh-G: or a run first),
-        # or each output (G, when the table doesn't cover the species)
+        # Where the single point lines come from, at what conditions: the folder's GoodVibes table (qh-G: or a run
+        # first; G: when it carries a correction for every species), or each output
         run, used = self.Source()
         if self.quasiHarmonic:
             readable = [one for one in self.Included() if one.read and not one.Blocks(True)]
@@ -272,7 +265,9 @@ class SIScraperScreen(Screen):
         needed = GoodVibesNeeded(included, self.folder) if self.quasiHarmonic else []
         if needed:
             from .builder import BuilderScreen
-            files = [Path(one.path.name) for one in needed] + [Path(one.spPath.name) for one in needed]
+            # GoodVibes rewrites the whole table, so the run covers every included species it gives, not only the stale
+            run = [one for one in included if one.needsGoodVibes]
+            files = [Path(one.path.name) for one in run] + [Path(one.spPath.name) for one in run]
             suffix = self.settings.Row("suffix").value.strip().lstrip("_")
             self.app.push_screen(BuilderScreen(Action.GOODVIBES, files, {"singlePoint": suffix}, returns=True),
                                  lambda succeeded: self.ConfirmWrite() if succeeded else self.Refresh())
@@ -291,15 +286,15 @@ class SIScraperScreen(Screen):
 
     def Write(self, target: Path) -> None:
         settings, included = self.settings, self.Included()
-        free = FreeEnergies(included, self.folder, self.quasiHarmonic)
-        missing = [name for name in free.missing if len(next(one for one in included if one.name == name).imaginary) < 2]
+        thermo = SPThermo(included, self.folder, self.quasiHarmonic)
+        missing = [name for name in thermo.missing if len(next(one for one in included if one.name == name).imaginary) < 2]
         if missing:
             Notice(self.app, "No qh-G Found", f"{GOODVIBES_OUTPUT} has no qh-G(T) for: {', '.join(missing)}. "
                    "Nothing was written.", "error")
             self.Refresh()
             return
         target.write_text(SIText(included, settings.Row("opt").value.strip(), settings.Row("sp").value.strip(),
-                                 settings.Row("phase").value, free))
+                                 settings.Row("phase").value, thermo))
         WriteOrder(self.folder, [one.name for one in included])
         self.listed, self.dropped = [one.name for one in included], []
         Notice(self.app, "SI File Written", f"Wrote {target.name} ({len(included)} Species) and {ORDER_FILE}.", "good")

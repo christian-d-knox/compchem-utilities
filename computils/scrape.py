@@ -11,8 +11,7 @@ import regex
 from .analysis import DEFAULT_TEMPERATURE, GOODVIBES_OUTPUT, SpcPartners
 from .defaults import Defaults
 from .fileops  import (ExtractCoords, ExtractEnergy, ExtractFrequencies, ExtractGoodVibes, ExtractGoodVibesConditions,
-                       ExtractProgram, ExtractTemperature, ExtractTermination, ExtractThermalCorrections, HasContent,
-                       MapFile)
+                       ExtractProgram, ExtractTermination, ExtractThermalCorrections, HasContent, MapFile)
 
 SI_FILE = "SI_coordinates.txt"
 # coordinates2.sh's species order: one name per line. Read when the scraper opens, rewritten on Write
@@ -35,24 +34,19 @@ class Species:
     symbols: list[str] = field(default_factory=list)
     xyz: list[tuple[float, float, float]] = field(default_factory=list)
     spEnergy: float | None = None
-    temperature: float | None = None                   # of its thermochemistry (K)
 
     @property
     def imaginary(self) -> list[float]:
         return [frequency for frequency in self.frequencies if frequency < 0]
 
     @property
-    def singleAtom(self) -> bool:
-        return len(self.symbols) == 1
-
-    @property
     def needsGoodVibes(self) -> bool:
-        # A lone atom has no vibrations, so its qh-G is its G (and GoodVibes finds no frequencies for it)
-        return self.program == Defaults.gaussianExtension and not self.singleAtom
+        # GoodVibes' table gives what it corrects (qh, concentration, temperature) for every Gaussian-optimized species,
+        # lone atoms included (no --check, so no frequency analysis to fail)
+        return self.program == Defaults.gaussianExtension
 
-    def Flags(self, quasiHarmonic: bool, tableTemperature: str | None = None) -> list[tuple[str, bool]]:
-        """(flag, blocks writing) for the species list: what's missing blocks, what's worth a second look doesn't.
-        tableTemperature: that of the GoodVibes run the free energies come from, if any (a lone atom's G is its own)."""
+    def Flags(self, quasiHarmonic: bool) -> list[tuple[str, bool]]:
+        """(flag, blocks writing) for the species list: what's missing blocks, what's worth a second look doesn't."""
         if not self.read:
             return []
         flags = []
@@ -68,12 +62,8 @@ class Species:
             flags.append(("No Geometry", True))
         # GoodVibes 3.2 can't read an ORCA 6 opt+freq output (cclib's ORCA parser crashes, and the whole run with it).
         # Stub until Christian has tested it (WORKING_AGENDA: SI Scraper, qh-G for ORCA-optimized species)
-        if quasiHarmonic and self.program == Defaults.orcaExtension and not self.singleAtom:
+        if quasiHarmonic and self.program == Defaults.orcaExtension:
             flags.append(("No qh-G", True))
-        # A lone atom's G can follow the table's concentration (FreeEnergies), but not another temperature
-        if (self.singleAtom and tableTemperature is not None and self.temperature is not None
-                and abs(self.temperature - float(tableTemperature)) > 0.01):
-            flags.append((f"Not at {tableTemperature} K", True))
         if len(self.imaginary) == 1:
             flags.append((f"TS {self.imaginary[0]:.1f}", False))
         elif self.imaginary:
@@ -82,8 +72,8 @@ class Species:
             flags.append(("Error", False))
         return flags
 
-    def Blocks(self, quasiHarmonic: bool, tableTemperature: str | None = None) -> str | None:
-        return next((flag for flag, blocks in self.Flags(quasiHarmonic, tableTemperature) if blocks), None)
+    def Blocks(self, quasiHarmonic: bool) -> str | None:
+        return next((flag for flag, blocks in self.Flags(quasiHarmonic) if blocks), None)
 
 
 def NaturalKey(name: str) -> list:
@@ -120,7 +110,6 @@ def ReadSpecies(species: Species) -> None:
             species.energy = ExtractEnergy(data, species.program)
             species.corrections = ExtractThermalCorrections(data, species.program)
             species.frequencies = ExtractFrequencies(data, species.program)
-            species.temperature = ExtractTemperature(data, species.program)
             symbols, X, Y, Z = ExtractCoords(data, species.program)
             species.symbols = symbols
             species.xyz = [(float(x), float(y), float(z)) for x, y, z in zip(X, Y, Z)]
@@ -142,11 +131,7 @@ def WriteOrder(folder: Path, names: list[str]) -> None:
     (folder / ORDER_FILE).write_text("".join(f"{name}\n" for name in names))
 
 
-# ─── Free energies: the outputs, or GoodVibes' table ──────────────────
-
-# GoodVibes 3.2's constants, so a lone atom's standard-state shift matches its table: c° = ATMOS / (R T) mol/l
-ATMOS, GAS_CONSTANT, J_TO_AU = 101.325, 8.3144621, 4.184 * 627.509541 * 1000
-
+# ─── Single point thermochemistry: the outputs, or what GoodVibes corrected ──
 
 @dataclass
 class GoodVibesRun:
@@ -158,16 +143,21 @@ class GoodVibesRun:
     concentration: str | None = None
 
     @property
-    def label(self) -> str:
-        """What the free energy lines add: ' at 1.0 M', ' at 1.0 M and 273.15 K', ' at 273.15 K', or ''."""
-        parts = [f"{self.concentration} M"] if self.concentration else []
+    def corrected(self) -> bool:
+        """Whether GoodVibes applied a correction the outputs don't have: a concentration or another temperature."""
+        return self.concentration is not None or float(self.temperature) != DEFAULT_TEMPERATURE
+
+    def Label(self, enthalpy: bool = False) -> str:
+        """What a single point line from the table adds: ' at 1.0 M', ' at 1.0 M and 273.15 K', ' at 273.15 K', or ''.
+        An enthalpy names the temperature only (a concentration changes only the entropy)."""
+        parts = [f"{self.concentration} M"] if self.concentration and not enthalpy else []
         if float(self.temperature) != DEFAULT_TEMPERATURE:
             parts.append(f"{self.temperature} K")
         return f" at {' and '.join(parts)}" if parts else ""
 
     @property
     def note(self) -> str:
-        """The same, for the screen: '1.0 M', '1.0 M, 273.15 K', '1 atm'."""
+        """The conditions, for the screen: '1.0 M', '1.0 M, 273.15 K', '1 atm'."""
         parts = [f"{self.concentration} M" if self.concentration else "1 atm"]
         if float(self.temperature) != DEFAULT_TEMPERATURE:
             parts.append(f"{self.temperature} K")
@@ -189,93 +179,80 @@ def GoodVibesTable(folder: Path) -> GoodVibesRun:
                         temperature, concentration)
 
 
-def _TableFree(species: Species, row: dict[str, str] | None, column: str) -> tuple[float, float] | None:
-    """(opt, single point) free energy from a table row's column (G(T) or qh-G(T)). A --spc run's column_SPC is the
-    single point's; the opt's is the same correction on the opt energy (what coordinates2.sh does the other way round)."""
-    # GoodVibes 3.2 writes nan for T.qh-S and qh-G(T) when it picks the vibrational scale factor itself (no -v): no value
+def _TableValue(row: dict[str, str] | None, column: str) -> float | None:
+    """GoodVibes' single point value of a column (H, qh-H, G(T), qh-G(T)) as it wrote it: a --spc run's column_SPC.
+    None without one (no row, a table without --spc, or nan: GoodVibes 3.2 writes nan for T.qh-S and qh-G(T) when it
+    picks the vibrational scale factor itself, no -v)."""
     try:
-        if row and column in row:
-            optimized = float(row[column])
-            values = optimized, optimized - species.energy + species.spEnergy
-        elif row and f"{column}_SPC" in row:
-            singlePoint = float(row[f"{column}_SPC"])
-            values = singlePoint - float(row["E_SPC"]) + species.energy, singlePoint
-        else:
-            return None
-    except (KeyError, ValueError):
+        value = float(row[f"{column}_SPC"])
+    except (KeyError, TypeError, ValueError):
         return None
-    return None if any(math.isnan(value) for value in values) else values
+    return None if math.isnan(value) else value
 
 
 def GoodVibesNeeded(species: list[Species], folder: Path, run: GoodVibesRun | None = None,
                     column: str = "qh-G(T)") -> list[Species]:
-    """The species whose free energy (column: qh-G(T) or G(T)) the folder's GoodVibes table can't give: no table, no
-    row or value, or a table older than the species' output or single point file (re-optimized since)."""
+    """The species whose single point free energy (column: qh-G(T) or G(T)) the folder's GoodVibes table can't give:
+    no table, no row or value, or a table older than the species' output or single point file (re-optimized since)."""
     run = run or GoodVibesTable(folder)
 
     def Current(one: Species) -> bool:
         newest = max(path.stat().st_mtime for path in (one.path, one.spPath) if path is not None)
-        return run.written >= newest and _TableFree(one, run.rows.get(one.name), column) is not None
+        return run.written >= newest and _TableValue(run.rows.get(one.name), column) is not None
     return [one for one in species if one.needsGoodVibes and not Current(one)]
 
 
 @dataclass
-class FreeSource:
-    """Where the free energy lines come from: energies {name: (opt, single point)}, the conditions their label names,
-    the GoodVibes run (None: each species' own output), and the species the table doesn't give (qh-G only)."""
-    energies: dict[str, tuple[float, float]]
-    label: str = ""
+class ThermoSource:
+    """The single point enthalpy and free energy lines: values {name: (H, G)}, the labels naming the table's
+    conditions, the GoodVibes run (None: each species' own outputs), and the species the table doesn't give (qh-G)."""
+    values: dict[str, tuple[float, float]]
+    hLabel: str = ""
+    gLabel: str = ""
     run: GoodVibesRun | None = None
     missing: list[str] = field(default_factory=list)
 
 
-def UsesTable(species: list[Species], folder: Path, quasiHarmonic: bool,
+def TableUsed(species: list[Species], folder: Path, quasiHarmonic: bool,
               run: GoodVibesRun | None = None) -> GoodVibesRun | None:
-    """The GoodVibes run the free energies come from, or None for the outputs. qh-G always uses the table; G uses it
-    when it is current for every species it can cover and none it can't (an ORCA-optimized one) is included, so one
-    file never mixes standard states."""
+    """The GoodVibes run the single point lines come from, or None for the outputs. qh-G always uses the table (only
+    GoodVibes gives it); G only when the table carries a correction and is current for every species (an
+    ORCA-optimized one never is), so one file never mixes the two."""
     run = run or GoodVibesTable(folder)
     if quasiHarmonic:
         return run
-    coverable = all(one.program == Defaults.gaussianExtension or one.singleAtom for one in species)
-    if (run.rows and coverable and any(one.needsGoodVibes for one in species)
+    if (run.corrected and all(one.needsGoodVibes for one in species)
             and not GoodVibesNeeded(species, folder, run, "G(T)")):
         return run
     return None
 
 
-def FreeEnergies(species: list[Species], folder: Path, quasiHarmonic: bool) -> FreeSource:
-    run = UsesTable(species, folder, quasiHarmonic)
+def SPThermo(species: list[Species], folder: Path, quasiHarmonic: bool) -> ThermoSource:
+    """Default: E_sp + the output's thermal corrections (coordinates2.sh). From the table: GoodVibes' values as written,
+    never corrected here. The enthalpy is qh-H when the run printed it (-q), else the table's H, so every single point
+    line is at the table's temperature."""
+    outputs = {one.name: (one.spEnergy + one.corrections[0], one.spEnergy + one.corrections[1])
+               for one in species if one.corrections is not None and one.spEnergy is not None}
+    run = TableUsed(species, folder, quasiHarmonic)
     if run is None:
-        return FreeSource({one.name: (one.energy + one.corrections[1], one.spEnergy + one.corrections[1])
-                           for one in species if one.corrections is not None})
-    column = "qh-G(T)" if quasiHarmonic else "G(T)"
-    # A lone atom isn't in the table (no vibrations: its qh-G is its G). At a concentration its G moves by RT ln(c/c°),
-    # its only concentration dependence (translational)
-    shift = 0.0
-    if run.concentration:
-        temperature = float(run.temperature)
-        standard = ATMOS / (GAS_CONSTANT * temperature)
-        shift = GAS_CONSTANT * temperature * math.log(float(run.concentration) / standard) / J_TO_AU
-    source = FreeSource({}, run.label, run)
+        return ThermoSource(outputs)
+    source = ThermoSource({}, run.Label(enthalpy=True), run.Label(), run)
     for one in species:
-        if one.needsGoodVibes:
-            values = _TableFree(one, run.rows.get(one.name), column)
-            if values is None:
-                source.missing.append(one.name)
-            else:
-                source.energies[one.name] = values
-        elif one.corrections is not None:
-            gibbs = one.corrections[1] + shift
-            source.energies[one.name] = (one.energy + gibbs, one.spEnergy + gibbs)
+        row = run.rows.get(one.name)
+        free = _TableValue(row, "qh-G(T)" if quasiHarmonic else "G(T)")
+        enthalpy = (_TableValue(row, "qh-H") if quasiHarmonic else None) or _TableValue(row, "H")
+        if free is None or enthalpy is None:
+            source.missing.append(one.name)
+        else:
+            source.values[one.name] = (enthalpy, free)
     return source
 
 
 # ─── The SI file ──────────────────────────────────────────────────────
 
-def SIText(species: list[Species], optMethod: str, spMethod: str, phase: str, free: FreeSource) -> str:
-    """coordinates2.sh's layout, one entry per species in order. The free energy lines name the conditions of a
-    GoodVibes run that isn't 1 atm and 298.15 K ('free energy in solution at 1.0 M (au)')."""
+def SIText(species: list[Species], optMethod: str, spMethod: str, phase: str, thermo: ThermoSource) -> str:
+    """coordinates2.sh's layout, one entry per species in order. The opt lines are the output's own; the single point
+    lines taken from a GoodVibes table name its conditions ('free energy in solution at 1.0 M (au)')."""
     where = f" {phase.strip()}" if phase.strip() else ""
     entries = []
     for one in species:
@@ -283,14 +260,14 @@ def SIText(species: list[Species], optMethod: str, spMethod: str, phase: str, fr
             entries.append(f"{one.path.name} has {len(one.imaginary)} imaginary frequencies, "
                            "please double check the file!\n\n")
             continue
-        enthalpy = one.corrections[0]
-        freeOpt, freeSp = free.energies[one.name]
+        enthalpy, gibbs = one.corrections
+        spEnthalpy, spFree = thermo.values[one.name]
         rows = [(f"{optMethod} SCF energy{where} (au):", one.energy),
                 (f"{optMethod} enthalpy{where} (au):", one.energy + enthalpy),
-                (f"{optMethod} free energy{where}{free.label} (au):", freeOpt),
+                (f"{optMethod} free energy{where} (au):", one.energy + gibbs),
                 (f"{spMethod} SCF energy{where} (au):", one.spEnergy),
-                (f"{spMethod} enthalpy{where} (au):", one.spEnergy + enthalpy),
-                (f"{spMethod} free energy{where}{free.label} (au):", freeSp)]
+                (f"{spMethod} enthalpy{where}{thermo.hLabel} (au):", spEnthalpy),
+                (f"{spMethod} free energy{where}{thermo.gLabel} (au):", spFree)]
         width = max(len(label) for label, _ in rows) + 4
         lines = [one.name] + [f"{label:<{width}}{value:.6f}" for label, value in rows]
         if one.imaginary:

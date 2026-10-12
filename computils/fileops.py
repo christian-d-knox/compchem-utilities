@@ -185,12 +185,6 @@ def ExtractGoodVibesConditions(data) -> tuple[str, str | None]:
     return (temperature.group(1).decode() if temperature else "298.15",
             concentration.group(1).decode() if concentration else None)
 
-def ExtractTemperature(data, program: str) -> float | None:
-    """The temperature (K) of an output's last thermochemistry, or None without one."""
-    if program == Defaults.orcaExtension:
-        return _LastNumber(data, r"Temperature(?=\s+\.\.\.\s+([\d.]+)\s+K)")
-    return _LastNumber(data, r"Temperature(?=\s+([\d.]+)\s+Kelvin)")
-
 def ExtractRouteLine(data, program: str) -> str:
     """The route card of an input or output file (program from ExtractProgram), without its leading marker."""
     if program == Defaults.orcaExtension:
