@@ -5,7 +5,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Input, Static, TextArea
 
-from .common  import EditableTable, FrameRule, KeyHint, Popup
+from .common  import FrameRule, KeyHint, MoveRow, Popup, ReorderableTable
 from .inspect import Styled
 
 MISSING = "—"          # an empty cell, e.g. a method with no program yet
@@ -33,7 +33,7 @@ def ProblemText(problems: list[str]) -> Text:
     return Text("\n").join(Styled(problem, "error" if problem.startswith("✗") else "warning") for problem in problems)
 
 
-class ListTable(EditableTable):
+class ListTable(ReorderableTable):
     BINDINGS = [
         Binding("space", "screen.edit"), Binding("a", "screen.add"), Binding("x", "screen.remove"),
         Binding("left_square_bracket", "screen.move(-1)"), Binding("right_square_bracket", "screen.move(1)"),
@@ -203,9 +203,11 @@ class ListEditor(ModalScreen):
 
     def action_move(self, step: int) -> None:
         row = self.query_one("#list", ListTable).cursor_row
-        target = row + step
-        if self.rows and 0 <= target < len(self.rows):
-            self.rows[row], self.rows[target] = self.rows[target], self.rows[row]
+        self.DragRow(row, row + step)
+
+    def DragRow(self, row: int, target: int) -> None:
+        # [ ] and a mouse drag (ReorderableTable): the cursor follows the moved row
+        if MoveRow(self.rows, row, target):
             self.Redraw(target)
 
     def action_done(self) -> None:

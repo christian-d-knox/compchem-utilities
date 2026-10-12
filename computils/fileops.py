@@ -421,6 +421,64 @@ def ExtractSpinContamination(data) -> float | None:
             return float(spinMatch.group(1).decode())
     return None
 
+def _LastNumber(data, pattern: str) -> float | None:
+    # The number captured by the LAST match of a literal-led pattern (its value in a lookahead: see FindInMap)
+    found = FindInMap(data, pattern, reverse=True)
+    return float(found.group(1).decode()) if found else None
+
+def ExtractEnergy(data, program: str) -> float | None:
+    """The last electronic energy (Hartree): Gaussian's 'SCF Done', ORCA's 'FINAL SINGLE POINT ENERGY' (its total,
+    e.g. DLPNO-CCSD(T)'s). None if the file reports none."""
+    if program == Defaults.orcaExtension:
+        return _LastNumber(data, r"FINAL SINGLE POINT ENERGY(?=\s+(-?[\d.]+))")
+    return _LastNumber(data, r"SCF Done:(?=\s+E\(\S+\)\s+=\s+(-?[\d.]+))")
+
+def ExtractThermalCorrections(data, program: str) -> tuple[float, float] | None:
+    """(enthalpy correction, Gibbs free energy correction) to the electronic energy, in Hartree, from the last
+    thermochemistry printed; None without one (no frequency job). ORCA's G already uses Grimme's quasi-RRHO entropy."""
+    if program == Defaults.orcaExtension:
+        enthalpy = _LastNumber(data, r"Total Enthalpy(?=\s+\.\.\.\s+(-?[\d.]+))")
+        electronic = _LastNumber(data, r"Electronic energy(?=\s+\.\.\.\s+(-?[\d.]+))")
+        gibbs = _LastNumber(data, r"G-E\(el\)(?=\s+\.\.\.\s+(-?[\d.]+))")
+        if None in (enthalpy, electronic, gibbs):
+            return None
+        return enthalpy - electronic, gibbs
+    enthalpy = _LastNumber(data, r"Thermal correction to Enthalpy=(?=\s+(-?[\d.]+))")
+    gibbs = _LastNumber(data, r"Thermal correction to Gibbs Free Energy=(?=\s+(-?[\d.]+))")
+    return None if enthalpy is None or gibbs is None else (enthalpy, gibbs)
+
+def ExtractFrequencies(data, program: str) -> list[float]:
+    """The last frequency calculation's vibrational frequencies (cm-1), lowest first; imaginary modes are negative.
+    [] without one. ORCA's 0.00 translation/rotation modes are left out."""
+    if program == Defaults.orcaExtension:
+        block = FindInMap(data, r"VIBRATIONAL FREQUENCIES", True)
+        if block is None:
+            return []
+        SkipInMap(data, block)
+        frequencies, started = [], False
+        # '   6:     -312.40 cm**-1 ***imaginary mode***', after a dashed rule and a scaling-factor line
+        for line in iter(data.readline, b""):
+            row = regex.match(rb"\s*\d+:\s+(-?[\d.]+)\s+cm\*\*-1", line)
+            if row:
+                started = True
+                if float(row.group(1)) != 0.0:
+                    frequencies.append(float(row.group(1)))
+            elif started and line.strip():
+                break
+        return sorted(frequencies)
+    block = FindInMap(data, r"Harmonic frequencies", True)
+    if block is None:
+        return []
+    SkipInMap(data, block)
+    frequencies = []
+    # Three modes per 'Frequencies --' line, up to the thermochemistry
+    for line in iter(data.readline, b""):
+        if line.lstrip().startswith(b"Frequencies --"):
+            frequencies += [float(value) for value in line.split()[2:]]
+        elif b"Thermochemistry" in line:
+            break
+    return sorted(frequencies)
+
 def HasRestrictedInstability(data) -> bool:
     """Gaussian stable= output: 'The wavefunction has an RHF -> UHF instability.' ORCA prints no such line, so its
     analysis counts when it lacks the stable verdict (spin.py only asks for singlets whose route has no UKS/UHF)."""
