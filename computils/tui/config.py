@@ -24,7 +24,7 @@ from ..keylists import (BENCHMARK, FILE_PREAMBLE, KEYLISTS_FILE, MIXED_BASIS, OP
                         RemoveSection, ReplaceSection, RouteAt, SectionBody, WriteKeylists)
 from ..molecule import Molecule
 from ..project  import (PROJECT_CONFIG, PROJECT_FILES, FindProjectRoot, ProjectFilePath, ReloadConfig,
-                        ResolveProjectFile, SaveProjectConfig)
+                        SaveProjectConfig)
 from ..spin     import ParseSpinOverrides
 from .common    import NAV_BINDINGS, EditableTable, FrameRule, KeyHint, NavFooter, Notice, Popup, SwapItems
 from .home      import TitleLine
@@ -255,7 +255,7 @@ class ConfigScreen(Screen):
         # The section list's entries: SECTIONS, or KEYLIST_ENTRIES while in Job Keylists ›
         self.entries = list(SECTIONS)
         self.section = next(index for index, (label, _) in enumerate(self.entries) if label == section)
-        # jobRelatedKeylists' levels, nearest first (the CWD can't change while the editor is open)
+        # jobRelatedKeylists' levels, nearest first (the project can't change while the editor is open)
         self.levels = Levels()
         self.keys: list[str] = []                   # the table's rows
         self.pending: dict[tuple[int, str], object] = {}   # (column, key) -> unsaved value (DELETE: follow global)
@@ -352,10 +352,7 @@ class ConfigScreen(Screen):
     # ─── Project files ────────────────────────────────────────────────
 
     def FilePath(self, name: str) -> Path | None:
-        """The copy jobs would use (a CWD copy overrides the project's), else where a new one goes: the project marker."""
-        found = ResolveProjectFile(name)
-        if found is not None:
-            return Path(found)
+        """The project's copy (config is Global / Project only, never the CWD), outside a project None."""
         return ProjectFilePath(self.root, name) if self.root is not None else None
 
     def FileTexts(self) -> dict[str, str]:
@@ -444,7 +441,7 @@ class ConfigScreen(Screen):
     def SectionSummary(self, name: str, body: str | None) -> tuple[str, Text]:
         """(a short summary for the tables, the editor's Check pane) of a section's text at one level."""
         if body is None or body is DELETE:
-            return "—", Text("Not at this level: it follows the next one.", "dim")
+            return "—", Text("Not at this level: a project without it follows the global one.", "dim")
         section = KEYLIST_SECTIONS[name]
         value = ExtractFromText(body, section.extractor, empty=section.empty())
         lines, problems = [], []
@@ -481,7 +478,7 @@ class ConfigScreen(Screen):
                 problems += [f"⚠ @{found} Names {declared.count(found)} Routes (Second Is {found}-2)"
                              for found in dict.fromkeys(declared) if declared.count(found) > 1]
             elif not routes:
-                problems.append("⚠ No Routes: the Next Level's Suite Applies")
+                problems.append("⚠ No Routes: the Global (or Default) Suite Applies")
             short = counted
         elif name == MIXED_BASIS:
             elements = [element for entry in value.basis for element in entry.elements]
@@ -599,8 +596,7 @@ class ConfigScreen(Screen):
             self.valueWidth = FitColumns(table, ["File", "Location", "Summary"], max(map(len, self.keys)))
             for name in self.keys:
                 path = self.FilePath(name)
-                location = ("CWD" if Path(name).is_file() else "Project" if path is not None and path.is_file()
-                            else "Missing")
+                location = "Project" if path is not None and path.is_file() else "Missing"
                 short, _ = self.FileSummary(name, self.Value(FILES, name))
                 edited = "[Edited] " if (FILES, name) in self.pending else ""
                 table.add_row(name, Text(location, "dim" if location == "Missing" else ""),
@@ -643,7 +639,7 @@ class ConfigScreen(Screen):
             level = self.Level(label)
             text = self.PendingTexts().get(level.path) or (level.path.read_text(encoding="utf-8")
                                                            if level.path.is_file() else "")
-            remove = "r Drop Unsaved Edits" if label == "Global" else "r Remove (Follow the Next Level)"
+            remove = "r Drop Unsaved Edits" if label == "Global" else "r Remove (Follow Global)"
             lines = [Text(Cut(FILE_NOTES[name], width)),
                      Text(Cut(f"Path: {ShortPath(level.path)}", width)),
                      *[Styled(Cut(f"⚠ {problem}", width), "warning") for problem in FileProblems(text)],
@@ -761,15 +757,15 @@ class ConfigScreen(Screen):
     def EditFile(self, name: str) -> None:
         path = self.FilePath(name)
         if path is None:
-            Notice(self.app, "No Project", f"Not inside a project and no ./{name}: `cu -init` creates a project.", "warning")
+            Notice(self.app, "No Project", f"{name} lives in a project, and this isn't inside one: `cu -init` creates "
+                   "a project.", "warning")
             return
 
         def Done(text) -> None:
             if text is not None:
                 self.SetPending(FILES, name, text)
                 self.Redraw()
-        where = path.parent.name if path.parent != Path(".") else "CWD"
-        self.app.push_screen(TextEditor(f"{name} · {where}", self.Value(FILES, name),
+        self.app.push_screen(TextEditor(f"{name} · Project", self.Value(FILES, name),
                                         lambda text: self.FileSummary(name, text)[1], FILE_EXAMPLES[name]), Done)
 
     # ─── Events ───────────────────────────────────────────────────────
@@ -875,7 +871,7 @@ class ConfigScreen(Screen):
         if column == FILES or (column == SECTION_TEXT and current in self.pending):
             self.pending.pop(current, None)
         elif column == SECTION_TEXT:
-            # A Project or CWD copy of a section can be removed, so that level follows the next one
+            # A Project copy of a section can be removed, so the project follows the global one
             label, name = key
             if label == "Global" or not self.InFile(label, name):
                 self.app.bell()
@@ -1049,5 +1045,5 @@ class ConfigScreen(Screen):
             "r Reset to Default (Project: Follow Global; a File: Drop Its Edits)",
             "R Reset the Whole File",
             "Job Keylists ›: One Section at a Time, a Row per Level (• the One in Force); space Edits a Level's Copy",
-            "r on a Project or CWD Copy: Remove It, so That Level Follows the Next",
+            "r on a Project Copy: Remove It, so the Global One Applies",
             "enter Save and Return Home", "esc Back (Out of Job Keylists First)", "ctrl+q Quit"]))

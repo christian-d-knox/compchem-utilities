@@ -100,7 +100,7 @@ for a lab profile (can be declined). The settings live in commented TOML files i
 Edit them in the interface's Config screen, or by hand.
 
 **Job keylists.** The methods CompUtils writes jobs with live in one file, `jobRelatedKeylists` (in `~/bin`, and
-optionally in a project or the current folder): Optimization Methods (the routes the Optimization builder offers),
+optionally in a project): Optimization Methods (the routes the Optimization builder offers),
 Benchmark Methods (the benchmark list; entry 0 is the single-point default), Mixed Basis (`Gen`/`GenECP`) and ORCA
 Blocks. Edit it in the interface's Config › Job Keylists, one section at a time; a section a project doesn't have
 follows the global one. A later stage of a method is a line starting with `>`. Older `mixedbasis.txt`, `orcablocks.txt`
