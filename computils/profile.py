@@ -5,7 +5,8 @@ A profile is a TOML file the lab shares privately (e.g. readable only by its gro
 asks for it (SetupProfile); `cu -profile FILE` applies one any time. The layout is in
 example-profile.toml:
     name = "..."          shown when the profile is applied
-    [settings]            global config keys (the notification bot, the benchmark suite, ...)
+    [settings]            global config keys (the notification bot, ...); benchmarkMethods (a list of route cards) is
+                          written into the global jobRelatedKeylists' Benchmark Methods
     [clusters.NAME]       a cluster setup offers: its submissionList (unless NAME is built in), plus its settings
 
 Applying a profile writes its settings (and the active cluster's) into the global TOML files, as a wizard's answers
@@ -23,6 +24,7 @@ from rich.markup import escape
 
 from .console  import console
 from .defaults import Defaults, Cluster, BUILTIN_CLUSTERS
+from .keylists import BENCHMARK, LEGACY_KEY, GlobalBenchmark, SetGlobalBenchmark
 from .prompts  import AskBool, AskStr
 
 PROFILE_FILE = "profile.toml"
@@ -40,6 +42,8 @@ class Profile:
     name: str
     settings: dict
     clusters: list[Cluster]
+    # [settings] benchmarkMethods: the benchmark suite, now jobRelatedKeylists' global Benchmark Methods section
+    benchmark: list[str] | None = None
 
 
 @dataclass
@@ -122,7 +126,14 @@ def ReadProfile(text: str, source: str) -> Profile | None:
         return None
     for key in data.keys() - {"name", "settings", "clusters"}:
         console.print(f"[warning]\\[profile] Unknown entry '{key}' in {source}. Ignored.[/warning]")
-    settings = _CheckedSettings(_Table(data, "settings", source), f"{source} [settings]")
+    table = dict(_Table(data, "settings", source))
+    benchmark = table.pop(LEGACY_KEY, None)
+    if benchmark is not None and not (isinstance(benchmark, list) and benchmark
+                                      and all(isinstance(entry, str) for entry in benchmark)):
+        console.print(f"[warning]\\[profile] {LEGACY_KEY} in {escape(source)} \\[settings] should be a list of route cards. "
+                      f"Ignored.[/warning]")
+        benchmark = None
+    settings = _CheckedSettings(table, f"{source} [settings]")
     clusters = []
     for name, table in _Table(data, "clusters", source).items():
         where = f"{source} [clusters.{name}]"
@@ -140,7 +151,7 @@ def ReadProfile(text: str, source: str) -> Profile | None:
         own = _CheckedSettings({key: value for key, value in table.items() if key != "submissionList"}, where)
         clusters.append(Cluster(name, header or builtin.submissionList, {**(builtin.settings if builtin else {}), **own}))
     name = data.get("name")
-    return Profile(name if isinstance(name, str) and name else Path(source).stem, settings, clusters)
+    return Profile(name if isinstance(name, str) and name else Path(source).stem, settings, clusters, benchmark)
 
 
 def InstalledProfile() -> Profile | None:
@@ -199,6 +210,9 @@ def ApplyProfile(source: Path | None = None) -> bool:
     for key in changed:
         setattr(Defaults, key, values[key])
     Defaults._SaveKeys(changed)
+    # The suite goes into the global jobRelatedKeylists (a project's Benchmark Methods still win inside it)
+    if profile.benchmark is not None and GlobalBenchmark() != profile.benchmark and SetGlobalBenchmark(profile.benchmark):
+        changed.append(BENCHMARK)
     from .project import ReloadConfig
     ReloadConfig()
     # Key names only: values can be secrets

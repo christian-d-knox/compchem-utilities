@@ -9,12 +9,17 @@ from .actions  import SpinState
 from .console  import console
 from .defaults import Defaults
 
-# {tag} tokens in a route card select blocks from orcablocks.txt
+# {tag} tokens in a route card select blocks from jobRelatedKeylists' ORCA Blocks
 ROUTE_TAG_PATTERN = r"\{([\w-]+)\}"
 # [selector, selector: keywords {tags}] groups apply only to matching spin states
 ROUTE_GROUP_PATTERN = r"\[\s*([^\]:]*?)\s*:\s*([^\]]*)\]"
-# Anything left over from tag/group syntax. Rendered routes containing this are never written
-ROUTE_LEAK_PATTERN = r"\{[\w-]+\}|[\[\]]"
+# Anything left over from tag/group/directive syntax. Rendered routes containing this are never written
+ROUTE_LEAK_PATTERN = r"\{[\w-]+\}|[\[\]]|(?:^|\s)%"
+# A method's stages, one job: 'route -> route' (a method section's '>' lines are joined into this form)
+STAGE_JOIN = " -> "
+STAGE_SPLIT = r"\s+->\s+"
+# A stage's CompUtils directive (parsed out like {tags}): it starts a new checkpoint, %OldChk-copied from the one so far
+NEW_CHECKPOINT = r"(?i)(?:^|\s)%newchk(?=\s|$)"
 
 # Named multiplicity selectors
 _MULTIPLICITY_NAMES = {"doublet": 2, "triplet": 3, "quartet": 4, "quintet": 5, "sextet": 6, "septet": 7}
@@ -46,12 +51,20 @@ def _SelectorMatches(selector: str, spinState: SpinState, multiplicity: int) -> 
 
 @dataclass
 class RouteTemplate:
-    """A benchmarkMethods entry split into its unconditional part and its spin-state groups."""
+    """A method's route (jobRelatedKeylists) split into its unconditional part and its spin-state groups. A method with
+    stages ('route -> route') is its first stage, carrying the rest in `later`: everything that takes a template works
+    on stage 1, and jobs.RenderStages renders them all."""
     base: str                                   # clean route: no tags, no groups
     tags: list[str] = field(default_factory=list)
     groups: list[tuple[frozenset[str], str, list[str]]] = field(default_factory=list)  # (selectors, keywords, tags)
     method: str = ""                            # picks the program (extensionGetter) and names benchmark files
     blocks: list[str] = field(default_factory=list)  # literal ORCA %blocks written after the tag blocks (a re-run's own)
+    later: list["RouteTemplate"] = field(default_factory=list)  # stages 2+, in order
+    newChk: bool = False                        # %newchk: this stage starts a new checkpoint
+
+    @property
+    def stages(self) -> list["RouteTemplate"]:
+        return [self, *self.later]
 
 
 def _GroupSelectors(selectorText: str) -> tuple[frozenset[str], list[str]]:
@@ -67,22 +80,33 @@ def UnknownSelectors(routeLine: str) -> list[str]:
 
 
 def ParseRouteTemplate(routeLine: str) -> RouteTemplate:
+    """A route card as a template: each stage ('route -> route') parsed on its own (groups, tags, %newchk), the first
+    carrying the rest."""
+    first, *later = [_ParseStage(stage) for stage in regex.split(STAGE_SPLIT, routeLine.strip()) if stage.strip()] or [
+        _ParseStage("")]
+    first.later = later
+    return first
+
+
+def _ParseStage(routeLine: str) -> RouteTemplate:
+    newChk = regex.search(NEW_CHECKPOINT, routeLine) is not None
+    routeLine = regex.sub(NEW_CHECKPOINT, " ", routeLine)
     groups = []
     for selectorText, content in regex.findall(ROUTE_GROUP_PATTERN, routeLine):
         selectors, invalid = _GroupSelectors(selectorText)
         if invalid:
-            console.print(f"[warning]\\[config] Unknown spin selector(s) {invalid} in benchmarkMethods "
-                          f"entry '{escape(routeLine)}'. Ignoring that group.[/warning]")
+            console.print(f"[warning]\\[config] Unknown spin selector(s) {invalid} in the route "
+                          f"'{escape(routeLine)}'. Ignoring that group.[/warning]")
             continue
         keywords, tags = SplitRouteTags(content)
         groups.append((selectors, keywords, tags))
     base, tags = SplitRouteTags(regex.sub(ROUTE_GROUP_PATTERN, " ", routeLine))
     if regex.search(ROUTE_LEAK_PATTERN, base):
-        console.print(f"[warning]\\[config] Malformed \\[ ] group in benchmarkMethods entry '{escape(routeLine)}'. "
-                      f"Jobs using it will be skipped.[/warning]")
+        console.print(f"[warning]\\[config] Malformed \\[ ] group or unknown % directive in the route "
+                      f"'{escape(routeLine)}'. Jobs using it will be skipped.[/warning]")
     # The first token without Gaussian's '/basis' half, which would otherwise put the basis (and a '/') in filenames
     method = base.split()[0].split("/")[0] if base else ""
-    return RouteTemplate(base, tags, groups, method)
+    return RouteTemplate(base, tags, groups, method, newChk=newChk)
 
 
 def MethodKey(token: str) -> str:
@@ -154,7 +178,7 @@ def RenderRoute(template: RouteTemplate, molecule) -> tuple[str, list[str]]:
 
 
 def MatchTemplate(routeLine: str, molecule) -> RouteTemplate | None:
-    """The benchmarkMethods entry that renders to this (already rendered) route for this molecule, so a re-run can
+    """The Benchmark Methods entry that renders to this (already rendered) route for this molecule, so a re-run can
     recover its orcablocks tags. None if no entry matches. Shared by genReRun and the TUI's Re-run preview."""
     tokens = routeLine.upper().split()
     return next((template for template in Catalog.templates
@@ -163,7 +187,8 @@ def MatchTemplate(routeLine: str, molecule) -> RouteTemplate | None:
 
 class Catalog:
     # ── Data derived from Defaults at startup ────────────────────────────────
-    templates = []          # templates[i] = parsed benchmarkMethods[i] (.base clean route, .method); see RenderRoute
+    benchmarkLines = []     # the Benchmark Methods in force (jobRelatedKeylists, keylists.Keylist), as written
+    templates = []          # templates[i] = parsed benchmarkLines[i] (.base clean route, .method); see RenderRoute
     methodList = []
     targetProgram = []
     methodKeys = {}         # MethodKey(name) -> name, first listed wins (SplitReference, IdentifyMethod)
@@ -183,6 +208,9 @@ class Catalog:
             cls.methodKeys.setdefault(MethodKey(method), method)
         cls.programOf     = dict(zip(cls.methodList, cls.targetProgram))
 
-        # Benchmark method lines. Tags and groups are parsed out here so no downstream code ever sees them
-        cls.templates = [ParseRouteTemplate(line) for line in Defaults.benchmarkMethods]
+        # Benchmark method lines: the nearest jobRelatedKeylists level with Benchmark Methods. Tags and groups are parsed
+        # out here so no downstream code ever sees them
+        from .keylists import BENCHMARK, Keylist
+        cls.benchmarkLines = list(Keylist(BENCHMARK))
+        cls.templates = [ParseRouteTemplate(line) for line in cls.benchmarkLines]
         cls.canBench  = len(cls.templates) > 1

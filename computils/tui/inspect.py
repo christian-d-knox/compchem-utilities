@@ -10,12 +10,12 @@ from rich.text import Text
 
 from ..actions  import Action
 from ..console  import console
-from ..catalog  import Catalog, RenderRoute, RouteTemplate
+from ..catalog  import Catalog, RouteTemplate
 from ..defaults import Defaults
 from ..fileops  import (MapFile, FindInMap, HasContent, ExtractFrom, ExtractTermination, ExtractResources, IdentifyMethod,
                         InputRoutes, JobChecks, SplitRoute, MoleculeElements, extensionGetter, ReadMolecule,
                         ReRunTemplate, OrcaBlockName, ExtractProgram, ATOMIC_SYMBOLS, PROGRAMS)
-from ..jobs     import JobFileProblem
+from ..jobs     import RenderStages, StagesProblem
 from ..molecule import Molecule
 from ..spin     import ClassifySpin
 
@@ -198,13 +198,21 @@ SPAN_STYLES = {"method": "operation", "added": "good", "base": ""}
 
 
 def RenderedRow(row: PreviewRow, template: RouteTemplate, molecule: Molecule, elements: set[str],
-                texts: dict[str, str] | None = None) -> PreviewRow:
+                texts: dict | None = None, stage: int | None = None, programOf: dict | None = None) -> PreviewRow:
     """Fill row with the template rendered for molecule (spans, orcablocks tags) and why genFile would skip the job.
-    texts: unsaved project-file text to check against instead of the files (the config editor)."""
-    route, row.tags = RenderRoute(template, molecule)
+    A method with stages shows them all, joined by ' → ', or only stage N (the config editor's strip, which follows the
+    cursor); keywords the chaining adds show as added. texts: unsaved jobRelatedKeylists text to check against instead
+    of the files, and programOf the unsaved method map (the config editor)."""
+    rendered = RenderStages(template, molecule)
+    shown = range(len(rendered)) if stage is None else [stage - 1]
+    row.spans, row.tags = [], []
+    for index in shown:
+        if row.spans:
+            row.spans.append(("  →  ", "base"))
+        row.spans += RouteSpans(rendered[index].route, template.stages[index].base)
+        row.tags += [tag for tag in rendered[index].tags if tag not in row.tags]
     row.carried = [OrcaBlockName(block) for block in template.blocks]
-    row.spans = RouteSpans(route, template.base)
-    row.problem = JobFileProblem(route, row.tags, molecule.extensionType, elements, False, texts)
+    row.problem = StagesProblem(template, molecule, elements, texts, programOf)
     return row
 
 

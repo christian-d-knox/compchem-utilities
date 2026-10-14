@@ -7,7 +7,7 @@ from pathlib import Path
 from .console  import console
 from rich.markup import escape
 from .defaults import Defaults
-from .catalog  import Catalog, MethodKey, SplitReference, RouteTemplate, MatchTemplate
+from .catalog  import Catalog, MethodKey, SplitReference, RouteTemplate, MatchTemplate, STAGE_JOIN
 from .molecule import Molecule
 
 
@@ -345,31 +345,64 @@ _STEP_KEYWORDS = {
                   True:  r"(?i)(?:^|\s)stability(?=\s|$)"},
     "freq":      {False: r"(?i)(?:^|\s)freq(?=$|[\s=(])",
                   True:  r"(?i)(?:^|\s)(?:num|ana)?freq(?=\s|$)"},
+    # An IRC follows the reaction path: it reports no convergence table the stalker reads
+    "irc":       {False: r"(?i)(?:^|\s)irc(?=$|[\s=(])",
+                  True:  r"(?i)(?:^|\s)irc(?=\s|$)"},
 }
+# Gaussian's opt options ('opt=(ts,calcfc)', 'opt=modredundant'), to tell what kind of optimization a step is
+_GAUSSIAN_OPT_OPTIONS = r"(?i)(?:^|\s)opt\s*=?\s*\(?([^\s)]*)"
 
 @dataclass
 class StepChecks:
     """What one job step reports: convergence while it optimizes, a verdict if it runs a stability analysis."""
     optimizes: bool
     stability: bool
-    label:     str     # Opt, Stability, Freq or SP
+    label:     str     # ModRed, OptTS, Opt, IRC, Stability, Freq or SP
     freq:      bool = False
+    optKind:   str  = "Opt"     # what kind of optimization: ModRed (constrained), OptTS, Opt
+    irc:       bool = False
 
     @property
     def kinds(self) -> str:
-        """Everything the step runs, e.g. 'Opt+Freq', 'Stability' or 'SP'."""
-        return "+".join(kind for kind, runs in (("Stability", self.stability), ("Opt", self.optimizes),
-                                                ("Freq", self.freq)) if runs) or "SP"
+        """Everything the step runs, e.g. 'OptTS+Freq', 'ModRed', 'Stability' or 'SP'."""
+        return "+".join(kind for kind, runs in (("Stability", self.stability), (self.optKind, self.optimizes),
+                                                ("IRC", self.irc), ("Freq", self.freq)) if runs) or "SP"
 
 def JobChecks(route: str, program: str, inputText: str = "") -> StepChecks:
-    """The checks a step with this route needs. inputText: ORCA's input, whose %scf block can ask for the analysis."""
+    """The checks a step with this route needs. inputText: ORCA's input, whose %scf block can ask for the analysis (and
+    whose %geom constraints make an optimization ModRed)."""
     isOrca = program == Defaults.orcaExtension
     found = {check: bool(regex.search(patterns[isOrca], route)) for check, patterns in _STEP_KEYWORDS.items()}
     if isOrca and regex.search(r"(?i)stabperform\s+true", inputText):
         found["stability"] = True
-    label = ("Opt" if found["optimizes"] else "Stability" if found["stability"] else "Freq" if found["freq"]
-             else "SP")
-    return StepChecks(found["optimizes"], found["stability"], label, found["freq"])
+    optKind = "Opt"
+    if found["optimizes"]:
+        if isOrca:
+            optKind = ("OptTS" if regex.search(r"(?i)(?:^|\s)(?:opt)?ts(?=\s|$)|(?:^|\s)scants(?=\s|$)", route)
+                       else "ModRed" if regex.search(r"(?is)%geom\b.*?\bconstraints\b", inputText) else "Opt")
+        else:
+            optionsMatch = regex.search(_GAUSSIAN_OPT_OPTIONS, route)
+            options = {option.strip().lower() for option in regex.split(r"[,=]", optionsMatch.group(1))} if optionsMatch else set()
+            optKind = ("ModRed" if any(option.startswith("modred") for option in options)
+                       else "OptTS" if "ts" in options else "Opt")
+    label = (optKind if found["optimizes"] else "IRC" if found["irc"] else "Stability" if found["stability"]
+             else "Freq" if found["freq"] else "SP")
+    return StepChecks(found["optimizes"], found["stability"], label, found["freq"], optKind, found["irc"])
+
+def StageProblem(template: RouteTemplate, programOf: dict | None = None) -> str:
+    """Why a method's stages can't be written ('' if they can): ORCA stages wait for its `Continue` usage (agenda), every
+    stage must run in one program, and %newchk needs an earlier stage. The one check behind genFile's skip
+    (jobs.StagesProblem), the config editor's Check and the Optimization builder's rows."""
+    if template.newChk:
+        return "%newchk Needs an Earlier Stage"
+    if not template.later:
+        return ""
+    programs = {extensionGetter(stage.method, programOf) for stage in template.stages}
+    if len(programs) > 1:
+        return "Stages Run in Different Programs"
+    if programs == {Defaults.orcaExtension}:
+        return "ORCA Stages Aren't Supported Yet"
+    return ""
 
 def StageCount(data, program: str) -> int:
     """How many stages an input runs: Gaussian's --Link1-- separators + 1. ORCA's multi-step inputs aren't tracked yet."""
@@ -544,7 +577,7 @@ def HasRestrictedInstability(data) -> bool:
 
 # CompUtils writes these itself in genFile(), so user copies would conflict
 RESERVED_ORCA_BLOCKS = {"pal", "maxcore"}
-# '# @NAME' (or '# @tag NAME') names what follows it in a project file: an orcablocks.txt block, an optmethods.txt route.
+# '# @NAME' (or '# @tag NAME') names what follows it in a jobRelatedKeylists section: an ORCA block, a method's route.
 # 'tag' needs whitespace after it to be the keyword, so '# @tagged' names 'tagged'
 TAG_DIRECTIVE = r"#\s*@(?:tag\s+)?([\w-]+)"
 
@@ -573,32 +606,33 @@ def _SplitOrcaBlocks(lines: list[str]) -> list[tuple[str, str]]:
     return blocks
 
 def ExtractOrcaBlocks(data) -> dict[str, str]:
-    """Extract tagged %blocks from an orcablocks.txt mmap data stream (split by _SplitOrcaBlocks).
-    A block's tag is the preceding '# @tag NAME' directive if present, else the block name. Tags are lowercased."""
+    """Extract tagged %blocks from an ORCA Blocks section (jobRelatedKeylists) mmap data stream (split by
+    _SplitOrcaBlocks). A block's tag is the preceding '# @NAME' directive if present, else the block name. Tags are
+    lowercased."""
     blocks: dict[str, str] = {}
     data.seek(0)
     lines = [rawLine.decode().replace("\r\n", "\n") for rawLine in iter(data.readline, b"")]
     for directiveTag, blockText in _SplitOrcaBlocks(lines):
         blockName = OrcaBlockName(blockText)
         if blockName in RESERVED_ORCA_BLOCKS:
-            console.print(f"[warning]orcablocks.txt: %{blockName} is written by CompUtils. Ignoring this block.[/warning]")
+            console.print(f"[warning]ORCA Blocks: %{blockName} is written by CompUtils. Ignoring this block.[/warning]")
             continue
         tag = directiveTag or blockName
         if tag in blocks:
-            console.print(f"[error]Duplicate tag '{tag}' in orcablocks.txt. Keeping the first definition.[/error]")
+            console.print(f"[error]Duplicate tag '{tag}' in ORCA Blocks. Keeping the first definition.[/error]")
             continue
         blocks[tag] = blockText
     return blocks
 
-def ExtractOptMethods(data) -> dict[str, str]:
-    """Tagged routes from an optmethods.txt mmap data stream: tag -> route line, in file order. A route is a line that is
-    neither blank nor a # comment; its tag is the '# @NAME' directive above it, else its method (the first token
-    without Gaussian's /basis). Tags are lowercased. No route is dropped: a repeated tag is numbered (ts, ts-2, ...), as
-    two untagged routes of one method are."""
-    methods: dict[str, str] = {}
+def RouteEntries(data) -> list[tuple[str, list[tuple[int, str]]]]:
+    """(directive name or '', [(line index, stage route), ...]) for each route in a methods section (jobRelatedKeylists'
+    Optimization or Benchmark Methods), in order. A route is a line that is neither blank nor a # comment; a line
+    starting with '>' is a later stage of the route above it ('>' with no route above is skipped). '# @NAME' names the
+    route after it (lowercased). Line indices count from 0, so the TUI's editor can tell which stage its cursor is on."""
+    entries: list[tuple[str, list[tuple[int, str]]]] = []
     pendingTag = ""
     data.seek(0)
-    for rawLine in iter(data.readline, b""):
+    for index, rawLine in enumerate(iter(data.readline, b"")):
         line = rawLine.decode().strip()
         tagMatch = regex.match(TAG_DIRECTIVE, line)
         if tagMatch:
@@ -606,12 +640,42 @@ def ExtractOptMethods(data) -> dict[str, str]:
             continue
         if not line or line.startswith("#"):
             continue
-        tag, pendingTag = pendingTag or line.split()[0].split("/")[0].lower(), ""
+        if line.startswith(">"):
+            stage = line[1:].strip()
+            if entries and stage:
+                entries[-1][1].append((index, stage))
+            continue
+        entries.append((pendingTag, [(index, line)]))
+        pendingTag = ""
+    return entries
+
+def JoinStages(stages: list[tuple[int, str]]) -> str:
+    """A route's stages as one route card: 'route -> route' (STAGE_JOIN)."""
+    return STAGE_JOIN.join(route for _, route in stages)
+
+def NamedRoutes(entries: list[tuple[str, list[tuple[int, str]]]]) -> list[tuple[str, list[tuple[int, str]]]]:
+    """RouteEntries named as the Optimization Methods are: the '# @NAME' directive, else the method (the first token
+    without Gaussian's /basis), both lowercased. No route is dropped: a repeated name is numbered (ts, ts-2, ...), as
+    two unnamed routes of one method are."""
+    named, taken = [], set()
+    for tag, stages in entries:
+        tag = tag or stages[0][1].split()[0].split("/")[0].lower()
         name, number = tag, 2
-        while name in methods:
+        while name in taken:
             name, number = f"{tag}-{number}", number + 1
-        methods[name] = line
-    return methods
+        taken.add(name)
+        named.append((name, stages))
+    return named
+
+def ExtractOptMethods(data) -> dict[str, str]:
+    """Named routes from an Optimization Methods section (NamedRoutes): name -> route card (stages joined with
+    STAGE_JOIN), in order."""
+    return {name: JoinStages(stages) for name, stages in NamedRoutes(RouteEntries(data))}
+
+def ExtractBenchmarkMethods(data) -> list[str]:
+    """The route cards of a Benchmark Methods section, in order (stages joined with STAGE_JOIN); entry 0 is -sp's
+    default. '# @NAME' lines are allowed and ignored."""
+    return [JoinStages(stages) for _, stages in RouteEntries(data)]
 
 # Blocks an ORCA re-run never carries over: genFile writes %pal/%maxcore, and the new geometry comes from the output
 RERUN_SKIPPED_BLOCKS = RESERVED_ORCA_BLOCKS | {"coords"}
@@ -676,7 +740,7 @@ def _ElementLine(line: str) -> tuple[list[str], bool] | None:
     return None
 
 def ExtractMixedBasis(data) -> MixedBasis:
-    """Parse a Gaussian Gen/GenECP section (mixedbasis.txt) from an mmap data stream.
+    """Parse a Mixed Basis section (jobRelatedKeylists: Gaussian Gen/GenECP syntax) from an mmap data stream.
 
     Basis groups run from an element line ('C H N O 0') to '****'; the first blank line after a group ends the basis
     section. ECP entries run from an element line to the next element line or blank line. An element listed in two
@@ -697,8 +761,8 @@ def ExtractMixedBasis(data) -> MixedBasis:
     while index < len(lines) and lines[index].strip():
         header = _ElementLine(lines[index])
         if header is None:
-            console.print(f"[warning]mixedbasis.txt line {index + 1}: expected an element line like 'C H N O 0', "
-                          f"got '{escape(lines[index])}'. Ignoring the rest of the file.[/warning]")
+            console.print(f"[warning]Mixed Basis line {index + 1}: expected an element line like 'C H N O 0', "
+                          f"got '{escape(lines[index])}'. Ignoring the rest of the section.[/warning]")
             return MixedBasis(basis, ecp)
         index += 1
         body = []
@@ -714,8 +778,8 @@ def ExtractMixedBasis(data) -> MixedBasis:
     while index < len(lines) and lines[index].strip():
         header = _ElementLine(lines[index])
         if header is None:
-            console.print(f"[warning]mixedbasis.txt line {index + 1}: expected an ECP element line like 'Co 0', "
-                          f"got '{escape(lines[index])}'. Ignoring the rest of the file.[/warning]")
+            console.print(f"[warning]Mixed Basis line {index + 1}: expected an ECP element line like 'Co 0', "
+                          f"got '{escape(lines[index])}'. Ignoring the rest of the section.[/warning]")
             break
         index += 1
         body = []
@@ -732,12 +796,12 @@ def ExtractMixedBasis(data) -> MixedBasis:
         seen = set()
         for entry in entries:
             if entry.byCenter:
-                console.print(f"[warning]mixedbasis.txt: {sectionName} group '{' '.join(entry.tokens)} 0' addresses atoms "
+                console.print(f"[warning]Mixed Basis: {sectionName} group '{' '.join(entry.tokens)} 0' addresses atoms "
                               "by center number and can't be filtered by element. It is written to every job as-is.[/warning]")
                 continue
             duplicates = [token for token in entry.tokens if NormalizeElement(token) in seen]
             if duplicates:
-                console.print(f"[warning]mixedbasis.txt: {', '.join(NormalizeElement(t) for t in duplicates)} already has "
+                console.print(f"[warning]Mixed Basis: {', '.join(NormalizeElement(t) for t in duplicates)} already has "
                               f"a {sectionName} entry. Keeping the first one.[/warning]")
                 entry.tokens = [token for token in entry.tokens if token not in duplicates]
             seen.update(entry.elements)
@@ -788,7 +852,7 @@ def ReRunTemplate(molecule: Molecule) -> tuple[RouteTemplate | None, str]:
     # B3LYP to). It must be known before matching: the U/RO reference step differs between Gaussian and ORCA
     molecule.extensionType = molecule.sourceProgram or extensionGetter(methodName)
     # Extracted route cards are already rendered (no tags/groups). Find the benchmark entry that renders to the same
-    # route for THIS molecule's spin state, so its orcablocks tags carry over (a block fixed in orcablocks.txt applies)
+    # route for THIS molecule's spin state, so its orcablocks tags carry over (a block fixed in ORCA Blocks applies)
     template = MatchTemplate(routeLine, molecule)
     if template is None:
         # Use the route verbatim, with the %blocks the ORCA job ran with. RenderRoute's reference step is idempotent,

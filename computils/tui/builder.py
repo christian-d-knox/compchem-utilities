@@ -124,7 +124,7 @@ class BuilderScreen(Screen):
     def JobSections(self) -> ComposeResult:
         """The sections of a SLURM job action: Methods, Options, Resources, Route Preview (each only if the action uses it)."""
         if self.action in USES_METHODS:
-            yield FrameRule("├┤", "Methods (benchmarkMethods)")
+            yield FrameRule("├┤", "Methods (Benchmark Methods)")
             yield MethodList(*self.MethodPrompts(), id="methods", classes="side")
         # One tab stop per row: ←/→ move between the checkboxes (OptionRow). There is no Stalk option: every submitted
         # job is tracked, and the Results pop-up offers the Job Stalker. Run as Written has no options left
@@ -173,7 +173,7 @@ class BuilderScreen(Screen):
 
     def MethodPrompts(self) -> list[Text]:
         prompts = []
-        for index, entry in enumerate(Defaults.benchmarkMethods):
+        for index, entry in enumerate(Catalog.benchmarkLines):
             chosen = index == self.methodIndex
             skipped = index < self.methodIndex if self.action == Action.BENCHMARK else not chosen
             line = Text(f"({'•' if chosen else ' '}) {index}  {entry}   {ProgramName(Catalog.templates[index].method)}")

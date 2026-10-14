@@ -16,7 +16,7 @@ from textual.worker import get_current_worker
 from ..actions  import Action, FILE_ACTIONS
 from ..intent   import FormCheckIntent
 from ..project  import ChangeDirectory, FindProjectRoot
-from .common    import NAV_BINDINGS, NavFooter, Notice
+from .common    import NAV_BINDINGS, NavFooter, Notice, SwapItems
 from .inspect   import ActionExtensions, FileDetails, FileStatus, Styled
 
 ACTION_LABELS = {
@@ -227,15 +227,12 @@ class HomeScreen(Screen):
         sub-menu's own item highlighted). The same list is refilled, so every #actions query and the collapse apply."""
         previous, self.submenu = self.submenu, submenu
         actions = self.query_one("#actions", ActionList)
-        await actions.clear()
         if submenu is not None:
-            await actions.extend([ListItem(Label(ITEM_LABELS[SUBMENU_BACK]), id=SUBMENU_BACK)] +
-                                 [ListItem(Label(label), id=itemId) for itemId, label in SUBMENUS[submenu][2].items()])
-            actions.index = 1
+            await SwapItems(actions, [ListItem(Label(ITEM_LABELS[SUBMENU_BACK]), id=SUBMENU_BACK)] +
+                            [ListItem(Label(label), id=itemId) for itemId, label in SUBMENUS[submenu][2].items()], 1)
         else:
             items = self.ActionItems()
-            await actions.extend(items)
-            actions.index = next(index for index, item in enumerate(items) if item.id == previous)
+            await SwapItems(actions, items, next(index for index, item in enumerate(items) if item.id == previous))
         self.RefreshHeader()
         actions.refresh_bindings()
     # ─── State ────────────────────────────────────────────────────────

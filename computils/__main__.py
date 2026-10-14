@@ -15,7 +15,7 @@ def Main() -> None:
         return
     # Load configs and lookup data BEFORE handing control to the CLI.
     Defaults.Load()
-    # Project overrides must land before the Catalog derives route templates from benchmarkMethods
+    # Project overrides must land before the Catalog derives route templates (from jobRelatedKeylists)
     LoadProjectConfig()
     Catalog.Load()
 

@@ -69,7 +69,7 @@ def _RouteDeclaresBrokenSymmetry(molecule) -> str:
 
 def SpinOverride(rootName: str) -> tuple[SpinState, str] | None:
     """The spinstates.txt entry that names this molecule: (state, its pattern), the first match; None without one."""
-    overridePath = ResolveProjectFile("spinstates.txt", False)
+    overridePath = ResolveProjectFile("spinstates.txt")
     if overridePath is None:
         return None
     return next(((state, pattern) for pattern, state in _LoadSpinOverrides(overridePath)

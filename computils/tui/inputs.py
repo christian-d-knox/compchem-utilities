@@ -4,6 +4,7 @@ settings beside an editable preview of the input. The saved input is submitted t
 import copy
 from pathlib import Path
 
+import regex
 from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
@@ -15,33 +16,60 @@ from textual.widgets.option_list import Option
 from textual.worker import get_current_worker
 
 from ..actions  import Action, SpinState
-from ..catalog  import ParseRouteTemplate, RenderRoute, RouteTemplate, UnknownSelectors
+from ..catalog  import STAGE_JOIN, ParseRouteTemplate, RenderRoute, RouteTemplate, UnknownSelectors
 from ..defaults import Defaults
 from ..fileops  import (ExtractFrom, ExtractFromText, ExtractXyz, MoleculeElements, ReRunTemplate, Retarget,
-                        extensionGetter, fileCreation)
+                        StageProblem, extensionGetter, fileCreation)
 from ..intent   import IntentDraft
-from ..jobs     import DefaultMemoryRatio, JobFileProblem, JobInputText, OptMethods
+from ..jobs     import DefaultMemoryRatio, JobInputText, OptMethods, StagesProblem
 from ..molecule import Molecule
 from ..spin     import SpinOverride
 from .common    import (NAV_BINDINGS, NUMBER, TEXT, FrameRule, KeyHint, NavFooter, Notice, Popup, Setting, SettingsList,
                         ValueInput)
 from .home      import TitleLine
 from .inspect   import ElectronProblem, Formula, JobSummary, OutputExtensions, PreviewMolecule, Styled
+from .lists     import Cut, ProblemText, TextEditor
 
 LEFT_WIDTH = 30          # the settings column, its borders included (the frame's junction sits on its right edge)
 STATUS_STYLES = {"Normal": "good", "Error": "error", "Unknown": "warning", "Input": "info"}
 FILE_NAME = r"[\w.\-]"   # the characters a job name takes
 # A method's name in its row, beside "(•) " and its program: the settings column less the list's scrollbar
 METHOD_NAME_WIDTH = LEFT_WIDTH - 17
+# A stage whose route needs lines after the geometry gets a row for them: Gaussian's Opt=ModRedundant
+STAGE_INPUT = r"(?i)modred"
+# The ModRed editor's example (32 columns)
+MODRED_EXAMPLE = """\
+B 1 2 F
+A 1 2 3 F
+D 1 2 3 4 F
+B 5 9 S 10 0.05
+
+One line per coordinate: B
+bond, A angle, D dihedral, by
+atom number (as in the
+geometry), then F to freeze it,
+or S steps step-size to scan."""
+
+
+def ModRedCheck(text: str, atoms: int) -> tuple[str, list[str]]:
+    """(a short summary, problems) for a stage's ModRed lines: atom numbers must be in the geometry (1 to atoms)."""
+    lines = [line.split() for line in text.splitlines() if line.strip()]
+    problems = []
+    for number, fields in enumerate(lines, 1):
+        # The type letter, then atom numbers until the first field that isn't one ('*' is any atom)
+        for field in fields[1:]:
+            if field == "*":
+                continue
+            if not regex.fullmatch(r"-?\d+", field):
+                break
+            if not 1 <= int(field) <= atoms:
+                problems.append(f"✗ Line {number}: Atom {field} Isn't in the Geometry (1–{atoms})")
+    summary = f"{len(lines)} Line{'s' if len(lines) != 1 else ''}" if lines else "Empty"
+    return summary, problems
 
 
 def ProgramOf(extensionType: str) -> str:
     return "ORCA" if extensionType == Defaults.orcaExtension else "G16"
-
-
-def Clipped(text: str, width: int) -> str:
-    """text cut to width, ending in … when it was longer."""
-    return text if len(text) <= width else text[:max(width - 1, 0)] + "…"
 
 
 class LeaveText(TextArea):
@@ -349,6 +377,15 @@ class OptimizationScreen(Screen):
         for index, (tag, route) in enumerate(self.optMethods.items()):
             template = ParseRouteTemplate(route)
             self.methods[f"method-{index}"] = (tag, template, extensionGetter(template.method), route)
+        # Why a method's stages can't be written (ORCA stages, mixed programs): its row is greyed with the reason
+        self.problems = {key: StageProblem(template) for key, (_, template, _, _) in self.methods.items()
+                         if template is not None and StageProblem(template)}
+        # A ModRed row per stage, up to the longest listed method (a longer Custom route's extra stages: the preview)
+        self.stageRows = max([3] + [len(template.stages) for _, template, _, _ in self.methods.values()
+                                    if template is not None])
+        self.stageInputs: dict[int, str] = {}   # stage number -> its ModRed lines (kept across method changes)
+        self.chained = False                     # the chosen method has stages (Checkpoint is then required)
+        self.checkpointChoice = False            # Checkpoint as chosen before stages required it
         self.customRoute = ""        # the Custom route as last typed (the Route row shows the chosen method's otherwise)
         self.generated = ""          # the preview as last generated: the preview is edited when its text differs
         self.memoryDefault = ""      # the Memory value last pre-filled: replaced when the method changes it
@@ -361,11 +398,11 @@ class OptimizationScreen(Screen):
         # The programs line up in their own column, which a long name never pushes off: names are cut (…) to the room
         # left beside "(•) " and the program, with the list's scrollbar showing
         width = min(max((len(label) for label, *_ in self.methods.values()), default=0), METHOD_NAME_WIDTH)
-        methods = [Setting(key, "", self.RouteMeaning(route), on=False, choice="method",
-                           fixed=f"{Clipped(label, width).ljust(width)}  {ProgramOf(extension)}",
-                           available=template is not None)
+        methods = [Setting(key, "", self.problems.get(key) or self.RouteMeaning(route), on=False, choice="method",
+                           fixed=f"{Cut(label, width).ljust(width)}  {ProgramOf(extension)}",
+                           available=template is not None and key not in self.problems)
                    for key, (label, template, extension, route) in self.methods.items()]
-        methods.append(Setting("custom", "", "" if self.optMethods else "No optmethods.txt: Add One in Project Files",
+        methods.append(Setting("custom", "", "" if self.optMethods else "No Optimization Methods: Add Them in Config › Job Keylists",
                                fixed="Custom", on=False, choice="method"))
         # The first usable method starts chosen: a prior job's own route, else the first tag, else Custom
         chosen = next(setting for setting in methods if setting.available)
@@ -384,6 +421,9 @@ class OptimizationScreen(Screen):
             *methods,
             # The chosen method's route, so a small change to it is one edit (typing here chooses Custom)
             Setting("route", "  └ Route", value=route, accepts=TEXT, under="custom"),
+            # Shown only for the chosen method's ModRed stages (Refresh)
+            *[Setting(f"stage-input-{number}", f"Stage {number} ModRed Input", fixed="Empty · ␣ Edit", opens=True)
+              for number in range(1, self.stageRows + 1)],
             Setting("cpus", "CPUs", value=str(Defaults.CPU), accepts=r"\d"),
             Setting("memory", "Memory per Core", value="", unit="GB", accepts=NUMBER),
             Setting("checkpoint", "Checkpoint", on=False),
@@ -391,9 +431,13 @@ class OptimizationScreen(Screen):
 
     @staticmethod
     def RouteMeaning(route: str) -> Text | str:
-        # What a method runs, under its name (qol.toml: routeUnderEachMethod; in full, wrapped by the -route CSS).
-        # Text: a str "[oss: guess=mix]" would be read as markup
-        return Text(route) if Defaults.routeUnderEachMethod and route else ""
+        # What a method runs, under its name (qol.toml: routeUnderEachMethod; in full, wrapped by the -route CSS), its
+        # stages numbered. Text: a str "[oss: guess=mix]" would be read as markup
+        if not (Defaults.routeUnderEachMethod and route):
+            return ""
+        stages = route.split(STAGE_JOIN)
+        return Text("\n".join(f"{number} {stage}" for number, stage in enumerate(stages, 1)) if len(stages) > 1
+                    else route)
 
     def compose(self) -> ComposeResult:
         atoms = len(self.molecule.coordinateList)
@@ -475,11 +519,16 @@ class OptimizationScreen(Screen):
             electrons = ElectronProblem(molecule.coordinateList, charge, multiplicity)
             if electrons:
                 errors.append(electrons)
-        fileProblem = ""
+        fileProblem, warnings = "", []
         if template is not None:
-            # Checkpoint is Gaussian's %chk
-            if settings.Row("checkpoint").available != (extension == Defaults.gaussianExtension):
-                settings.SetAvailable("checkpoint", extension == Defaults.gaussianExtension)
+            self.ShowStages(template, extension)
+            # A ModRed stage's lines: atom numbers outside the geometry stop it; empty lines are only a warning
+            for number in self.ModRedStages():
+                summary, problems = ModRedCheck(self.stageInputs.get(number, ""), len(molecule.coordinateList))
+                errors += [problem.removeprefix("✗ ").replace("Line", f"Stage {number} ModRed Line", 1)
+                           for problem in problems]
+                if summary == "Empty":
+                    warnings.append(f"Stage {number} ModRed Is Empty")
             if charge is not None:
                 molecule.charge, molecule.multiplicity = charge, multiplicity
             molecule.spinState = (SpinState.OPEN if openShell else
@@ -489,8 +538,8 @@ class OptimizationScreen(Screen):
             self.FillMemory(f"{DefaultMemoryRatio(route, extension):g}")
             if memory is None:
                 errors.append("Memory Must Be a Number Above 0")
-            # The same check genFile skips jobs with, without its prompt for a missing project file
-            fileProblem = JobFileProblem(route, tags, extension, MoleculeElements(molecule.coordinateList), False)
+            # The same check genFile skips jobs with: every stage's route, its project files, and the stages themselves
+            fileProblem = StagesProblem(template, molecule, MoleculeElements(molecule.coordinateList))
             self.path = Path.cwd() / fileCreation(name, extension) if name else None
             # The preview needs only what goes into it: a name only names the file (and %chk)
             if charge is not None and cpus >= 1 and memory is not None and not self.edited:
@@ -501,9 +550,12 @@ class OptimizationScreen(Screen):
         self.ShowTitle(extension)
         self.ready = not errors and self.path is not None
         more = f" (+{len(errors) - 1} More)" if len(errors) > 1 else ""
-        warning = [Styled(f"⚠ {fileProblem}", "warning"), " · "] if fileProblem and self.edited else []
+        if fileProblem and self.edited:
+            warnings.insert(0, fileProblem)
+        # A warning takes the place of '1 Job Ready' (the job is still ready), so the edge keeps its ⏎ hint
+        ready = Styled(f"⚠ {warnings[0]}", "warning") if warnings else Styled("1 Job Ready", "good")
         self.query_one("#submit", FrameRule).right = (Styled(errors[0] + more, "error") if errors else Text.assemble(
-            *warning, Styled("1 Job Ready", "good"), " · ", KeyHint(self.app, "⏎", "Save and Submit")))
+            ready, " · ", KeyHint(self.app, "⏎", "Save and Submit")))
         self.refresh_bindings()
 
     def FillMemory(self, default: str) -> None:
@@ -518,9 +570,64 @@ class OptimizationScreen(Screen):
         if cpus is None:
             cpus, memory = int(settings.Row("cpus").value), float(settings.Row("memory").value)
         self.generated = JobInputText(self.molecule, settings.Applies(settings.Row("checkpoint")), False, cpus, memory,
-                                      required=False)
+                                      extraInput=self.ExtraInput())
         if self.preview.text != self.generated:
             self.preview.load_text(self.generated)
+
+    # ─── Stages ───────────────────────────────────────────────────────
+
+    def ModRedStages(self) -> list[int]:
+        """The chosen method's stages that take ModRed lines (their rows are shown)."""
+        return [number for number in range(1, self.stageRows + 1)
+                if self.settings.Row(f"stage-input-{number}").display]
+
+    def ExtraInput(self) -> list[str]:
+        """Each stage's lines after its geometry, for JobInputText ('' for a stage without a ModRed row)."""
+        shown = set(self.ModRedStages())
+        return [self.stageInputs.get(number, "") if number in shown else "" for number in range(1, self.stageRows + 1)]
+
+    def ShowStages(self, template: RouteTemplate, extension: str) -> None:
+        """Rows that follow the chosen method's stages: a ModRed row per ModRed stage (Gaussian), and Checkpoint, which
+        stages require (they pass on what they made through it), ticked and greyed with that reason."""
+        settings, stages = self.settings, template.stages
+        gaussian = extension == Defaults.gaussianExtension
+        for number in range(1, self.stageRows + 1):
+            shown = gaussian and number <= len(stages) and regex.search(STAGE_INPUT, stages[number - 1].base) is not None
+            if settings.Row(f"stage-input-{number}").display != shown:
+                settings.SetShown(f"stage-input-{number}", shown)
+        chained = gaussian and len(stages) > 1
+        row = settings.Row("checkpoint")
+        if chained != self.chained:
+            if chained:
+                self.checkpointChoice, row.on = row.on, True
+            else:
+                row.on = self.checkpointChoice
+            self.chained = chained
+        row.SetMeaning("Required: Later Stages Read the Geometry and Orbitals From It" if chained else "")
+        # Checkpoint is Gaussian's %chk
+        if row.available != (gaussian and not chained):
+            settings.SetAvailable("checkpoint", gaussian and not chained)
+
+    def on_settings_list_open(self, event: SettingsList.Open) -> None:
+        # A stage's ModRed lines, edited in the TextEditor (esc is Done)
+        number = int(event.key.rsplit("-", 1)[1])
+        atoms = len(self.molecule.coordinateList)
+
+        def Check(text: str) -> Text:
+            summary, problems = ModRedCheck(text, atoms)
+            return Text("\n").join([Text(f"{summary} · {atoms} Atoms")] + ([ProblemText(problems)] if problems else []))
+
+        def Done(text) -> None:
+            if text is None:
+                return
+            self.stageInputs[number] = text.strip("\r\n")
+            summary, problems = ModRedCheck(self.stageInputs[number], atoms)
+            row = self.settings.Row(event.key)
+            row.setting.fixed = f"{summary}{' · ✗' if problems else ''} · ␣ Edit"
+            row.Show()
+            self.Refresh()
+        self.app.push_screen(TextEditor(f"Stage {number} ModRed Input", self.stageInputs.get(number, ""), Check,
+                                        MODRED_EXAMPLE), Done)
 
     def ShowTitle(self, extension: str) -> None:
         if self.path is None:
@@ -613,8 +720,10 @@ class OptimizationScreen(Screen):
             "tab / shift+tab Move Between the Settings and the Input",
             "↑/↓ Move Between Settings (Type to Change a Value)",
             "←/→ or space Choose the Spin or the Method",
-            "Method: a Prior Job's Own Route, the Routes in optmethods.txt, or a Custom Route",
+            "Method: a Prior Job's Own Route, the Optimization Methods (Config › Job Keylists), or a Custom Route",
             "Route Shows the Chosen Method's Route; Typing in It Makes a Custom Route From It",
+            "Stages: 'route -> route' (Gaussian --Link1--); Later Stages Read the Checkpoint (Geom=AllCheck, Guess=Read)",
+            "space on a Stage's ModRed Input Edits Its Lines (Written After That Stage's Geometry)",
             "The Input Follows the Settings Until You Type in It; ctrl+r Regenerates It",
             "esc in the Input Return to the Settings",
             "enter Save the Input and Submit It", "esc Back to the Coordinates", "ctrl+q Quit"]))
