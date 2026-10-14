@@ -227,9 +227,11 @@ class ListEditor(ModalScreen):
 
 
 class TextEditor(ModalScreen):
-    """A project file edited as text, with a summary(text) -> Text pane re-parsed as you type and, below it, an example
-    of the format. esc is Done (⏎ types a newline here, and nothing is written until the config editor saves); ^r
-    reverts. Dismisses with the text."""
+    """Text edited in place (a project file, a jobRelatedKeylists section), with a summary(text) -> Text pane re-parsed
+    as you type and, below it, an example of the format (text or any renderable). preview(text, row) -> (title,
+    renderable) | None, if given, fills a full-width strip under the text that follows the cursor's line (None: the
+    cursor is on nothing to preview). esc is Done (⏎ types a newline here, and nothing is written until the config
+    editor saves); ^r reverts. Dismisses with the text."""
     DEFAULT_CSS = """
     TextEditor { align: center middle; }
     /* Sized by CSS, so the frame follows the terminal when it is resized */
@@ -245,12 +247,16 @@ class TextEditor(ModalScreen):
     /* Check and Example split the column evenly; either scrolls within its half when its text is longer */
     TextEditor #summary, TextEditor #example { height: 1fr; }
     TextEditor #example { color: $text-muted; }
+    /* The preview strip: as tall as its text, up to 8 lines (it scrolls past that) */
+    TextEditor #preview { height: auto; max-height: 8; border-left: solid $secondary; border-right: solid $secondary;
+                          padding: 0 1; }
     """
     BINDINGS = [Binding("escape", "done"), Binding("ctrl+r", "revert")]
 
-    def __init__(self, title: str, text: str, summary, example: str = "") -> None:
+    def __init__(self, title: str, text: str, summary, example="", preview=None) -> None:
         super().__init__()
         self.title_, self.original, self.summary, self.example = title, text, summary, example
+        self.preview = preview
 
     def compose(self):
         with Vertical():
@@ -262,7 +268,11 @@ class TextEditor(ModalScreen):
                         yield Static(id="summary-text")
                     if self.example:
                         with VerticalScroll(id="example"):
-                            yield Static(Text(self.example))
+                            yield Static(Text(self.example) if isinstance(self.example, str) else self.example)
+            if self.preview is not None:
+                yield FrameRule("├┤", id="preview-rule")
+                with VerticalScroll(id="preview"):
+                    yield Static(id="preview-text")
             yield FrameRule("└┘", id="text-keys")
 
     def on_mount(self) -> None:
@@ -273,10 +283,24 @@ class TextEditor(ModalScreen):
         self.query_one("#text-keys", FrameRule).right = Text("  ").join(
             [KeyHint(self.app, "esc", "Done"), KeyHint(self.app, "^r", "Revert")])
         self.query_one("#summary-text", Static).update(self.summary(self.original))
+        self.ShowPreview()
         self.query_one("#text", TextArea).focus()
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         self.query_one("#summary-text", Static).update(self.summary(event.text_area.text))
+        self.ShowPreview()
+
+    def on_text_area_selection_changed(self, event: TextArea.SelectionChanged) -> None:
+        self.ShowPreview()
+
+    def ShowPreview(self) -> None:
+        if self.preview is None:
+            return
+        area = self.query_one("#text", TextArea)
+        shown = self.preview(area.text, area.cursor_location[0])
+        title, body = shown if shown is not None else ("", Text("Move to a Route to Preview It", "dim"))
+        self.query_one("#preview-rule", FrameRule).label = title
+        self.query_one("#preview-text", Static).update(body)
 
     def action_done(self) -> None:
         self.dismiss(self.query_one("#text", TextArea).text)

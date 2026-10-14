@@ -20,9 +20,10 @@ accessed from the command line or from a full-screen terminal interface.
   and its Slurm script, and submits it. Jobs written by hand are submitted as they are (`-r`).
 - **Treats Gaussian and ORCA equally.** Outputs are recognized by their contents, and a method is sent to the program
   you map it to in your config.
-- **Builds route cards from templates.** Each benchmark entry is a complete route card, with optional spin groups
-  (`[oss: guess=mix stable=opt]`) applied only to matching molecules, automatic U/RO references for open-shell species
-  and, for ORCA, `{tags}` that pull `%` blocks from a project file.
+- **Builds route cards from templates.** Each benchmark or optimization method is a complete route card, with optional
+  spin groups (`[oss: guess=mix stable=opt]`) applied only to matching molecules, automatic U/RO references for
+  open-shell species and, for ORCA, `{tags}` that pull `%` blocks into the input. A method can run in stages (Gaussian
+  `--Link1--`, e.g. ModRed → Stability → OptTS), each later stage reading the geometry and orbitals from the checkpoint.
 - **Classifies spin states.** Closed-shell singlets, broken-symmetry (open-shell) singlets and higher multiplicities are
   told apart from the previous route, `<S**2>` and stability analyses, or from your own overrides.
 - **Follows your jobs.** Every submitted job is tracked. The Job Stalker reports each stage as it runs (optimization
@@ -30,8 +31,8 @@ accessed from the command line or from a full-screen terminal interface.
   when jobs end.
 - **Runs GoodVibes.** Thermochemistry with quasi-harmonic corrections over your outputs, converted automatically into an
   Excel table, for your convenience.
-- **Keeps per-project settings.** Any folder can be a project root with its own resources, benchmark list, mixed basis
-  sets (`Gen`/`GenECP`), ORCA blocks and spin-state overrides.
+- **Keeps per-project settings.** Any folder can be a project root with its own resources, methods, mixed basis sets
+  (`Gen`/`GenECP`), ORCA blocks and spin-state overrides.
 - **Shares lab settings privately.** Configure the provided example-profile.toml to add private computing resources or
   other information (such as implementing your own notifier bot).
 
@@ -90,7 +91,7 @@ for a lab profile (can be declined). The settings live in commented TOML files i
 | File | Contains |
 |---|---|
 | `slurm.toml` | Cluster, partition, CPUs, memory, wall time, stalking intervals |
-| `programs.toml` | Method → program map, benchmark list, open-shell reference, job script boilerplate |
+| `programs.toml` | Method → program map, open-shell reference, job script boilerplate |
 | `extensions.toml` | File extensions and name suffixes |
 | `notifications.toml` | Telegram bot settings |
 | `paths.toml` | Config directory and project marker |
@@ -98,10 +99,17 @@ for a lab profile (can be declined). The settings live in commented TOML files i
 
 Edit them in the interface's Config screen, or by hand.
 
+**Job keylists.** The methods CompUtils writes jobs with live in one file, `jobRelatedKeylists` (in `~/bin`, and
+optionally in a project or the current folder): Optimization Methods (the routes the Optimization builder offers),
+Benchmark Methods (the benchmark list; entry 0 is the single-point default), Mixed Basis (`Gen`/`GenECP`) and ORCA
+Blocks. Edit it in the interface's Config › Job Keylists, one section at a time; a section a project doesn't have
+follows the global one. A later stage of a method is a line starting with `>`. Older `mixedbasis.txt`, `orcablocks.txt`
+and `optmethods.txt` files, and a `benchmarkMethods` list in the TOML files, are still read until `cu -refresh` merges
+them in.
+
 **Projects.** `cu -init` marks a folder as a project root (default: `.computils/` folder). Its `project.toml` overrides
-the resources, cluster, benchmark suite and spin settings for every job inside it, and it can hold `mixedbasis.txt`,
-`orcablocks.txt`, `optmethods.txt` (the optimization routes the Optimization builder offers) and `spinstates.txt` for
-methods that require them.
+the resources, cluster and spin settings for every job inside it, and it can hold its own `jobRelatedKeylists` and a
+`spinstates.txt`.
 
 **Lab profiles.** A lab profile is a private TOML file holding a group's clusters and shared settings, such as a
 notification bot. Keep it somewhere only your lab can read. `example-profile.toml` documents the layout.

@@ -14,7 +14,8 @@
 name = "Example Lab"
 
 # Any global config key (see the TOML files in ~/bin), applied to every labmate's config. Leave a key out
-# (or commented out) rather than empty: an empty value is applied too, e.g. wiping a labmate's own bot token
+# (or commented out) rather than empty: an empty value is applied too, e.g. wiping a labmate's own bot token.
+# benchmarkMethods (route cards) becomes the Benchmark Methods of every labmate's global jobRelatedKeylists
 [settings]
 isNotifications = true
 # botToken = "123456789:ABC..."   # the lab bot's token, from Telegram's @BotFather

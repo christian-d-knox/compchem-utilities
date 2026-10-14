@@ -2,7 +2,7 @@
 
 A project root is any directory containing a marker directory (Defaults.projectMarker, default `.computils/`).
 CompUtils walks upward from the CWD to the nearest marker, the same way git finds `.git/`. Shareable reference files
-(e.g. mixedbasis.txt) live inside the marker so every subdirectory of the project can find them.
+(jobRelatedKeylists, spinstates.txt) live inside the marker so every subdirectory of the project can find them.
 """
 import functools, os, shutil
 import tomllib as tom
@@ -10,17 +10,12 @@ from pathlib import Path
 
 from .console  import ApplyTheme, console
 from .defaults import DELETE, BackUpFile, Defaults, loadToml, writeToml
-from .prompts  import AskBool, AskChoice
-from .        import prompts
+from .prompts  import AskBool
 
-# Known shareable files. -init (and the auto-prompt) offer to move these from the CWD into a new marker.
-PROJECT_FILES = ["mixedbasis.txt", "orcablocks.txt", "optmethods.txt", "spinstates.txt"]
+# Known shareable files. -init offers to move these from the CWD into a new marker (jobRelatedKeylists: keylists.py)
+PROJECT_FILES = ["jobRelatedKeylists", "spinstates.txt"]
 # Project-level overrides of the global config. Only ever lives inside the marker
 PROJECT_CONFIG = "project.toml"
-
-# Batch guard: the create-project prompt is offered at most once per run
-_hasPrompted = False
-
 
 # CWD never changes during a run, so the upward walk only needs to happen once
 @functools.cache
@@ -78,11 +73,15 @@ def EnsureProjectConfig(root: Path) -> None:
 def RefreshProjectConfig() -> None:
     """`cu -refresh project`: rewrite the nearest project.toml in the current layout, keeping the overrides that applied
     (LoadProjectConfig). Keys a project can't override, stale keys and invalid values are dropped (they follow global).
-    A missing or unparseable file goes through EnsureProjectConfig, since there is nothing to keep."""
+    A missing or unparseable file goes through EnsureProjectConfig, since there is nothing to keep. The project's old
+    mixedbasis.txt / orcablocks.txt / optmethods.txt and its benchmarkMethods key are merged into its jobRelatedKeylists
+    first (keylists.MergeLegacy), so dropping the key loses nothing."""
     root = FindProjectRoot()
     if root is None:
         console.print("[info]Not inside a project, so there is no project.toml to refresh (`cu -init` creates one).[/info]")
         return
+    from .keylists import Levels, MergeLegacy
+    MergeLegacy(next(level for level in Levels() if level.label == "Project"))
     configPath = ProjectFilePath(root, PROJECT_CONFIG)
     try:
         current = configPath.read_text(encoding="utf-8")
@@ -133,9 +132,10 @@ def ReloadConfig(readGlobals: bool = True) -> None:
         Defaults.Load()
         ApplyTheme(Defaults.colorMode)
         # Project files may have been rewritten too (their loaders cache by path)
-        from .jobs import _LoadMixedBasis, _LoadOptMethods, _LoadOrcaBlocks
+        from .keylists import ClearCaches
         from .spin import _LoadSpinOverrides
-        for loader in (_LoadMixedBasis, _LoadOrcaBlocks, _LoadOptMethods, _LoadSpinOverrides, ResolveProjectFile):
+        ClearCaches()
+        for loader in (_LoadSpinOverrides, ResolveProjectFile):
             loader.cache_clear()
     LoadProjectConfig()
     Catalog.Load()
@@ -145,48 +145,25 @@ def ChangeDirectory(target: Path) -> bool:
     """Move the CWD mid-run (TUI navigation). Returns True if the nearest project root changed.
 
     The root/file lookups are re-walked on every move, since a subfolder can hold its own CWD copy of a project file.
-    project.toml and the Catalog are only reloaded when the root itself changes.
+    project.toml is only reloaded when the root itself changes; the Catalog on every move, since a CWD jobRelatedKeylists
+    can hold its own Benchmark Methods.
     """
     previousRoot = FindProjectRoot()
     os.chdir(target)
     FindProjectRoot.cache_clear()
     ResolveProjectFile.cache_clear()
     if FindProjectRoot() == previousRoot:
+        from .catalog import Catalog
+        Catalog.Load()
         return False
     ReloadConfig(readGlobals=False)
     return True
 
 
-def PromptCreateProject(missingFile: str) -> Path | None:
-    global _hasPrompted
-    if _hasPrompted:
-        return None
-    _hasPrompted = True
-
-    here = Path.cwd().resolve()
-    console.print(f"[warning]{missingFile} not found, and {here} is not inside a project.[/warning]")
-    # The TUI can't ask in the middle of a submission: say how instead (its builder already warned before Submit)
-    if not prompts.interactive:
-        console.print(f"[info]Run `cu -init` where the project should start, and place {missingFile} in its "
-                      f"{Defaults.projectMarker}.[/info]")
-        return None
-    if not AskBool("Create a project root so reference files can be shared across subdirectories?", "y"):
-        return None
-    # Offer the CWD and its parents, excluding the filesystem root
-    candidates = [here, *here.parents][:-1] or [here]
-    choice = AskChoice("Choose the project root", [str(path) for path in candidates])
-    if choice is None:
-        return None
-    root = CreateProjectRoot(candidates[choice], offerMove=False)
-    if root is not None:
-        console.print(f"[info]Place {missingFile} in {root / Defaults.projectMarker} and re-run.[/info]")
-    return root
-
-
-# Cached so a batch resolves (and prints) once, not once per molecule
+# Cached so a batch resolves (and prints) once, not once per molecule. A missing file is never prompted for (the job
+# files are jobRelatedKeylists, which has a global level: keylists.py)
 @functools.cache
-def ResolveProjectFile(fileName: str, required: bool = True) -> Path | None:
-    # Optional files (required=False) never trigger the create-project prompt
+def ResolveProjectFile(fileName: str) -> Path | None:
     root = FindProjectRoot()
     # A CWD copy overrides the project copy
     localFile = Path(fileName)
@@ -201,7 +178,4 @@ def ResolveProjectFile(fileName: str, required: bool = True) -> Path | None:
             console.print(f"[info]Using project file: {sharedFile}[/info]")
             return sharedFile
         return None
-
-    if required:
-        PromptCreateProject(fileName)
     return None

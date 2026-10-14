@@ -119,7 +119,7 @@ def _DispatchSinglePoint(intent: SinglePointIntent) -> list[TrackedJob]:
 
 def _DispatchBenchmark(intent: BenchmarkIntent) -> list[TrackedJob]:
     if not Catalog.canBench:
-        console.print("[error]Notice: Benchmarking requires at least 2 entries in benchmarkMethods (programs.toml).[/error]")
+        console.print("[error]Notice: Benchmarking requires at least 2 Benchmark Methods (Config › Job Keylists).[/error]")
         return []
     return _GenerateBatch(intent, genBench)
 
@@ -233,6 +233,10 @@ def _DispatchAttributions() -> None:
 
 
 def _DispatchRefresh(intent: RefreshIntent) -> None:
+    # The old benchmarkMethods key and project files go into jobRelatedKeylists first: refresh drops the key
+    from .keylists import GlobalLevel, Levels, MergeLegacy
+    MergeLegacy(GlobalLevel())
+    MergeLegacy(Levels()[0])
     Defaults.RefreshFiles()
     if intent.project:
         from .project import RefreshProjectConfig

@@ -2,7 +2,7 @@ from rich.markup import escape
 from .console import console
 
 # False while the TUI runs: its workers own the terminal, so a prompt would hang there. Code that can be reached from the
-# TUI checks this before asking (project.PromptCreateProject); any other Ask* raises, so a stray prompt fails loudly
+# TUI checks this before asking; any Ask* reached anyway raises, so a stray prompt fails loudly
 interactive = True
 
 def _CheckInteractive(prompt: str) -> None:

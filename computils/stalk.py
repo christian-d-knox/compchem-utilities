@@ -31,13 +31,15 @@ AWAITING_PING, ENDED = "AWAITING PING", "ENDED"
 
 @dataclass
 class Stage:
-    """One --Link1-- stage of a job: its status, its current step's label, and the last reports read for it. A report
-    is kept once read, so an opt's convergence still shows during the freq step Gaussian adds to it."""
+    """One --Link1-- stage of a job: what it was planned to run, its status, its current step's label, and the last
+    reports read for it. A report is kept once read, so an opt's convergence still shows during the freq step Gaussian
+    adds to it."""
     status:      str              = AWAITING
-    label:       str              = ""      # the current step's: Opt, Stability, Freq, SP
+    label:       str              = ""      # the current step's: ModRed, OptTS, Opt, IRC, Stability, Freq, SP
     reports:     bool             = False   # whether any of its steps optimizes or runs a stability analysis
     convergence: list[int] | None = None    # [criteria met, criteria]
     stable:      bool | None      = None
+    planned:     str              = ""      # what the input's route for it runs (JobChecks.kinds), from submission
 
 
 @dataclass
@@ -78,7 +80,10 @@ class TrackedJob:
     def FromRecord(cls, record: dict) -> "TrackedJob":
         known = {entry.name for entry in fields(cls)}
         values = {name: value for name, value in record.items() if name in known}
-        values["stages"] = [Stage(**stage) for stage in record.get("stages", [])] or [Stage()]
+        # Known fields only, so a store a newer CompUtils wrote still loads
+        stageFields = {entry.name for entry in fields(Stage)}
+        values["stages"] = [Stage(**{name: value for name, value in stage.items() if name in stageFields})
+                            for stage in record.get("stages", [])] or [Stage()]
         return cls(**values)
 
 
@@ -364,17 +369,19 @@ def _StageReport(stage: Stage) -> list[str]:
     return lines
 
 def StageLines(job: TrackedJob) -> list[str]:
-    """'Stage N (Status): report' for every stage; a second report goes on its own line below."""
+    """'Stage N (Status) Planned: report' for every stage, reached or not (Planned: what its route runs, from the input
+    at submission); a second report goes on its own line below."""
     lines = []
     for number, stage in enumerate(job.stages, 1):
         reports = _StageReport(stage)
-        lines.append(f"Stage {number} ({stage.status})" + (f": {reports[0]}" if reports else ""))
+        lines.append(f"Stage {number} ({stage.status})" + (f" {stage.planned}" if stage.planned else "")
+                     + (f": {reports[0]}" if reports else ""))
         lines.extend(f"    {report}" for report in reports[1:])
     return lines
 
 def StagePosition(job: TrackedJob) -> str:
-    """'2/3' (with the step, e.g. '1/2, Freq', once it is known)."""
-    label = job.stages[job.stage].label
+    """'2/3' with the step ('1/2, Freq') once it is read, else what the stage was planned to run ('2/3, Stability')."""
+    label = job.stages[job.stage].label or job.stages[job.stage].planned
     return f"{job.stage + 1}/{len(job.stages)}" + (f", {label}" if label else "")
 
 def HeadLine(job: TrackedJob) -> tuple[str, str]:

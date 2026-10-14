@@ -117,8 +117,6 @@ class Defaults:
     # What runs where
     methodNames = ["B3LYP","M062X","M06","M06L","B2PLYP","wB97XD","DLPNO-CCSD(T)","BLYP"]
     targetProgram = ["G16","G16","G16","G16","G16","G16","O","G16"]
-    # Benchmark suite route cards (one complete route card per entry)
-    benchmarkMethods = ["M062X 6-311+G(d,p)"]
     # Open-shell handling
     openShellReference = "U"
     ossSpinThreshold = 0.1
@@ -172,7 +170,6 @@ class Defaults:
         ],
         "programs.toml": [
             "methodNames", "targetProgram",
-            "benchmarkMethods",
             "openShellReference", "ossSpinThreshold",
             "nboKeylist", "mixedBasisVariants",
             "potCube", "denCube", "valenceCube", "spinCube",
@@ -234,11 +231,6 @@ class Defaults:
         "submissionList": "SLURM header lines for job submission. Set automatically by hpcType.",
         "methodNames": "Ordered list of known method names. Index must match targetProgram.",
         "targetProgram": "Program that runs methodNames[i]. Must be the same length as methodNames.",
-        "benchmarkMethods": "Benchmark suite: each entry is a COMPLETE route card (method + basis + keywords).\n# Entry 0 is also the default for -sp. Add one entry per line you want benchmarked."
-            "\n# ORCA only: {tag} tokens (e.g. {cpcm} {tddft}) pull matching %blocks from the project's orcablocks.txt."
-            "\n# Tags are removed from the route card before it is written to the input file."
-            "\n# Spin groups: [selectors: keywords {tags}] apply only to matching molecules, on top of the base route."
-            "\n# Selectors: css, oss, open (oss or multiplicity > 1), doublet..septet, m2..m7. e.g. [oss: guess=mix stable=opt]",
         "openShellReference": "Reference for open-shell species: \"U\" (default) or \"RO\". OSS (broken-symmetry singlets) always use U.",
         "ossSpinThreshold": "<S**2> above which a multiplicity-1 output is classified as an open-shell singlet (OSS).",
         "nboKeylist": "NBO keylist string appended to relevant Gaussian16 jobs.",
@@ -286,13 +278,16 @@ class Defaults:
     }
 
     # Keys whose list values should always render as multiline arrays for readability.
-    _FORCE_MULTILINE: set[str] = {"benchmarkMethods"}
+    _FORCE_MULTILINE: set[str] = set()
 
     # Keys a project's <marker>/project.toml may override. Everything else is machine- or program-wide
     _PROJECT_KEYS: list[str] = [
         "CPU", "memoryRatio", "highMemoryRatio", "memoryBuffer", "wallTime", "cluster", "partition",
-        "benchmarkMethods", "openShellReference", "ossSpinThreshold", "nboKeylist",
+        "openShellReference", "ossSpinThreshold", "nboKeylist",
     ]
+    # Keys that moved out of the TOML files (the benchmark suite is jobRelatedKeylists' Benchmark Methods, keylists.py).
+    # Still read from there until `cu -refresh` merges and drops them, so they are skipped here without a warning
+    _MOVED_KEYS: set[str] = {"benchmarkMethods"}
     # Global values displaced by project overrides, and the project values that replaced them. Used so project values
     # never leak into the global TOML files when a wizard re-saves a section
     _globalValues: dict[str, Any] = {}
@@ -332,6 +327,10 @@ class Defaults:
         from .profile import InstalledProfile
         profile = InstalledProfile()
         cls._profileClusters = profile.clusters if profile else []
+        # jobRelatedKeylists sits beside the TOMLs, and is generated like them when missing
+        from .keylists import EnsureGlobalKeylists, KEYLISTS_FILE
+        if EnsureGlobalKeylists():
+            cls.generatedFiles.append(KEYLISTS_FILE)
         cls._Validate()
 
 
@@ -624,6 +623,8 @@ class Defaults:
         """Overlay a project.toml onto the loaded globals. Returns the keys whose value differs from the global one."""
         applied = []
         for key, rawValue in data.items():
+            if key in cls._MOVED_KEYS:
+                continue
             if key not in cls._PROJECT_KEYS:
                 console.print(f"[warning]\\[config] Key '{key}' in {source} is not project-overridable. Ignored.[/warning]")
                 continue

@@ -11,7 +11,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import Checkbox, DataTable, Footer, Input, OptionList, Static
+from textual.widgets import Checkbox, DataTable, Footer, Input, ListView, OptionList, Static
 from textual.widgets._footer import FooterKey
 from textual.widgets.option_list import Option
 
@@ -236,6 +236,13 @@ def Notice(app, title: str, message: str, severity: str = "", then=None) -> None
     app.push_screen(Popup(title, message, severity=severity), (lambda _: then()) if then else None)
 
 
+def Fit(label: Text, room: int) -> None:
+    """Cut a frame label (padded ' label ') to room with …, in place, so the corner always closes the frame."""
+    if label.cell_len > room > 1:
+        label.truncate(room - 1, overflow="ellipsis")
+        label.append(" ")
+
+
 class FrameRule(Static):
     """One edge of a framed form, drawn to its width: ┌─ label ───── right ─┐ (corners ┌┐, ├┤ or └┘).
     Textual's borders have no ├/┤ junctions, so a form's section dividers are drawn here (P2).
@@ -253,16 +260,15 @@ class FrameRule(Static):
         line = self.app.theme_variables["secondary"]
         label = Text.assemble(" ", self.label, " ") if self.label else Text()
         right = Text.assemble(" ", self.right, " ") if self.right else Text()
+        # The right text first (a status), then the labels in what is left
+        Fit(right, self.size.width - 4 - (self.split if self.split is not None else 0))
         if self.split is None:
+            Fit(label, self.size.width - 4 - right.cell_len)
             fill = "─" * max(0, self.size.width - 4 - label.cell_len - right.cell_len)
             return Text.assemble((self.corners[0] + "─", line), label, (fill, line), right, ("─" + self.corners[1], line))
         junction = {"┌┐": "┬", "├┤": "┼", "└┘": "┴"}[self.corners]
         label2 = Text.assemble(" ", self.label2, " ") if self.label2 else Text()
-        # A label too long for its column is cut (…), so the corner always closes the frame
-        room = self.size.width - self.split - 4 - right.cell_len
-        if label2.cell_len > room > 1:
-            label2.truncate(room - 1, overflow="ellipsis")
-            label2.append(" ")
+        Fit(label2, self.size.width - self.split - 4 - right.cell_len)
         leftFill = "─" * max(0, self.split - 2 - label.cell_len)
         rightFill = "─" * max(0, self.size.width - self.split - 4 - label2.cell_len - right.cell_len)
         return Text.assemble((self.corners[0] + "─", line), label, (leftFill + junction + "─", line), label2,
@@ -289,6 +295,7 @@ class Setting:
     choice: str = ""            # rows of one choice share this name, shown as (•) / ( )
     under: str = ""             # the row this one is a sub-option of: it applies only while that row is on
     available: bool = True      # False: greyed and skipped (SettingsList.SetAvailable), e.g. an option not built yet
+    opens: bool = False         # ␣ opens an editor for it (SettingsList.Open), e.g. a stage's ModRed lines
 
 
 class ValueInput(Input):
@@ -422,6 +429,12 @@ class SettingsList(Vertical):
     class Changed(Message):
         """A row was turned on or off, or a choice changed (typed values post Input.Changed)."""
 
+    class Open(Message):
+        """␣ on a row that opens an editor (Setting.opens): the screen opens it."""
+        def __init__(self, key: str) -> None:
+            super().__init__()
+            self.key = key
+
     def __init__(self, settings: list[Setting], stacked: bool = False, widest: int = 17,
                  inputClass: type["ValueInput"] | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -456,6 +469,14 @@ class SettingsList(Vertical):
         return (row.available and row.on is not False
                 and (not row.setting.under or self.Applies(self.Row(row.setting.under))))
 
+    def SetShown(self, key: str, shown: bool) -> None:
+        """Show or hide a row (e.g. a stage's ModRed row, only while the chosen method has that stage). ↑↓ skip hidden
+        rows; the current row moves off one that is hidden."""
+        row = self.Row(key)
+        row.display = shown
+        if not shown and row is self.current:
+            self.action_move(-1 if self.index else 1)
+
     def SetAvailable(self, key: str, available: bool) -> None:
         """Grey a row out (or bring it back): it can't be turned on or chosen, and doesn't apply. A choice keeps its
         selection, so making it available again restores it."""
@@ -482,19 +503,25 @@ class SettingsList(Vertical):
         if action == "choose":
             return True if self.current.setting.choice else None
         if action == "toggle":
-            return (True if self.current.available and self.current.on is not None
-                    and self.current.setting.accepts is not TEXT else None)
+            return (True if self.current.available and (self.current.setting.opens or self.current.on is not None
+                                                        and self.current.setting.accepts is not TEXT) else None)
         return True
 
     def action_move(self, step: int) -> None:
-        self.Choose(self.rows[max(0, min(self.index + step, len(self.rows) - 1))])
+        # Hidden rows are stepped over
+        shown = [index for index, row in enumerate(self.rows) if row.display]
+        ahead = [index for index in shown if (index - self.index) * step > 0]
+        if ahead:
+            self.Choose(self.rows[min(ahead) if step > 0 else max(ahead)])
         self.refresh_bindings()
 
     def action_toggle(self) -> None:
         row = self.current
         if not row.available:
             return
-        if row.setting.choice:
+        if row.setting.opens:
+            self.post_message(self.Open(row.setting.key))
+        elif row.setting.choice:
             self.Select(row)
         elif row.on is not None and row.setting.accepts is not TEXT:
             row.on = not row.on
@@ -519,6 +546,14 @@ class SettingsList(Vertical):
 
 
 # ─── Re-orderable tables (List editor, SI Scraper species) ────────────
+
+async def SwapItems(listView: ListView, items: list, index: int) -> None:
+    """Refill a list in place with other items, index highlighted: the sub-menus (Home's Input Builders › and
+    Scrapers ›, Config's Job Keylists ›). The same widget is kept, so its queries, focus and collapse still apply."""
+    await listView.clear()
+    await listView.extend(items)
+    listView.index = index
+
 
 def MoveRow(rows: list, index: int, target: int) -> bool:
     """Move rows[index] to target (in place), the others shifting; False if either is out of range or they're equal."""

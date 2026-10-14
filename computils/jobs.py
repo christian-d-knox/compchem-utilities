@@ -1,34 +1,22 @@
-import os, functools, regex, subprocess, time
+import os, regex, subprocess, time
+from dataclasses import dataclass, field
 from pathlib import Path
 from .console  import console
 from rich.markup import escape
 from .defaults import Defaults
-from .catalog  import RenderRoute, ROUTE_LEAK_PATTERN
-from .fileops  import (fileCreation, ExtractFrom, ExtractFromText, HasContent, ExtractResources, ExtractOrcaBlocks,
-                       ExtractOptMethods, MapFile, StageCount,
-                       ExtractMixedBasis, MixedBasis, BasisEntry, NormalizeElement, MoleculeElements)
+from .catalog  import RenderRoute, RouteTemplate, ROUTE_LEAK_PATTERN
+from .fileops  import (fileCreation, HasContent, ExtractResources, MapFile, StageCount, MixedBasis, BasisEntry,
+                       NormalizeElement, MoleculeElements, BASIS_PATTERN, InputRoutes, JobChecks, ExtractOrcaInput,
+                       StageProblem)
+from .keylists import Keylist, Where, MIXED_BASIS, OPTIMIZATION, ORCA_BLOCKS
 from .molecule import Molecule
-from .project  import ResolveProjectFile, FindProjectRoot, ProjectFilePath
 from .intent import JobIntent
 from .stalk    import TrackedJob, Stage, jobLocation
 
-# Parsed once per run, however many jobs use it
-@functools.cache
-def _LoadOrcaBlocks(blocksPath: Path) -> dict[str, str]:
-    return ExtractFrom(blocksPath, ExtractOrcaBlocks, empty={})
-
-@functools.cache
-def _LoadMixedBasis(basisPath: Path) -> MixedBasis:
-    return ExtractFrom(basisPath, ExtractMixedBasis, empty=MixedBasis([], []))
-
-@functools.cache
-def _LoadOptMethods(methodsPath: Path) -> dict[str, str]:
-    return ExtractFrom(methodsPath, ExtractOptMethods, empty={})
-
-# The project's optimization methods (tag -> route line, in file order): optmethods.txt (a CWD copy first), or its unsaved
-# text from the TUI's config editor; {} without one. Never prompts: the file is optional
-def OptMethods(texts: dict[str, str] | None = None) -> dict[str, str]:
-    return _ProjectData("optmethods.txt", ExtractOptMethods, _LoadOptMethods, {}, False, texts) or {}
+# The optimization methods (name -> route, in order): jobRelatedKeylists' Optimization Methods from the nearest level
+# that has them, or the unsaved text from the TUI's config editor ({level path: text}); {} without any
+def OptMethods(texts: dict[Path, str] | None = None) -> dict[str, str]:
+    return Keylist(OPTIMIZATION, texts)
 
 # Route tokens that request a mixed basis, including the slash form (B3LYP/GenECP)
 def _IsMixedBasisKeyword(word: str) -> bool:
@@ -49,7 +37,7 @@ def _SetMixedBasisKeyword(route: str, needsEcp: bool) -> str:
     return regex.sub(r"[^\s/]+", lambda word: Styled(word.group()) if _IsMixedBasisKeyword(word.group())
                      else word.group(), route)
 
-# Writes only the master mixedbasis.txt entries for elements this molecule contains.
+# Writes only the Mixed Basis entries for elements this molecule contains.
 # Returns (basis section, ECP section, elements with no basis entry)
 def _FilterMixedBasis(master: MixedBasis, elements: set[str]) -> tuple[str, str, set[str]]:
     def Section(entries: list[BasisEntry]) -> str:
@@ -66,48 +54,137 @@ def _FilterMixedBasis(master: MixedBasis, elements: set[str]) -> tuple[str, str,
     return Section(master.basis), Section(master.ecp), missing
 
 # Why genFile would skip a job, or '' if it can be generated. The one check shared by genFile and the TUI's route
-# preview, which passes required=False so a missing project file never prompts. texts ({file name: unsaved text}, from
-# the TUI's config editor) stands in for those project files
-def JobFileProblem(route: str, tags: list[str], extensionType: str, elements: set[str], required: bool = True,
-                   texts: dict[str, str] | None = None) -> str:
+# previews. Mixed basis and ORCA blocks come from jobRelatedKeylists (keylists.Keylist: the nearest level with the
+# section); texts ({level path: unsaved text}, from the TUI's config editor) stands in for those files. Never prompts
+def JobFileProblem(route: str, tags: list[str], extensionType: str, elements: set[str],
+                   texts: dict[Path, str] | None = None) -> str:
     # {tag} and [group] syntax is parsed out in Catalog.Load and must never reach an input file
     if regex.search(ROUTE_LEAK_PATTERN, route):
-        return "Malformed [ ] Group in benchmarkMethods"
+        return "Malformed [ ] Group or Unknown % Directive in the Route"
     if extensionType == Defaults.gaussianExtension and _UsesMixedBasis(route):
-        master = _ProjectData("mixedbasis.txt", ExtractMixedBasis, _LoadMixedBasis, MixedBasis([], []), required, texts)
-        if master is None:
-            return _MissingProjectFile("mixedbasis.txt")
-        _, _, missing = _FilterMixedBasis(master, elements)
+        _, _, missing = _FilterMixedBasis(Keylist(MIXED_BASIS, texts), elements)
         if missing:
-            return f"mixedbasis.txt Has No Basis for {' '.join(sorted(missing))}"
+            return f"Mixed Basis Has No Basis for {' '.join(sorted(missing))} ({Where(MIXED_BASIS)})"
     if extensionType == Defaults.orcaExtension and tags:
-        blocks = _ProjectData("orcablocks.txt", ExtractOrcaBlocks, _LoadOrcaBlocks, {}, required, texts)
-        if blocks is None:
-            return _MissingProjectFile("orcablocks.txt")
+        blocks = Keylist(ORCA_BLOCKS, texts)
         missingTags = [tag for tag in tags if tag not in blocks]
         if missingTags:
-            return f"orcablocks.txt Has No {', '.join(missingTags)}"
+            return f"ORCA Blocks Has No {', '.join(missingTags)} ({Where(ORCA_BLOCKS)})"
     return ""
 
-def _ProjectData(fileName: str, extractor, loader, empty, required: bool, texts: dict[str, str] | None):
-    # A project file's parsed content: its unsaved text if given, else the file (None if there is no file)
-    if texts and fileName in texts:
-        return ExtractFromText(texts[fileName], extractor, empty=empty)
-    path = ResolveProjectFile(fileName, required)
-    return None if path is None else loader(path)
+# ─── Stages (Gaussian --Link1--; ORCA's wait for its `Continue` usage) ─
+# Each stage after the first is chained to the one before through the checkpoint (ChainStage, the rules in one place)
 
-def _MissingProjectFile(fileName: str) -> str:
-    root = FindProjectRoot()
-    return f"{fileName} Not Found (Checked CWD and {ProjectFilePath(root, fileName) if root else 'No Project Root'})"
+# What follows a stage's route: the title, charge/multiplicity and coordinates (stage 1); the title and the charge line
+# (its own geom=check); or nothing (Geom=AllCheck: all of them come from the checkpoint)
+FULL, CHARGE, NONE = "full", "charge", "none"
+# Guesses that make their own orbitals: a stage asking for one keeps it and is not given 'read'
+GENERATED_GUESSES = {"core", "huckel", "indo", "am1", "harris", "sad", "cards"}
+
+@dataclass
+class RenderedStage:
+    route: str                  # the stage's route, chaining keywords added (Gen/GenECP is switched when written)
+    tags: list[str]             # its orcablocks tags
+    molecule: str = FULL        # FULL, CHARGE or NONE
+    chkBasis: bool = False      # the basis (and ECP) come from the checkpoint: no Gen sections are written
+    newChk: bool = False        # %newchk: starts a new checkpoint, %OldChk-copied from the one so far
+    notes: list[str] = field(default_factory=list)     # what CompUtils added, in words (the previews say it)
+
+def _KeywordAt(tokens: list[str], keyword: str) -> int | None:
+    """The index of a route keyword written bare, keyword=... or keyword(...), or None."""
+    return next((index for index, token in enumerate(tokens)
+                 if regex.fullmatch(rf"(?i){keyword}(?:[=(].*)?", token)), None)
+
+def _KeywordOptions(token: str) -> list[str]:
+    """'guess=(read,mix)' -> ['read', 'mix']; 'geom=allcheck' -> ['allcheck']; a bare keyword -> []."""
+    _, _, options = token.partition("=") if "=" in token else token.partition("(")
+    return [option.strip().lower() for option in regex.split(r"[(),]", options) if option.strip()]
+
+def _NamesBasis(tokens: list[str]) -> bool:
+    """Whether a Gaussian route names a basis: 'method/basis', or a basis token (Gen and GenECP included)."""
+    return any("/" in token or regex.match(BASIS_PATTERN, token) for token in tokens)
+
+def ChainStage(route: str, genInCheckpoint: bool) -> tuple[str, str, bool, list[str]]:
+    """A Gaussian stage after the first, read from the checkpoint the stages share: (route, molecule section, ChkBasis,
+    notes). Explicit on purpose (TUI_DESIGN 4.12): every rule is said in the notes where a preview shows the stage.
+    1. Geometry: Geom=AllCheck (geometry, charge and multiplicity from the checkpoint), unless the stage writes its own
+       geom= (geom=check: the title and charge line are written, for a stage that changes them).
+    2. Orbitals: 'read' joins the stage's guess options (guess=mix -> guess=(read,mix)), unless it names a guess
+       generator (GENERATED_GUESSES).
+    3. ChkBasis, from the user's own route, never assumed: one the stage writes is honoured (no Gen sections); a stage
+       naming no basis at all after a Gen/GenECP stage gets one (Gaussian would otherwise fall back to STO-3G); a stage
+       writing Gen/GenECP itself gets its sections again."""
+    tokens, notes = route.split(), []
+    geom = _KeywordAt(tokens, "geom")
+    if geom is None:
+        tokens.append("geom=allcheck")
+        molecule = NONE
+        notes.append("Geom=AllCheck: Geometry, Charge and Multiplicity From the Checkpoint")
+    else:
+        options = _KeywordOptions(tokens[geom])
+        molecule = NONE if "allcheck" in options else CHARGE if "check" in options else FULL
+    guess = _KeywordAt(tokens, "guess")
+    if guess is None:
+        tokens.append("guess=read")
+        notes.append("Guess=Read: Orbitals From the Checkpoint")
+    else:
+        options = _KeywordOptions(tokens[guess])
+        if "read" not in options and not set(options) & GENERATED_GUESSES:
+            tokens[guess] = f"guess=({','.join(['read', *options])})"
+            notes.append(f"Guess=(Read,{','.join(option.capitalize() for option in options)}): Orbitals From the "
+                         f"Checkpoint")
+    chkBasis = any(token.lower() == "chkbasis" for token in tokens)
+    if not chkBasis and genInCheckpoint and not _NamesBasis(tokens):
+        tokens.append("ChkBasis")
+        chkBasis = True
+        notes.append("ChkBasis: the Gen Basis From the Checkpoint (This Stage Names No Basis)")
+    return " ".join(tokens), molecule, chkBasis, notes
+
+def RenderStages(template: RouteTemplate, molecule: Molecule) -> list[RenderedStage]:
+    """Every stage of a molecule's job, rendered (RenderRoute: spin groups, U/RO) and, for Gaussian, chained through
+    the checkpoint (ChainStage). One stage for a method without stages."""
+    stages, genInCheckpoint = [], False
+    for number, stage in enumerate(template.stages, 1):
+        route, tags = RenderRoute(stage, molecule)
+        if number == 1 or molecule.extensionType != Defaults.gaussianExtension:
+            rendered = RenderedStage(route, tags)
+        else:
+            route, section, chkBasis, notes = ChainStage(route, genInCheckpoint)
+            if stage.newChk:
+                notes.insert(0, "%newchk: a New Checkpoint, Copied From the One So Far (%OldChk)")
+            rendered = RenderedStage(route, tags, section, chkBasis, stage.newChk, notes)
+        genInCheckpoint = _UsesMixedBasis(rendered.route) or (rendered.chkBasis and genInCheckpoint)
+        stages.append(rendered)
+    return stages
+
+def StagesProblem(template: RouteTemplate, molecule: Molecule, elements: set[str],
+                  texts: dict[Path, str] | None = None, programOf: dict | None = None) -> str:
+    """Why a job with this template would be skipped ('' if it can be written): its stages (StageProblem), then each
+    rendered stage's JobFileProblem. The one check behind genFile, shared with the TUI's previews."""
+    problem = StageProblem(template, programOf)
+    if problem:
+        return problem
+    stages = RenderStages(template, molecule)
+    for number, stage in enumerate(stages, 1):
+        problem = JobFileProblem(stage.route, stage.tags, molecule.extensionType, elements, texts)
+        if problem:
+            return f"Stage {number}: {problem}" if len(stages) > 1 else problem
+    return ""
+
+def PlannedKinds(data, program: str) -> list[str]:
+    """What each stage of an input runs (JobChecks' kinds: 'ModRed', 'Stability', 'OptTS+Freq'), for the stalker's
+    planned stages. data: the input's map."""
+    inputText = ExtractOrcaInput(data) if program == Defaults.orcaExtension else ""
+    return [JobChecks(route, program, inputText).kinds if route else "" for route in InputRoutes(data, program)]
 
 # Separate method for input file generation to improve code efficiency. Path to input and the route template are
 # previously stored in molecule (fileops.Retarget).
-# Returns False if this job can't be generated (e.g. missing mixedbasis.txt), so the caller skips only this job.
+# Returns False if this job can't be generated (e.g. an element with no Mixed Basis entry), so the caller skips only
+# this job.
 def genFile(molecule: Molecule, intent: JobIntent) -> bool:
-    # Route card rendered for this molecule's spin state: base + matching [spin groups] + U/RO reference
-    route, blockTags = RenderRoute(molecule.template, molecule)
-    # Checked BEFORE opening the input, so a failure never leaves a half-written file
-    problem = JobFileProblem(route, blockTags, molecule.extensionType, MoleculeElements(molecule.coordinateList), True)
+    # Checked BEFORE opening the input, so a failure never leaves a half-written file: every stage's route card,
+    # rendered for this molecule's spin state (base + matching [spin groups] + U/RO reference, then the chaining)
+    problem = StagesProblem(molecule.template, molecule, MoleculeElements(molecule.coordinateList))
     if problem:
         console.print(f"[error]{escape(problem)}. Skipping {molecule.baseName}.[/error]")
         return False
@@ -123,58 +200,77 @@ def DefaultMemoryRatio(route: str, extensionType: str) -> float:
     return Defaults.memoryRatio
 
 # The text of a molecule's job input, in the program molecule.extensionType names (genFile writes it; the TUI's input
-# builders preview it). cpus and memoryRatio (GB per core) default to the config's. required: as JobFileProblem's, so
-# genFile resolves project files the way its check did; missing project files (the TUI's preview) count as empty
+# builders preview it). cpus and memoryRatio (GB per core) default to the config's. A missing Mixed Basis entry or ORCA
+# block is left out (JobFileProblem is what reports it). extraInput: one optional text per stage, written after that
+# stage's molecule section (e.g. ModRed lines). oldChk: a checkpoint stage 1 starts from (%OldChk; for the scheduler)
 def JobInputText(molecule: Molecule, checkpoint: bool = False, nbo7: bool = False, cpus: int | None = None,
-                 memoryRatio: float | None = None, required: bool = True) -> str:
+                 memoryRatio: float | None = None, extraInput: list[str] | None = None, oldChk: str = "") -> str:
     route, blockTags = RenderRoute(molecule.template, molecule)
     elements = MoleculeElements(molecule.coordinateList)
     cpus = Defaults.CPU if cpus is None else cpus
     memoryRatio = DefaultMemoryRatio(route, molecule.extensionType) if memoryRatio is None else memoryRatio
     match molecule.extensionType:
         case Defaults.gaussianExtension:
+            stages = RenderStages(molecule.template, molecule)
+            blockTags = [tag for stage in stages for tag in stage.tags]
             if blockTags:
                 console.print(f"[warning]Block tags {blockTags} only apply to ORCA jobs. Ignoring them for "
                               f"{molecule.baseName}.[/warning]")
-            basisSection, ecpSection = "", ""
-            usesMixedBasis = _UsesMixedBasis(route)
-            if usesMixedBasis:
-                # The master file lists every element the project may need; keep only this molecule's
-                basisPath = ResolveProjectFile("mixedbasis.txt", required)
-                master = _LoadMixedBasis(basisPath) if basisPath else MixedBasis([], [])
-                basisSection, ecpSection, _ = _FilterMixedBasis(master, elements)
-                # GenECP with an empty ECP section (or Gen with ECP elements) fails in Gaussian
-                switchedRoute = _SetMixedBasisKeyword(route, bool(ecpSection))
-                if switchedRoute != route:
-                    reason = "ECP elements present" if ecpSection else "no ECP elements"
-                    console.print(f"[info]{molecule.baseName}: using {'GenECP' if ecpSection else 'Gen'} "
-                                  f"({reason}).[/info]")
-                    route = switchedRoute
-            # Writes the standard Gaussian16 formatted opening: the job's CPU and RAM (%mem is the total)
-            text = f"%nprocshared={cpus}\n%mem={int(cpus * memoryRatio)}GB"
-            if checkpoint:
-                text += f"\n%chk={molecule.baseName}.chk"
-            # If the methodLine from benchmarking.txt is garbage, the calculation will fail. Not my fault.
-            text += "\n# " + route + "\n\nUseless Comment line\n\n"
-            text += f"{molecule.charge} {molecule.multiplicity}\n"
-            # Accessing the stored coordinate list is significantly faster in run-time than prior crappy implementation
-            text += "".join(molecule.coordinateList)
-            # Mixed basis entries for this molecule's elements, from the CWD or project root mixedbasis.txt
-            if usesMixedBasis:
-                text += "\n" + basisSection
-                if ecpSection:
-                    text += "\n" + ecpSection
-            text += "\n"
-            # New NBO7 section
+            # A job with stages always writes its checkpoint: it is how the stages pass on what they made
+            chained = len(stages) > 1
+            checkpointName = f"{molecule.baseName}.chk"
+            sections = []
+            for number, stage in enumerate(stages, 1):
+                route = stage.route
+                # Link 0 commands don't carry across --Link1--: every stage writes its own
+                link0 = [f"%nprocshared={cpus}", f"%mem={int(cpus * memoryRatio)}GB"]
+                if stage.newChk:
+                    link0.append(f"%oldchk={checkpointName}")
+                    checkpointName = f"{molecule.baseName}_{number}.chk"
+                elif number == 1 and oldChk:
+                    link0.append(f"%oldchk={oldChk}")
+                if checkpoint or chained or oldChk:
+                    link0.append(f"%chk={checkpointName}")
+                basisSection, ecpSection = "", ""
+                usesMixedBasis = _UsesMixedBasis(route) and not stage.chkBasis
+                if usesMixedBasis:
+                    # The Mixed Basis section lists every element the project may need; keep only this molecule's
+                    basisSection, ecpSection, _ = _FilterMixedBasis(Keylist(MIXED_BASIS), elements)
+                    # GenECP with an empty ECP section (or Gen with ECP elements) fails in Gaussian
+                    switchedRoute = _SetMixedBasisKeyword(route, bool(ecpSection))
+                    if switchedRoute != route:
+                        reason = "ECP elements present" if ecpSection else "no ECP elements"
+                        console.print(f"[info]{molecule.baseName}{f' (stage {number})' if chained else ''}: using "
+                                      f"{'GenECP' if ecpSection else 'Gen'} ({reason}).[/info]")
+                        route = switchedRoute
+                # A stage's input sections, each ended by a blank line: route, title, molecule, extra input, basis, ECP.
+                # If the methodLine from benchmarking.txt is garbage, the calculation will fail. Not my fault.
+                parts = ["# " + route + "\n"]
+                if stage.molecule != NONE:
+                    parts.append("Useless Comment line\n")
+                    # Accessing the stored coordinate list is significantly faster in run-time than prior crappy
+                    # implementation
+                    parts.append(f"{molecule.charge} {molecule.multiplicity}\n" +
+                                 ("".join(molecule.coordinateList) if stage.molecule == FULL else ""))
+                extra = (extraInput[number - 1] if extraInput and number <= len(extraInput) else "").strip("\r\n")
+                if extra:
+                    parts.append(extra + "\n")
+                # Mixed basis entries for this molecule's elements (jobRelatedKeylists' Mixed Basis)
+                if usesMixedBasis:
+                    parts.append(basisSection)
+                    if ecpSection:
+                        parts.append(ecpSection)
+                sections.append("\n".join(link0) + "\n" + "\n".join(parts) + "\n")
+            text = "--Link1--\n".join(sections)
+            # New NBO7 section (the last stage's)
             text += f"{Defaults.nboKeylist} FILE={molecule.baseName} ARCHIVE $END" if nbo7 else "\n"
             return text
 
         case Defaults.orcaExtension:
-            # Tagged blocks from orcablocks.txt, in route-card tag order (JobFileProblem checked they all exist)
+            # Tagged blocks from ORCA Blocks, in route-card tag order (JobFileProblem checked they all exist)
             selectedBlocks = []
             if blockTags:
-                blocksPath = ResolveProjectFile("orcablocks.txt", required)
-                availableBlocks = _LoadOrcaBlocks(blocksPath) if blocksPath else {}
+                availableBlocks = Keylist(ORCA_BLOCKS)
                 selectedBlocks = [availableBlocks[tag] for tag in blockTags if tag in availableBlocks]
             # Then the template's own literal blocks (an ORCA re-run carries the blocks its job ran with)
             selectedBlocks += molecule.template.blocks
@@ -256,10 +352,12 @@ def runJob(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
         console.print(f"[error]Job file {molecule.baseName} is empty or blank. Skipping submission.[/error]")
         return
 
-    # Extract CPU and RAM from the input file via mmap regex, and how many --Link1-- stages it runs (for the stalker)
+    # Extract CPU and RAM from the input file via mmap regex, and the --Link1-- stages it runs, each with what it runs
+    # (for the stalker's planned stages)
     with MapFile(molecule.fullPath) as data:
         cpus, jobRam = ExtractResources(data, molecule.extensionType)
         stageCount = StageCount(data, molecule.extensionType)
+        planned = PlannedKinds(data, molecule.extensionType)
 
     slurmHandler(molecule, queueName, outputName, cpus, jobRam)
 
@@ -290,5 +388,7 @@ def runJob(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
     jobID, cluster = submitted
     console.print(f"[good]Submitted job {molecule.baseName} to {program} (ID {jobID})[/good]")
     trackedJobs.append(TrackedJob(jobID, cluster, molecule.baseName, str(Path(outputName).resolve()), jobLocation(),
-                                  molecule.extensionType, time.time(), [Stage() for _ in range(stageCount)]))
+                                  molecule.extensionType, time.time(),
+                                  [Stage(planned=planned[index] if index < len(planned) else "")
+                                   for index in range(stageCount)]))
 
