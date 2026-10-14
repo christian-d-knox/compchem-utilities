@@ -6,19 +6,20 @@
     === ORCA Blocks ===              %blocks, pulled into ORCA jobs by {tag} tokens
 
 Each section keeps its own format and extractor (fileops). The file has no extension: it is edited in the TUI (Config ›
-Job Keylists, one section at a time). It lives at three levels, and the nearest level that HAS a section wins, section by
-section: the CWD, the project marker (<root>/.computils/), then binDirectory (global). So a project can override only
-its Benchmark Methods and keep the global ORCA blocks.
+Job Keylists, one section at a time). It lives at two levels, and the nearer level that HAS a section wins, section by
+section: the project marker (<root>/.computils/), then binDirectory (global). So a project can override only its
+Benchmark Methods and keep the global ORCA blocks. A copy in the CWD is never read.
 
 Until `cu -refresh` merges them (MergeLegacy), the files these sections replaced (mixedbasis.txt, orcablocks.txt,
-optmethods.txt in the CWD or marker) and the old benchmarkMethods TOML key (project.toml, programs.toml) still stand in
-for their section at their level. No Textual import."""
+optmethods.txt in the marker) and the old benchmarkMethods TOML key (project.toml, programs.toml) still stand in for
+their section at their level. No Textual import."""
 import functools
 import tomllib as tom
 from dataclasses import dataclass
 from pathlib import Path
 
 import regex
+from rich.markup import escape
 
 from .console  import console
 from .defaults import BackUpFile, Defaults
@@ -205,7 +206,7 @@ def ClearCaches() -> None:
 
 @dataclass(frozen=True)
 class Level:
-    label: str                  # CWD, Project, Global
+    label: str                  # Project, Global
     path: Path                  # this level's jobRelatedKeylists (absolute; may not exist)
     legacyFolder: Path | None   # where the files the sections replaced are still read from
     legacyToml: Path | None     # the TOML whose old benchmarkMethods key is still read
@@ -217,17 +218,16 @@ def GlobalLevel() -> Level:
 
 
 def Levels() -> list[Level]:
-    """The levels, nearest first (one folder is one level, e.g. the CWD inside ~/bin)."""
-    cwd, root = Path.cwd().absolute(), FindProjectRoot()
-    candidates = [Level("CWD", cwd / KEYLISTS_FILE, cwd, None)]
+    """The levels, nearest first: the project's (inside one), then the global one. Config is Global / Project only:
+    a copy in the CWD is never read."""
+    root = FindProjectRoot()
+    levels = []
     if root is not None:
         marker = ProjectFilePath(root, "").absolute()
-        candidates.append(Level("Project", marker / KEYLISTS_FILE, marker, marker / "project.toml"))
-    candidates.append(GlobalLevel())
-    levels = []
-    for level in candidates:
-        if all(level.path != other.path for other in levels):
-            levels.append(level)
+        levels.append(Level("Project", marker / KEYLISTS_FILE, marker, marker / "project.toml"))
+    global_ = GlobalLevel()
+    if all(global_.path != level.path for level in levels):
+        levels.append(global_)
     return levels
 
 
@@ -336,30 +336,62 @@ def SetGlobalBenchmark(entries: list[str]) -> bool:
     return SaveSection(global_.path, BENCHMARK, "\n".join(entries))
 
 
-def MergeLegacy(level: Level) -> None:
-    """`cu -refresh`: write what the old files and TOML key give this level into its keylists file, for every section
-    it doesn't have yet, and back the old files up to .bak (refresh drops the TOML key itself). The merged file must
-    parse to the same values first."""
+def _Difference(expected, readBack) -> str:
+    """The first thing a merged section would read back differently, for MergeLegacy's message."""
+    if isinstance(expected, list):
+        readBack = readBack or []
+        for index, entry in enumerate(expected):
+            if index >= len(readBack):
+                return f": entry {index} '{entry}' would be lost"
+            if readBack[index] != entry:
+                return f": entry {index} '{entry}' would read as '{readBack[index]}'"
+        return f": it would gain entry {len(expected)} '{readBack[len(expected)]}'"
+    if isinstance(expected, dict):
+        readBack = readBack or {}
+        for key, value in expected.items():
+            if key not in readBack:
+                return f": '{key}' would be lost"
+            if readBack[key] != value:
+                return f": '{key}' would read differently"
+        return f": it would gain '{next(key for key in readBack if key not in expected)}'"
+    return ": its basis or ECP entries would read differently"
+
+
+def MergeLegacy(level: Level) -> bool:
+    """`cu -refresh`: write what the old files and TOML key give this level into its keylists file, section by section
+    (only for sections it doesn't have yet), and back the merged old files up to .bak (refresh drops the TOML key
+    itself). A section is merged only if it reads back the same: TOML entries as the old Catalog read them (stripped,
+    blank ones skipped), old files as their extractor reads them (bytes, line endings as written). A section that
+    wouldn't is named and left where it is. False if any was left, so refresh rewrites nothing that still holds it."""
     found = LevelSections(level)
-    legacy = {name: source for name, (_, source) in found.items() if source != level.path}
+    legacy = {name: (value, source) for name, (value, source) in found.items() if source != level.path}
     if not legacy:
-        return
+        return True
     text = level.path.read_text(encoding="utf-8") if level.path.is_file() else FILE_PREAMBLE + "\n"
-    for name, source in legacy.items():
+    merged, left = [], []
+    for name, (value, source) in legacy.items():
         if source.suffix == ".toml":
-            body = "\n".join(_LegacyBenchmark(source))
+            expected = [entry.strip() for entry in value if entry.strip()]
+            body = "\n".join(expected)
         else:
-            body = source.read_text(encoding="utf-8")
-        text = ReplaceSection(text, name, body)
-    merged = ParseKeylists(text)
-    if any(merged.get(name) != found[name][0] for name in legacy):
-        console.print(f"[error]{level.path} would not read back as the old files did; nothing was merged.[/error]")
-        return
-    if not WriteKeylists(level.path, text):
-        return
-    for name, source in legacy.items():
-        if source.suffix != ".toml":
-            BackUpFile(source)
-    ClearCaches()
-    console.print(f"[good]Merged into {level.path}: "
-                  f"{', '.join(f'{name} (from {source.name})' for name, source in legacy.items())}.[/good]")
+            expected, body = value, source.read_bytes().decode()
+        candidate = ReplaceSection(text, name, body)
+        readBack = ParseKeylists(candidate).get(name)
+        if readBack != expected:
+            left.append(f"{name} (from {source}){_Difference(expected, readBack)}")
+            continue
+        text = candidate
+        merged.append((name, source))
+    if merged:
+        if not WriteKeylists(level.path, text):
+            return False
+        for _, source in merged:
+            if source.suffix != ".toml":
+                BackUpFile(source)
+        ClearCaches()
+        console.print(f"[good]Merged into {level.path}: "
+                      f"{', '.join(f'{name} (from {source.name})' for name, source in merged)}.[/good]")
+    for reason in left:
+        console.print(f"[error]{escape(str(level.path))}: {escape(reason)}. It was left where it is; fix it there "
+                      f"(or add the section in Config › Job Keylists) and run the refresh again.[/error]")
+    return not left

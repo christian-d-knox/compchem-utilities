@@ -233,10 +233,12 @@ def _DispatchAttributions() -> None:
 
 
 def _DispatchRefresh(intent: RefreshIntent) -> None:
-    # The old benchmarkMethods key and project files go into jobRelatedKeylists first: refresh drops the key
-    from .keylists import GlobalLevel, Levels, MergeLegacy
-    MergeLegacy(GlobalLevel())
-    MergeLegacy(Levels()[0])
+    # The old benchmarkMethods key goes into jobRelatedKeylists first: refresh drops the key, so it rewrites nothing
+    # while the key's list couldn't be merged
+    from .keylists import GlobalLevel, MergeLegacy
+    if not MergeLegacy(GlobalLevel()):
+        console.print("[error]Refresh stopped: nothing was rewritten, so programs.toml keeps its benchmarkMethods.[/error]")
+        return
     Defaults.RefreshFiles()
     if intent.project:
         from .project import RefreshProjectConfig

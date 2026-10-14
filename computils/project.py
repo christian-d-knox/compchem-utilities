@@ -75,13 +75,17 @@ def RefreshProjectConfig() -> None:
     (LoadProjectConfig). Keys a project can't override, stale keys and invalid values are dropped (they follow global).
     A missing or unparseable file goes through EnsureProjectConfig, since there is nothing to keep. The project's old
     mixedbasis.txt / orcablocks.txt / optmethods.txt and its benchmarkMethods key are merged into its jobRelatedKeylists
-    first (keylists.MergeLegacy), so dropping the key loses nothing."""
+    first (keylists.MergeLegacy), so dropping the key loses nothing: project.toml isn't rewritten while any of them
+    couldn't be merged."""
     root = FindProjectRoot()
     if root is None:
         console.print("[info]Not inside a project, so there is no project.toml to refresh (`cu -init` creates one).[/info]")
         return
     from .keylists import Levels, MergeLegacy
-    MergeLegacy(next(level for level in Levels() if level.label == "Project"))
+    if not MergeLegacy(next(level for level in Levels() if level.label == "Project")):
+        console.print(f"[error]{ProjectFilePath(root, PROJECT_CONFIG)} was not refreshed, so it keeps its "
+                      f"benchmarkMethods.[/error]")
+        return
     configPath = ProjectFilePath(root, PROJECT_CONFIG)
     try:
         current = configPath.read_text(encoding="utf-8")
@@ -144,38 +148,29 @@ def ReloadConfig(readGlobals: bool = True) -> None:
 def ChangeDirectory(target: Path) -> bool:
     """Move the CWD mid-run (TUI navigation). Returns True if the nearest project root changed.
 
-    The root/file lookups are re-walked on every move, since a subfolder can hold its own CWD copy of a project file.
-    project.toml is only reloaded when the root itself changes; the Catalog on every move, since a CWD jobRelatedKeylists
-    can hold its own Benchmark Methods.
+    The root lookup is re-walked on every move; project.toml and the Catalog are only reloaded when the root itself
+    changes (config is Global / Project only, so nothing else depends on the CWD).
     """
     previousRoot = FindProjectRoot()
     os.chdir(target)
     FindProjectRoot.cache_clear()
     ResolveProjectFile.cache_clear()
     if FindProjectRoot() == previousRoot:
-        from .catalog import Catalog
-        Catalog.Load()
         return False
     ReloadConfig(readGlobals=False)
     return True
 
 
-# Cached so a batch resolves (and prints) once, not once per molecule. A missing file is never prompted for (the job
-# files are jobRelatedKeylists, which has a global level: keylists.py)
+# Cached so a batch resolves (and prints) once, not once per molecule. Only the project's copy is read (config is
+# Global / Project only, never the CWD), and a missing file is never prompted for (the job files are jobRelatedKeylists,
+# which has a global level: keylists.py)
 @functools.cache
 def ResolveProjectFile(fileName: str) -> Path | None:
     root = FindProjectRoot()
-    # A CWD copy overrides the project copy
-    localFile = Path(fileName)
-    if localFile.is_file():
-        if root is None:
-            console.print(f"[info]Tip: run `cu -init` to share {fileName} across subdirectories.[/info]")
-        return localFile
-
-    if root is not None:
-        sharedFile = ProjectFilePath(root, fileName)
-        if sharedFile.is_file():
-            console.print(f"[info]Using project file: {sharedFile}[/info]")
-            return sharedFile
+    if root is None:
         return None
+    sharedFile = ProjectFilePath(root, fileName)
+    if sharedFile.is_file():
+        console.print(f"[info]Using project file: {sharedFile}[/info]")
+        return sharedFile
     return None
