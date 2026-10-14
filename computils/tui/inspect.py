@@ -14,7 +14,7 @@ from ..catalog  import Catalog, RenderRoute, RouteTemplate
 from ..defaults import Defaults
 from ..fileops  import (MapFile, FindInMap, HasContent, ExtractFrom, ExtractTermination, ExtractResources, IdentifyMethod,
                         InputRoutes, JobChecks, SplitRoute, MoleculeElements, extensionGetter, ReadMolecule,
-                        ReRunTemplate, OrcaBlockName, PROGRAMS)
+                        ReRunTemplate, OrcaBlockName, ExtractProgram, ATOMIC_SYMBOLS, PROGRAMS)
 from ..jobs     import JobFileProblem
 from ..molecule import Molecule
 from ..spin     import ClassifySpin
@@ -53,10 +53,24 @@ def FileStatus(path: Path) -> str:
     """Normal / Error / Unknown for output files, and '—' for anything else."""
     if path.suffix not in OutputExtensions():
         return "—"
-    termination = _Termination(path)
+    return _Status(_Termination(path))
+
+
+def _Status(termination: str) -> str:
+    # An output without a termination line in its tail is running or was killed
     if not termination:
         return "Unknown"
     return "Error" if termination == Defaults.terminationVariants[2] else "Normal"
+
+
+def JobSummary(path: Path) -> tuple[str, str]:
+    """(program name, Normal / Error / Unknown, or Input) for a prior job's row (the input builders), from one map."""
+    if not HasContent(path):
+        return "", "Empty"
+    with MapFile(path) as data:
+        program = ExtractProgram(data, path.suffix)
+        status = "Input" if path.suffix == program else _Status(ExtractTermination(data, -TERMINATION_TAIL))
+    return _SourceProgramName(program), status
 
 
 def ProgramName(method: str, programOf: dict | None = None) -> str:
@@ -114,14 +128,45 @@ class PreviewRow:
     problem: str = ""                                               # non-empty -> this job would be skipped
 
 
-def PreviewMolecule(path: Path) -> Molecule:
-    """A Molecule for previewing, read the way dispatch reads one (one map), but without writing the .xyz file."""
+def PreviewMolecule(path: Path) -> tuple[Molecule, str]:
+    """A Molecule for previewing, read the way dispatch reads one (one map), but without writing the .xyz file, and
+    why its spin state is what it is."""
     if not HasContent(path):
-        return Molecule(path, path.stem, "", "", [], path.suffix, path.stem)
+        return Molecule(path, path.stem, "", "", [], path.suffix, path.stem), ""
     with MapFile(path) as data:
         molecule = ReadMolecule(data, path)
-        molecule.spinState, _ = ClassifySpin(molecule, data)
-    return molecule
+        molecule.spinState, reason = ClassifySpin(molecule, data)
+    return molecule, reason
+
+
+# Element symbol -> atomic number
+ATOMIC_NUMBERS = {symbol: number for number, symbol in ATOMIC_SYMBOLS.items()}
+
+
+def Symbols(coordinateList: list[str]) -> list[str]:
+    # A coordinate line's element (fileops.CoordinateLines writes the symbol first)
+    return [line.split()[0] for line in coordinateList if line.split()]
+
+
+def Formula(coordinateList: list[str]) -> str:
+    """The molecular formula in Hill order (C, then H, then alphabetical; alphabetical without carbon): C12H10N2."""
+    counts = {}
+    for symbol in Symbols(coordinateList):
+        counts[symbol] = counts.get(symbol, 0) + 1
+    order = sorted(counts, key=lambda symbol: (("C", "H").index(symbol) if "C" in counts and symbol in ("C", "H")
+                                               else 2, symbol))
+    return "".join(f"{symbol}{counts[symbol] if counts[symbol] > 1 else ''}" for symbol in order)
+
+
+def ElectronProblem(coordinateList: list[str], charge: int, multiplicity: int) -> str:
+    """Why this charge and multiplicity can't describe the molecule ('' if they can): Gaussian and ORCA stop at once."""
+    electrons = sum(ATOMIC_NUMBERS.get(symbol, 0) for symbol in Symbols(coordinateList)) - charge
+    if electrons < 1:
+        return f"Charge {charge} Leaves No Electrons"
+    # Multiplicity 2S + 1: an even electron count has odd multiplicities, at most one more than the electrons
+    if multiplicity < 1 or multiplicity > electrons + 1 or (electrons + multiplicity) % 2 == 0:
+        return f"Multiplicity {multiplicity} Can't Fit {electrons} Electrons"
+    return ""
 
 
 def RouteSpans(route: str, base: str) -> list[tuple[str, str]]:

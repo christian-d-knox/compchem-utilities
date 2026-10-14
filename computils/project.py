@@ -14,7 +14,7 @@ from .prompts  import AskBool, AskChoice
 from .        import prompts
 
 # Known shareable files. -init (and the auto-prompt) offer to move these from the CWD into a new marker.
-PROJECT_FILES = ["mixedbasis.txt", "orcablocks.txt", "spinstates.txt"]
+PROJECT_FILES = ["mixedbasis.txt", "orcablocks.txt", "optmethods.txt", "spinstates.txt"]
 # Project-level overrides of the global config. Only ever lives inside the marker
 PROJECT_CONFIG = "project.toml"
 
@@ -133,9 +133,9 @@ def ReloadConfig(readGlobals: bool = True) -> None:
         Defaults.Load()
         ApplyTheme(Defaults.colorMode)
         # Project files may have been rewritten too (their loaders cache by path)
-        from .jobs import _LoadMixedBasis, _LoadOrcaBlocks
+        from .jobs import _LoadMixedBasis, _LoadOptMethods, _LoadOrcaBlocks
         from .spin import _LoadSpinOverrides
-        for loader in (_LoadMixedBasis, _LoadOrcaBlocks, _LoadSpinOverrides, ResolveProjectFile):
+        for loader in (_LoadMixedBasis, _LoadOrcaBlocks, _LoadOptMethods, _LoadSpinOverrides, ResolveProjectFile):
             loader.cache_clear()
     LoadProjectConfig()
     Catalog.Load()

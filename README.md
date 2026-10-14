@@ -100,7 +100,8 @@ Edit them in the interface's Config screen, or by hand.
 
 **Projects.** `cu -init` marks a folder as a project root (default: `.computils/` folder). Its `project.toml` overrides
 the resources, cluster, benchmark suite and spin settings for every job inside it, and it can hold `mixedbasis.txt`,
-`orcablocks.txt` and `spinstates.txt` for methods that require them.
+`orcablocks.txt`, `optmethods.txt` (the optimization routes the Optimization builder offers) and `spinstates.txt` for
+methods that require them.
 
 **Lab profiles.** A lab profile is a private TOML file holding a group's clusters and shared settings, such as a
 notification bot. Keep it somewhere only your lab can read. `example-profile.toml` documents the layout.

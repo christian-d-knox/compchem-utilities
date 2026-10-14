@@ -258,6 +258,11 @@ class FrameRule(Static):
             return Text.assemble((self.corners[0] + "─", line), label, (fill, line), right, ("─" + self.corners[1], line))
         junction = {"┌┐": "┬", "├┤": "┼", "└┘": "┴"}[self.corners]
         label2 = Text.assemble(" ", self.label2, " ") if self.label2 else Text()
+        # A label too long for its column is cut (…), so the corner always closes the frame
+        room = self.size.width - self.split - 4 - right.cell_len
+        if label2.cell_len > room > 1:
+            label2.truncate(room - 1, overflow="ellipsis")
+            label2.append(" ")
         leftFill = "─" * max(0, self.split - 2 - label.cell_len)
         rightFill = "─" * max(0, self.size.width - self.split - 4 - label2.cell_len - right.cell_len)
         return Text.assemble((self.corners[0] + "─", line), label, (leftFill + junction + "─", line), label2,
@@ -283,6 +288,7 @@ class Setting:
     accepts: str | None = NUMBER  # the characters it takes (a regex); TEXT: anything, a space included
     choice: str = ""            # rows of one choice share this name, shown as (•) / ( )
     under: str = ""             # the row this one is a sub-option of: it applies only while that row is on
+    available: bool = True      # False: greyed and skipped (SettingsList.SetAvailable), e.g. an option not built yet
 
 
 class ValueInput(Input):
@@ -327,6 +333,7 @@ class SettingRow(Horizontal, can_focus=False):
         classes = "setting -choice" if setting.choice else "setting"
         super().__init__(classes=classes + (" -stacked" if stacked else ""), id=f"setting-{setting.key}")
         self.setting, self.on, self.stacked, self.widest = setting, setting.on, stacked, widest
+        self.available = setting.available
         self.inputClass = inputClass
         self.typing = False
 
@@ -387,9 +394,13 @@ class SettingRow(Horizontal, can_focus=False):
         if self.typing:
             if self.on is not None:
                 self.on = bool(event.value.strip()) if self.setting.accepts is TEXT else True
-            # ...and a sub-option's value turns on the row it belongs to
+            # ...and a sub-option's value turns on the row it belongs to (selects it, under a choice)
             if self.setting.under:
-                self.parent.Row(self.setting.under).on = True
+                under = self.parent.Row(self.setting.under)
+                if under.setting.choice:
+                    self.parent.Select(under)
+                else:
+                    under.on = True
             self.parent.ShowAll()
 
     def on_click(self) -> None:
@@ -441,8 +452,15 @@ class SettingsList(Vertical):
         return next(row.setting.key for row in self.rows if row.setting.choice == choice and row.on)
 
     def Applies(self, row: SettingRow) -> bool:
-        """Whether the row takes part: not off, and not under a row that is off."""
-        return row.on is not False and (not row.setting.under or self.Applies(self.Row(row.setting.under)))
+        """Whether the row takes part: available, not off, and not under a row that doesn't."""
+        return (row.available and row.on is not False
+                and (not row.setting.under or self.Applies(self.Row(row.setting.under))))
+
+    def SetAvailable(self, key: str, available: bool) -> None:
+        """Grey a row out (or bring it back): it can't be turned on or chosen, and doesn't apply. A choice keeps its
+        selection, so making it available again restores it."""
+        self.Row(key).available = available
+        self.ShowAll()
 
     def ShowAll(self) -> None:
         # A row's change can grey out (or bring back) its sub-options
@@ -464,7 +482,8 @@ class SettingsList(Vertical):
         if action == "choose":
             return True if self.current.setting.choice else None
         if action == "toggle":
-            return True if self.current.on is not None and self.current.setting.accepts is not TEXT else None
+            return (True if self.current.available and self.current.on is not None
+                    and self.current.setting.accepts is not TEXT else None)
         return True
 
     def action_move(self, step: int) -> None:
@@ -473,6 +492,8 @@ class SettingsList(Vertical):
 
     def action_toggle(self) -> None:
         row = self.current
+        if not row.available:
+            return
         if row.setting.choice:
             self.Select(row)
         elif row.on is not None and row.setting.accepts is not TEXT:
@@ -481,11 +502,15 @@ class SettingsList(Vertical):
             self.post_message(self.Changed())
 
     def action_choose(self, step: int) -> None:
-        options = [row for row in self.rows if row.setting.choice == self.current.setting.choice]
+        # Unavailable options are stepped over (the selected one stays in the list as the starting point)
+        options = [row for row in self.rows if row.setting.choice == self.current.setting.choice
+                   and (row.available or row.on)]
         selected = next(index for index, row in enumerate(options) if row.on)
         self.Select(options[(selected + step) % len(options)])
 
     def Select(self, chosen: SettingRow) -> None:
+        if not chosen.available:
+            return
         for row in self.rows:
             if row.setting.choice == chosen.setting.choice:
                 row.on = row is chosen

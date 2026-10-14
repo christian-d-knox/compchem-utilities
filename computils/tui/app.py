@@ -87,6 +87,8 @@ class CompUtilsApp(App):
     .setting-value { width: 18; height: 1; }
     .setting-value Input, .setting-value Input:focus { width: 2; height: 1; padding: 0; border: none; background: transparent; }
     .setting-unit { width: auto; margin-left: 0; }
+    /* A shown value (a choice's name) stays on its row, cut with … in a narrow column */
+    .setting-fixed { text-wrap: nowrap; text-overflow: ellipsis; }
     .setting-meaning { width: 1fr; color: $text-muted; }
     /* Rows that won't apply (off, an unselected choice, a sub-option of an off row) are greyed out whole */
     .setting.-off Static, .setting.-off Input { text-opacity: 45%; }
@@ -105,6 +107,16 @@ class CompUtilsApp(App):
     #si-left { width: 30; height: 1fr; }
     #si-right { width: 1fr; height: 1fr; border-right: solid $secondary; }
     #species { height: 1fr; }
+
+    /* The input builders (Optimization): settings and the files, paste box or input preview side by side in one frame */
+    #inputs-body { height: 1fr; }
+    #inputs-left { width: 30; height: 1fr; }
+    #inputs-right { width: 1fr; height: 1fr; border-right: solid $secondary; }
+    #source-files, #source-files:focus { height: 1fr; border: none; }
+    /* :focus too, or TextArea's own focus border (more specific) comes back */
+    #paste, #paste:focus, #input-preview, #input-preview:focus { height: 1fr; border: none; padding: 0 1; }
+    /* A prior job's file name, under its From Source row: one line, cut with … */
+    #setting-method-from .setting-meaning { text-wrap: nowrap; text-overflow: ellipsis; }
 
     /* The config editor: the table takes the height the details strip leaves */
     #config-table { height: 1fr; }

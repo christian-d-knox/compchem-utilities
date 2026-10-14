@@ -67,6 +67,15 @@ def _RouteDeclaresBrokenSymmetry(molecule) -> str:
     return ""
 
 
+def SpinOverride(rootName: str) -> tuple[SpinState, str] | None:
+    """The spinstates.txt entry that names this molecule: (state, its pattern), the first match; None without one."""
+    overridePath = ResolveProjectFile("spinstates.txt", False)
+    if overridePath is None:
+        return None
+    return next(((state, pattern) for pattern, state in _LoadSpinOverrides(overridePath)
+                 if fnmatchcase(rootName, pattern)), None)
+
+
 def ClassifySpin(molecule, data) -> tuple[SpinState, str]:
     """Classify one molecule (fileops.ReadMolecule) from its source file's open map, the one ReadMolecule read.
     Returns (state, short reason for the log)."""
@@ -77,15 +86,14 @@ def ClassifySpin(molecule, data) -> tuple[SpinState, str]:
         multiplicityValue = None
 
     # 1. User override file. It only decides CSS vs OSS, so it can't apply to a high-spin molecule
-    overridePath = ResolveProjectFile("spinstates.txt", False)
-    if overridePath is not None:
-        for pattern, state in _LoadSpinOverrides(overridePath):
-            if fnmatchcase(rootName, pattern):
-                if multiplicityValue is not None and multiplicityValue > 1:
-                    console.print(f"[warning]{rootName}: spinstates.txt entry '{pattern}' ignored, because the "
-                                  f"multiplicity is {multiplicityValue} (css/oss only apply to singlets).[/warning]")
-                    break
-                return state, f"spinstates.txt: {pattern}"
+    override = SpinOverride(rootName)
+    if override is not None:
+        state, pattern = override
+        if multiplicityValue is not None and multiplicityValue > 1:
+            console.print(f"[warning]{rootName}: spinstates.txt entry '{pattern}' ignored, because the "
+                          f"multiplicity is {multiplicityValue} (css/oss only apply to singlets).[/warning]")
+        else:
+            return state, f"spinstates.txt: {pattern}"
 
     # 2. Multiplicity
     if multiplicityValue is None:

@@ -150,7 +150,7 @@ class BuilderScreen(Screen):
 
     def on_mount(self) -> None:
         if self.action in USES_GENERATION:
-            self.molecules = {path.name: PreviewMolecule(path) for path in self.files}
+            self.molecules = {path.name: PreviewMolecule(path)[0] for path in self.files}
         if self.preset:
             settings = self.query_one("#settings", SettingsList)
             for key, value in self.preset.items():

@@ -90,8 +90,12 @@ def ExtractProgram(data, suffix: str) -> str:
         return ""
     return Defaults.orcaExtension if header.group().startswith(b"*") else Defaults.gaussianExtension
 
-def ExtractCoords(data, program: str) -> tuple[list[str], list[str], list[str], list[str]]:
-    """The LAST geometry printed (an optimisation's final one) as (element symbols, X, Y, Z)."""
+def ExtractCoords(data, program: str, fromInput: bool = False) -> tuple[list[str], list[str], list[str], list[str]]:
+    """The LAST geometry printed (an optimisation's final one) as (element symbols, X, Y, Z). fromInput: the file is an
+    input, whose geometry follows its charge/multiplicity line (a Gaussian input's first stage, ORCA's '* xyz' block)."""
+    if fromInput:
+        chargeLine = _InputChargeLine(data, program)
+        return _CoordinateRows(data, chargeLine.end()) if chargeLine else ([], [], [], [])
     if program == Defaults.orcaExtension:
         # One block per geometry step: header, dashed line, then 'C  x y z' rows ending at a blank line
         tableLocation, headerLines = FindInMap(data, r"CARTESIAN COORDINATES \(ANGSTROEM\)", True), 1
@@ -114,24 +118,68 @@ def ExtractCoords(data, program: str) -> tuple[list[str], list[str], list[str], 
         fields = data.readline().decode().split()
     return symbols, X, Y, Z
 
+# One coordinate row of an .xyz or an input: an element (symbol, label like C1 / C(Fragment=1), or atomic number), an
+# optional Gaussian freeze flag, then x y z
+_NUMBER = r"-?\d+(?:\.\d*)?(?:[eEdD][-+]?\d+)?"
+COORDINATE_ROW = rf"[ \t]*([A-Za-z]{{1,2}}|\d{{1,3}})(?:[^\s,]*)(?:[ \t,]+-?1|[ \t,]+0)?[ \t,]+({_NUMBER})[ \t,]+({_NUMBER})[ \t,]+({_NUMBER})[ \t]*\r?$"
+
+def _RowSymbol(token: str) -> str:
+    """The element a row's first token names, or '' if it names none (a ghost Bq, a dummy X)."""
+    symbol = ATOMIC_SYMBOLS.get(int(token), "") if token.isdigit() else token.capitalize()
+    return symbol if symbol in ELEMENT_SET else ""
+
+def _CoordinateRows(data, start: int, last: bool = False) -> tuple[list[str], list[str], list[str], list[str]]:
+    """The block of coordinate rows starting at the first row after start (as ExtractCoords returns them). last: the last
+    block in the file instead (an .xyz trajectory's final frame). Lines that aren't rows end a block."""
+    blocks, current = [], None
+    data.seek(start)
+    for rawLine in iter(data.readline, b""):
+        row = regex.match(COORDINATE_ROW, rawLine.decode(errors="replace").rstrip("\n"))
+        symbol = _RowSymbol(row.group(1)) if row else ""
+        if symbol:
+            if current is None:
+                current = ([], [], [], [])
+                blocks.append(current)
+            # Fortran-style exponents (1.0D-03) are written the way both programs read them
+            values = [symbol] + [number.replace("D", "E").replace("d", "e") for number in row.group(2, 3, 4)]
+            for column, value in zip(current, values):
+                column.append(value)
+        elif current is not None:
+            if not last:
+                break
+            current = None
+    return blocks[-1] if blocks else ([], [], [], [])
+
+def ExtractXyz(data) -> list[str]:
+    """The coordinate lines of an .xyz file or pasted coordinates: the last block of 'Symbol x y z' rows (the count and
+    comment lines are optional), in ReadMolecule's layout."""
+    return CoordinateLines(*_CoordinateRows(data, 0, last=True))
+
+def CoordinateLines(symbols: list[str], X: list[str], Y: list[str], Z: list[str]) -> list[str]:
+    # A molecule's coordinateList: the lines written to the .xyz (WriteXyz) and kept for the input files
+    return [f"{symbol}   {x}   {y}   {z}\n" for symbol, x, y, z in zip(symbols, X, Y, Z)]
+
 def ExtractCharge(data, program: str, fromInput: bool = False) -> tuple[str, str]:
     """(charge, multiplicity), or ('', '') if not found. fromInput: the file is an input (a Gaussian input has no
     'Charge =' line: its first stage's charge/multiplicity line follows the route and title sections)."""
-    if program == Defaults.orcaExtension:
-        # The input's coordinate line ('* xyz 0 1', '*xyzfile 0 1 geom.xyz'), echoed in an output
-        chargeMatch = FindInMap(data, r"\*\s*(?:xyzfile|xyz|internal|int|gzmtfile|gzmt|pdbfile)\s+(-?\d+)\s+(\d+)",
-                                ignoreCase=True)
-        if chargeMatch is None:
-            return "", ""
-        return chargeMatch.group(1).decode(), chargeMatch.group(2).decode()
-    if fromInput:
-        return _GaussianInputCharge(data)
-    # 'Charge =  0 Multiplicity = 1'. \W also spans non-breaking spaces (bytes C2 A0), which some outputs contain.
-    # Anchored on the whole line, so a 'Charge' keyword earlier in the file (or any other file) can't be misread
-    chargeMatch = FindInMap(data, r"Charge\W*?(-?\d+)\W+Multiplicity\W*?(\d+)")
+    if program == Defaults.orcaExtension or fromInput:
+        chargeMatch = _InputChargeLine(data, program)
+    else:
+        # 'Charge =  0 Multiplicity = 1'. \W also spans non-breaking spaces (bytes C2 A0), which some outputs contain.
+        # Anchored on the whole line, so a 'Charge' keyword earlier in the file (or any other file) can't be misread
+        chargeMatch = FindInMap(data, r"Charge\W*?(-?\d+)\W+Multiplicity\W*?(\d+)")
     if chargeMatch is None:
         return "", ""
     return chargeMatch.group(1).decode(), chargeMatch.group(2).decode()
+
+# ORCA's coordinate line ('* xyz 0 1', '*xyzfile 0 1 geom.xyz'), in an input or echoed in an output
+ORCA_CHARGE_LINE = r"\*\s*(?:xyzfile|xyz|internal|int|gzmtfile|gzmt|pdbfile)\s+(-?\d+)\s+(\d+)"
+
+def _InputChargeLine(data, program: str) -> regex.Match | None:
+    """The line an input's charge and multiplicity are on (groups 1 and 2); its geometry follows it."""
+    if program == Defaults.orcaExtension:
+        return FindInMap(data, ORCA_CHARGE_LINE, ignoreCase=True)
+    return _GaussianChargeLine(data)
 
 def ExtractOrcaInput(data) -> str:
     """ORCA's input as written: from an output, its verbatim echo ('|  N> ' prefixes removed, up to ****END OF INPUT****);
@@ -223,18 +271,15 @@ def InputRoutes(data, program: str) -> list[str]:
                       if routeMatch else "")
     return routes
 
-def _GaussianInputCharge(data) -> tuple[str, str]:
-    """A Gaussian input's first charge/multiplicity pair: after the route section, a blank line, the title section and
-    another blank line. ('', '') without one (e.g. Geom=AllCheck, which reads both from the checkpoint)."""
+def _GaussianChargeLine(data) -> regex.Match | None:
+    """A Gaussian input's first charge/multiplicity line (groups 1 and 2): after the route section, a blank line, the
+    title section and another blank line. None without one (e.g. Geom=AllCheck, which reads both from the checkpoint)."""
     start, end = _GaussianSections(data)[0]
     routeMatch = _GaussianInputRoute(data, start, end)
     if routeMatch is None or regex.search(rb"(?i)allcheck", routeMatch.group(1)):
-        return "", ""
-    chargeMatch = regex.match(rb"[ \t]*\r?\n(?:[ \t]*\r?\n)*(?:[ \t]*\S[^\r\n]*\r?\n)+[ \t]*\r?\n[ \t]*(-?\d+)[ \t,]+(\d+)",
-                              data, pos=routeMatch.end(), endpos=end)
-    if chargeMatch is None:
-        return "", ""
-    return chargeMatch.group(1).decode(), chargeMatch.group(2).decode()
+        return None
+    return regex.match(rb"[ \t]*\r?\n(?:[ \t]*\r?\n)*(?:[ \t]*\S[^\r\n]*\r?\n)+[ \t]*\r?\n[ \t]*(-?\d+)[ \t,]+(\d+)",
+                       data, pos=routeMatch.end(), endpos=end)
 
 def ExtractRouteEcho(data, start: int = 0) -> str | None:
     """The first route a Gaussian output echoes after start, or None if none is written there yet. From a bookmark, the
@@ -499,6 +544,8 @@ def HasRestrictedInstability(data) -> bool:
 
 # CompUtils writes these itself in genFile(), so user copies would conflict
 RESERVED_ORCA_BLOCKS = {"pal", "maxcore"}
+# '# @tag NAME' names what follows it in a project file: an orcablocks.txt block, an optmethods.txt route
+TAG_DIRECTIVE = r"#\s*@tag\s+([\w-]+)"
 
 def OrcaBlockName(blockText: str) -> str:
     """'%cpcm\\n  smd true\\nend\\n' -> 'cpcm'."""
@@ -510,7 +557,7 @@ def _SplitOrcaBlocks(lines: list[str]) -> list[tuple[str, str]]:
     No 'end' counting, so nested ends (e.g. %geom constraints) are safe. Lines outside a block are dropped."""
     blocks, pendingTag, current = [], "", None
     for line in lines + ["%"]:   # the sentinel closes the last block (and is never closed itself)
-        tagMatch = regex.match(r"#\s*@tag\s+([\w-]+)", line)
+        tagMatch = regex.match(TAG_DIRECTIVE, line)
         if (tagMatch or line.startswith("%")) and current is not None:
             while current[1] and (not current[1][-1].strip() or current[1][-1].lstrip().startswith("#")):
                 current[1].pop()
@@ -541,6 +588,28 @@ def ExtractOrcaBlocks(data) -> dict[str, str]:
             continue
         blocks[tag] = blockText
     return blocks
+
+def ExtractOptMethods(data) -> dict[str, str]:
+    """Tagged routes from an optmethods.txt mmap data stream: tag -> route line, in file order. A route is a line that is
+    neither blank nor a # comment; its tag is the '# @tag NAME' directive above it, else its method (the first token
+    without Gaussian's /basis). Tags are lowercased; a duplicate keeps the first."""
+    methods: dict[str, str] = {}
+    pendingTag = ""
+    data.seek(0)
+    for rawLine in iter(data.readline, b""):
+        line = rawLine.decode().strip()
+        tagMatch = regex.match(TAG_DIRECTIVE, line)
+        if tagMatch:
+            pendingTag = tagMatch.group(1).lower()
+            continue
+        if not line or line.startswith("#"):
+            continue
+        tag, pendingTag = pendingTag or line.split()[0].split("/")[0].lower(), ""
+        if tag in methods:
+            console.print(f"[error]Duplicate tag '{tag}' in optmethods.txt. Keeping the first definition.[/error]")
+            continue
+        methods[tag] = line
+    return methods
 
 # Blocks an ORCA re-run never carries over: genFile writes %pal/%maxcore, and the new geometry comes from the output
 RERUN_SKIPPED_BLOCKS = RESERVED_ORCA_BLOCKS | {"coords"}
@@ -752,16 +821,16 @@ def formCheck(molecule: Molecule) -> bool:
     Retarget(molecule, molecule.rootName, extensionType=".fchk")
     return True
 
-# Everything CompUtils reads from a source output, from ONE open map (the caller manages MapFile, and runs ClassifySpin
-# on the same map): program, charge/multiplicity, final coordinates, route card and ORCA's input as written.
+# Everything CompUtils reads from a source output or input, from ONE open map (the caller manages MapFile, and runs
+# ClassifySpin on the same map): program, charge/multiplicity, final coordinates, route card and ORCA's input as written.
 # Writes nothing, so the TUI preview shares it. A new fully pythonic solution to coordinate scraping, agnostic of the
 # cluster's PERL bullshit
 def ReadMolecule(data, path: Path) -> Molecule:
     program = ExtractProgram(data, path.suffix)
-    charge, multiplicity = ExtractCharge(data, program, fromInput=path.suffix == program)
-    symbols, X, Y, Z = ExtractCoords(data, program)
-    # The lines are written to the .xyz (WriteXyz) and kept for the input files
-    coordinateList = [f"{symbol}   {x}   {y}   {z}\n" for symbol, x, y, z in zip(symbols, X, Y, Z)]
+    # An input's own charge line and geometry; an output's last geometry
+    fromInput = path.suffix == program
+    charge, multiplicity = ExtractCharge(data, program, fromInput)
+    coordinateList = CoordinateLines(*ExtractCoords(data, program, fromInput))
     molecule = Molecule(path, path.stem, charge, multiplicity, coordinateList, path.suffix, path.stem)
     molecule.sourceProgram = program
     if program == Defaults.orcaExtension:
