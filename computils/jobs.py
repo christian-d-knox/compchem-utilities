@@ -5,7 +5,7 @@ from rich.markup import escape
 from .defaults import Defaults
 from .catalog  import RenderRoute, ROUTE_LEAK_PATTERN
 from .fileops  import (fileCreation, ExtractFrom, ExtractFromText, HasContent, ExtractResources, ExtractOrcaBlocks,
-                       MapFile, StageCount,
+                       ExtractOptMethods, MapFile, StageCount,
                        ExtractMixedBasis, MixedBasis, BasisEntry, NormalizeElement, MoleculeElements)
 from .molecule import Molecule
 from .project  import ResolveProjectFile, FindProjectRoot, ProjectFilePath
@@ -20,6 +20,15 @@ def _LoadOrcaBlocks(blocksPath: Path) -> dict[str, str]:
 @functools.cache
 def _LoadMixedBasis(basisPath: Path) -> MixedBasis:
     return ExtractFrom(basisPath, ExtractMixedBasis, empty=MixedBasis([], []))
+
+@functools.cache
+def _LoadOptMethods(methodsPath: Path) -> dict[str, str]:
+    return ExtractFrom(methodsPath, ExtractOptMethods, empty={})
+
+# The project's optimization methods (tag -> route line, in file order): optmethods.txt (a CWD copy first), or its unsaved
+# text from the TUI's config editor; {} without one. Never prompts: the file is optional
+def OptMethods(texts: dict[str, str] | None = None) -> dict[str, str]:
+    return _ProjectData("optmethods.txt", ExtractOptMethods, _LoadOptMethods, {}, False, texts) or {}
 
 # Route tokens that request a mixed basis, including the slash form (B3LYP/GenECP)
 def _IsMixedBasisKeyword(word: str) -> bool:
@@ -95,15 +104,33 @@ def _MissingProjectFile(fileName: str) -> str:
 # previously stored in molecule (fileops.Retarget).
 # Returns False if this job can't be generated (e.g. missing mixedbasis.txt), so the caller skips only this job.
 def genFile(molecule: Molecule, intent: JobIntent) -> bool:
-    inputFile = molecule.fullPath
     # Route card rendered for this molecule's spin state: base + matching [spin groups] + U/RO reference
     route, blockTags = RenderRoute(molecule.template, molecule)
-    elements = MoleculeElements(molecule.coordinateList)
     # Checked BEFORE opening the input, so a failure never leaves a half-written file
-    problem = JobFileProblem(route, blockTags, molecule.extensionType, elements, True)
+    problem = JobFileProblem(route, blockTags, molecule.extensionType, MoleculeElements(molecule.coordinateList), True)
     if problem:
         console.print(f"[error]{escape(problem)}. Skipping {molecule.baseName}.[/error]")
         return False
+    text = JobInputText(molecule, intent.checkpoint, intent.nbo7)
+    with open(molecule.fullPath, 'w') as jobInput:
+        jobInput.write(text)
+    return True
+
+# The memory per core a job gets unless told otherwise (GB): DLPNO in ORCA needs more
+def DefaultMemoryRatio(route: str, extensionType: str) -> float:
+    if extensionType == Defaults.orcaExtension and "DLPNO" in route:
+        return Defaults.highMemoryRatio
+    return Defaults.memoryRatio
+
+# The text of a molecule's job input, in the program molecule.extensionType names (genFile writes it; the TUI's input
+# builders preview it). cpus and memoryRatio (GB per core) default to the config's. required: as JobFileProblem's, so
+# genFile resolves project files the way its check did; missing project files (the TUI's preview) count as empty
+def JobInputText(molecule: Molecule, checkpoint: bool = False, nbo7: bool = False, cpus: int | None = None,
+                 memoryRatio: float | None = None, required: bool = True) -> str:
+    route, blockTags = RenderRoute(molecule.template, molecule)
+    elements = MoleculeElements(molecule.coordinateList)
+    cpus = Defaults.CPU if cpus is None else cpus
+    memoryRatio = DefaultMemoryRatio(route, molecule.extensionType) if memoryRatio is None else memoryRatio
     match molecule.extensionType:
         case Defaults.gaussianExtension:
             if blockTags:
@@ -113,7 +140,8 @@ def genFile(molecule: Molecule, intent: JobIntent) -> bool:
             usesMixedBasis = _UsesMixedBasis(route)
             if usesMixedBasis:
                 # The master file lists every element the project may need; keep only this molecule's
-                master = _LoadMixedBasis(ResolveProjectFile("mixedbasis.txt", True))
+                basisPath = ResolveProjectFile("mixedbasis.txt", required)
+                master = _LoadMixedBasis(basisPath) if basisPath else MixedBasis([], [])
                 basisSection, ecpSection, _ = _FilterMixedBasis(master, elements)
                 # GenECP with an empty ECP section (or Gen with ECP elements) fails in Gaussian
                 switchedRoute = _SetMixedBasisKeyword(route, bool(ecpSection))
@@ -122,60 +150,46 @@ def genFile(molecule: Molecule, intent: JobIntent) -> bool:
                     console.print(f"[info]{molecule.baseName}: using {'GenECP' if ecpSection else 'Gen'} "
                                   f"({reason}).[/info]")
                     route = switchedRoute
-            # No longer accesses the XYZ file due to Molecule coordinateList property
-            with open(inputFile, 'w') as jobInput:
-                # Sets the job's CPU and RAM
-                jobCPU = str(Defaults.CPU)
-                jobMem = str(int(Defaults.CPU * Defaults.memoryRatio))
-                # Writes the standard Gaussian16 formatted opening
-                jobInput.write("%nprocshared=" + jobCPU + "\n%mem=" + jobMem + "GB")
-                if intent.checkpoint:
-                    jobInput.write(f"\n%chk={molecule.baseName}.chk")
-                # If the methodLine from benchmarking.txt is garbage, the calculation will fail. Not my fault.
-                jobInput.write("\n# " + route + "\n\nUseless Comment line\n\n")
-                jobInput.write(f"{molecule.charge} {molecule.multiplicity}\n")
-                # Accessing the stored coordinate list is significantly faster in run-time than prior crappy implementation
-                jobInput.writelines(molecule.coordinateList)
-                # Mixed basis entries for this molecule's elements, from the CWD or project root mixedbasis.txt
-                if usesMixedBasis:
-                    jobInput.write("\n" + basisSection)
-                    if ecpSection:
-                        jobInput.write("\n" + ecpSection)
-                jobInput.write("\n")
-                # New NBO7 section
-                if intent.nbo7:
-                    jobInput.write(f"{Defaults.nboKeylist} FILE={molecule.baseName} ARCHIVE $END")
-                else:
-                    jobInput.write("\n")
+            # Writes the standard Gaussian16 formatted opening: the job's CPU and RAM (%mem is the total)
+            text = f"%nprocshared={cpus}\n%mem={int(cpus * memoryRatio)}GB"
+            if checkpoint:
+                text += f"\n%chk={molecule.baseName}.chk"
+            # If the methodLine from benchmarking.txt is garbage, the calculation will fail. Not my fault.
+            text += "\n# " + route + "\n\nUseless Comment line\n\n"
+            text += f"{molecule.charge} {molecule.multiplicity}\n"
+            # Accessing the stored coordinate list is significantly faster in run-time than prior crappy implementation
+            text += "".join(molecule.coordinateList)
+            # Mixed basis entries for this molecule's elements, from the CWD or project root mixedbasis.txt
+            if usesMixedBasis:
+                text += "\n" + basisSection
+                if ecpSection:
+                    text += "\n" + ecpSection
+            text += "\n"
+            # New NBO7 section
+            text += f"{Defaults.nboKeylist} FILE={molecule.baseName} ARCHIVE $END" if nbo7 else "\n"
+            return text
 
         case Defaults.orcaExtension:
             # Tagged blocks from orcablocks.txt, in route-card tag order (JobFileProblem checked they all exist)
             selectedBlocks = []
             if blockTags:
-                availableBlocks = _LoadOrcaBlocks(ResolveProjectFile("orcablocks.txt", True))
-                selectedBlocks = [availableBlocks[tag] for tag in blockTags]
+                blocksPath = ResolveProjectFile("orcablocks.txt", required)
+                availableBlocks = _LoadOrcaBlocks(blocksPath) if blocksPath else {}
+                selectedBlocks = [availableBlocks[tag] for tag in blockTags if tag in availableBlocks]
             # Then the template's own literal blocks (an ORCA re-run carries the blocks its job ran with)
             selectedBlocks += molecule.template.blocks
-            # Opens the job file
-            with open(inputFile, 'w') as jobInput:
-                # Sets the job's CPU and RAM
-                jobCPU = str(Defaults.CPU)
-                if "DLPNO" in route:
-                    jobMem = str(int(Defaults.highMemoryRatio * 1000))
-                else:
-                    jobMem = str(int(Defaults.memoryRatio * 1000))
-                # Writes the standard ORCA formatted opening
-                jobInput.write(f"%pal nprocs {jobCPU}\nend\n%maxcore {jobMem}")
-                # If the methodLine from benchmarking.txt is garbage, the calculation will fail. Not my fault.
-                jobInput.write("\n! " + route + "\n")
-                for block in selectedBlocks:
-                    jobInput.write(block if block.endswith("\n") else block + "\n")
-                jobInput.write("\n")
-                # ORCA is smart enough to read from an XYZ directly
-                jobInput.write(f"* xyz {molecule.charge} {molecule.multiplicity} \n")
-                jobInput.writelines(molecule.coordinateList)
-                jobInput.write("\n*")
-    return True
+            # Writes the standard ORCA formatted opening: the job's CPU and RAM (%maxcore is MB per core)
+            text = f"%pal nprocs {cpus}\nend\n%maxcore {int(memoryRatio * 1000)}"
+            # If the methodLine from benchmarking.txt is garbage, the calculation will fail. Not my fault.
+            text += "\n! " + route + "\n"
+            for block in selectedBlocks:
+                text += block if block.endswith("\n") else block + "\n"
+            text += "\n"
+            # ORCA is smart enough to read from an XYZ directly
+            text += f"* xyz {molecule.charge} {molecule.multiplicity} \n"
+            text += "".join(molecule.coordinateList)
+            return text + "\n*"
+    return ""
 
 # Reorganized! Now handles SLURM commands independently because of HPC cluster agnosticism
 def slurmHandler(molecule: Molecule, queueName: Path, outputName: Path, cpus: int, jobRam: int) -> None:

@@ -118,13 +118,15 @@ def _ApplyReference(tokens: list[str], spinState: SpinState, extensionType: str)
         isHartreeFock = method == "HF" or any(key in method for key in ("MP2", "CC", "CAS", "NEVPT"))
         return tokens + [reference + ("HF" if isHartreeFock else "KS")]
 
-    # Gaussian: prefix the method token (the first token, and only the part before any '/')
-    method = MethodKey(tokens[0])
+    # Gaussian: prefix the method token, the first known one (a route Gaussian echoes often leads with its keywords:
+    # 'opt freq B3LYP 6-31G(d)'), else the first token. Only the part before any '/' is the method
+    position = next((index for index, token in enumerate(tokens) if SplitReference(MethodKey(token))), 0)
+    method = MethodKey(tokens[position])
     found = SplitReference(method)
     # Known method behind a U/RO/R prefix, or an unlisted method that already starts with U/RO: already declared
     if (found and found[0]) or (not found and method.startswith(("U", "RO"))):
         return tokens
-    return [reference + tokens[0]] + tokens[1:]
+    return tokens[:position] + [reference + tokens[position]] + tokens[position + 1:]
 
 
 def RenderRoute(template: RouteTemplate, molecule) -> tuple[str, list[str]]:

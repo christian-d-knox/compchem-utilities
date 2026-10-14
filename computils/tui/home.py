@@ -26,11 +26,21 @@ ACTION_LABELS = {
 # Screens below the divider, opened with ␣, ⏎ or a click (HomeScreen.OpenScreenItem): item id -> label
 SCREEN_ITEMS = {"screen-scrapers": "Scrapers ›", "screen-stalker": "Job Stalker", "screen-config": "Config",
                 "screen-files": "Project Files", "screen-update": "Update CompUtils", "screen-attributions": "Attributions"}
-# Scrapers swaps the Actions list for these (they read the whole CWD, so like the screens they dim the file pane);
-# "‹ Actions" (or esc) swaps back
+# Sub-menus swap the Actions list for their items, after a "‹ Actions" item (it, or esc, swaps back). Input Builders
+# (first in the list) holds two file actions and the Optimization builder; the scrapers read the whole CWD. Screen items
+# (the builder, the scrapers) dim the file pane, as the screens below the divider do
+BUILDERS_ITEM = "screen-builders"
+BUILDER_ITEMS = {f"action-{Action.SINGLE_POINT.value}": ACTION_LABELS[Action.SINGLE_POINT],
+                 f"action-{Action.BENCHMARK.value}": ACTION_LABELS[Action.BENCHMARK], "builder-opt": "Optimization"}
 SCRAPER_ITEMS = {"scraper-si": "SI Scraper"}
-SCRAPERS_BACK = "scrapers-back"
-ITEM_LABELS = {**SCREEN_ITEMS, **SCRAPER_ITEMS, SCRAPERS_BACK: "Scrapers"}
+# Sub-menu item id -> (pane title prefix, the title while ‹ Actions is highlighted, its items)
+SUBMENUS = {BUILDERS_ITEM: ("Builders", "Input Builders", BUILDER_ITEMS),
+            "screen-scrapers": ("Scrapers", "Scrapers", SCRAPER_ITEMS)}
+SUBMENU_BACK = "submenu-back"
+# Actions listed in a sub-menu instead of the main list
+SUBMENU_ACTIONS = {itemId.removeprefix("action-") for itemId in BUILDER_ITEMS if itemId.startswith("action-")}
+ITEM_LABELS = {BUILDERS_ITEM: "Input Builders ›", "builder-opt": "Optimization", **SCREEN_ITEMS, **SCRAPER_ITEMS,
+               SUBMENU_BACK: "‹ Actions"}
 _COLLAPSE = Binding.Group("Collapse")
 _ALL_NONE = Binding.Group("All/None")
 _FOLD = Binding.Group("Fold", compact=True)
@@ -41,7 +51,7 @@ STATUS_STYLES = {"Normal": "good", "Error": "error", "Unknown": "warning"}
 
 # Help lines are labels, so Title Case (round 31)
 HELP = {
-    "actions": "↑/↓ Highlight an Action · space Choose It and Go to the Folders (the File List Below the Project Root) · enter Continue to the File List · space / enter on Scrapers: List the Scrapers (‹ Actions or esc to Go Back) · space / enter on SI Scraper: Open the SI Scraper · space / enter on Job Stalker: Open the Job Stalker ·space / enter on Config or Project Files: Open the Config Editor · space / enter on Attributions: Show the License, Disclaimer and Credits · 1 Collapse Actions",
+    "actions": "↑/↓ Highlight an Action · space Choose It and Go to the Folders (the File List Below the Project Root) · enter Continue to the File List · space / enter on Input Builders or Scrapers: List Them (‹ Actions or esc to Go Back) · space / enter on Optimization: Build an Input from Coordinates · space / enter on SI Scraper: Open the SI Scraper · space / enter on Job Stalker: Open the Job Stalker ·space / enter on Config or Project Files: Open the Config Editor · space / enter on Attributions: Show the License, Disclaimer and Credits · 1 Collapse Actions",
     "folders": "↑/↓ Move · space / Click Open the Folder (It Becomes the CWD) and Go to the File List · ←/→ or Click the Arrow Fold · enter Continue · 2 Collapse Folders",
     "glob":    "Type a Pattern to Select Matching Files · enter / esc Return to the File List",
     "files":   "space Select · a All · n None · / Glob · enter Continue to the Builder",
@@ -74,10 +84,10 @@ class ActionList(ListView):
                 Binding("escape", "back", "Actions")]
 
     def check_action(self, action: str, parameters) -> bool | None:
-        return self.screen.scrapers if action == "back" else True
+        return self.screen.submenu is not None if action == "back" else True
 
     def action_back(self) -> None:
-        self.screen.call_later(self.screen.ShowScrapers, False)
+        self.screen.call_later(self.screen.ShowSubmenu, None)
 
 
 class GlobInput(Input, can_focus=False):
@@ -174,8 +184,8 @@ class HomeScreen(Screen):
 
     def __init__(self) -> None:
         super().__init__()
-        self.action = Action.SINGLE_POINT
-        self.scrapers = False         # the Actions pane lists the scrapers (Scrapers ›)
+        self.action = Action.RUN
+        self.submenu: str | None = None   # the sub-menu the Actions pane lists (Input Builders ›, Scrapers ›)
         self._detailsTimer = None
         self._detailsPath: Path | None = None
         self._nameWidth = 0
@@ -205,24 +215,26 @@ class HomeScreen(Screen):
 
     @staticmethod
     def ActionItems() -> list[ListItem]:
-        items = [ListItem(Label(label), id=f"action-{action.value}") for action, label in ACTION_LABELS.items()]
+        items = [ListItem(Label(ITEM_LABELS[BUILDERS_ITEM]), id=BUILDERS_ITEM)]
+        items += [ListItem(Label(label), id=f"action-{action.value}") for action, label in ACTION_LABELS.items()
+                  if action.value not in SUBMENU_ACTIONS]
         items.append(ListItem(Label("──────────────"), disabled=True))
         return items + [ListItem(Label(label), id=itemId) for itemId, label in SCREEN_ITEMS.items()]
 
-    async def ShowScrapers(self, shown: bool) -> None:
-        """Swap the Actions list for the scrapers (‹ Actions first, the first scraper highlighted), or back (Scrapers
-        highlighted). The same list is refilled, so every #actions query and the collapse still apply."""
-        self.scrapers = shown
+    async def ShowSubmenu(self, submenu: str | None) -> None:
+        """Swap the Actions list for a sub-menu's items (‹ Actions first, its first item highlighted), or back (the
+        sub-menu's own item highlighted). The same list is refilled, so every #actions query and the collapse apply."""
+        previous, self.submenu = self.submenu, submenu
         actions = self.query_one("#actions", ActionList)
         await actions.clear()
-        if shown:
-            await actions.extend([ListItem(Label("‹ Actions"), id=SCRAPERS_BACK)] +
-                                 [ListItem(Label(label), id=itemId) for itemId, label in SCRAPER_ITEMS.items()])
+        if submenu is not None:
+            await actions.extend([ListItem(Label(ITEM_LABELS[SUBMENU_BACK]), id=SUBMENU_BACK)] +
+                                 [ListItem(Label(label), id=itemId) for itemId, label in SUBMENUS[submenu][2].items()])
             actions.index = 1
         else:
             items = self.ActionItems()
             await actions.extend(items)
-            actions.index = next(index for index, item in enumerate(items) if item.id == "screen-scrapers")
+            actions.index = next(index for index, item in enumerate(items) if item.id == previous)
         self.RefreshHeader()
         actions.refresh_bindings()
     # ─── State ────────────────────────────────────────────────────────
@@ -235,8 +247,10 @@ class HomeScreen(Screen):
         # A screen item (Config, Project Files) highlighted names itself, and dims the file pane it doesn't use (4.1)
         screenItem = self.ScreenItemHighlighted()
         label = ITEM_LABELS[screenItem].removesuffix(" ›") if screenItem else ACTION_LABELS[self.action]
-        if self.scrapers:
-            self.query_one("#actions-panel").border_title = f"Scrapers: {label}" if screenItem in SCRAPER_ITEMS else label
+        if self.submenu is not None:
+            # Builders: Single Point, or Input Builders while ‹ Actions is highlighted (#left shows 23 characters)
+            prefix, name, _ = SUBMENUS[self.submenu]
+            self.query_one("#actions-panel").border_title = name if screenItem == SUBMENU_BACK else f"{prefix}: {label}"
         else:
             self.query_one("#actions-panel").border_title = f"Actions: {label}"
         for pane in ("#files-pane", "#details"):
@@ -419,10 +433,13 @@ class HomeScreen(Screen):
 
     def OpenScreenItem(self, itemId: str) -> None:
         match itemId:
-            case "screen-scrapers":
-                self.call_later(self.ShowScrapers, True)
-            case "scrapers-back":
-                self.call_later(self.ShowScrapers, False)
+            case "screen-builders" | "screen-scrapers":
+                self.call_later(self.ShowSubmenu, itemId)
+            case "submenu-back":
+                self.call_later(self.ShowSubmenu, None)
+            case "builder-opt":
+                from .inputs import CoordinatesScreen
+                self.app.push_screen(CoordinatesScreen())
             case "scraper-si":
                 from .scrapers import SIScraperScreen
                 keep = set(self.query_one("#files", FileList).selected)

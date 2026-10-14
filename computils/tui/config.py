@@ -17,15 +17,15 @@ from textual.widgets import DataTable, Input, Label, ListItem, ListView, Static
 from ..actions  import SpinState
 from ..catalog  import MethodKey, ParseRouteTemplate, UnknownSelectors
 from ..defaults import DELETE, Defaults, tomlValue, writeToml
-from ..fileops  import (PROGRAMS, RESERVED_ORCA_BLOCKS, ExtractFromText, ExtractMixedBasis, ExtractOrcaBlocks,
-                        MixedBasis, extensionGetter)
+from ..fileops  import (PROGRAMS, RESERVED_ORCA_BLOCKS, ExtractFromText, ExtractMixedBasis, ExtractOptMethods,
+                        ExtractOrcaBlocks, MixedBasis, extensionGetter)
 from ..molecule import Molecule
 from ..project  import (PROJECT_CONFIG, PROJECT_FILES, FindProjectRoot, ProjectFilePath, ReloadConfig,
                         ResolveProjectFile, SaveProjectConfig)
 from ..spin     import ParseSpinOverrides
 from .common    import NAV_BINDINGS, EditableTable, FrameRule, KeyHint, NavFooter, Notice, Popup
 from .home      import TitleLine
-from .inspect   import PreviewRow, RenderedRow, RowText, Styled
+from .inspect   import PreviewRow, ProgramName, RenderedRow, RowText, Styled
 from .lists     import Cut, FitColumns, ListEditor, ProblemText, TextEditor
 
 # (label, file). The divider and Project Files sit below the TOML sections, as in Home's Actions list
@@ -45,7 +45,8 @@ METHOD_MAP = ("methodNames", "targetProgram")
 TYPE_NAMES = {int: "A Whole Number", float: "A Number", str: "Text", bool: "True or False", list: "A List"}
 FILE_NOTES = {
     "mixedbasis.txt": "Gen/GenECP basis sets and ECPs for mixed-basis Gaussian jobs.",
-    "orcablocks.txt": "ORCA %blocks, pulled into jobs by {tag} tokens in benchmarkMethods.",
+    "orcablocks.txt": "ORCA %blocks, pulled into jobs by {tag} tokens in benchmarkMethods and optmethods.txt.",
+    "optmethods.txt": "Tagged optimization routes (G16 and ORCA), listed by the Optimization builder.",
     "spinstates.txt": "Per-molecule CSS/OSS overrides for singlets (glob  css|oss).",
 }
 # The lower half of each project file's editor: the format, by example (lines fit its 33-column panel)
@@ -83,6 +84,24 @@ Basis groups end with ****.
 The first blank line starts the
 ECP section. Each job keeps only
 the elements it contains.""",
+    "optmethods.txt": """\
+# @tag intermediate
+M06/SDD opt freq
+
+# @tag min-oss
+M06/SDD opt [oss: guess=mix]
+
+# @tag ts
+M06/SDD opt=(ts,calcfc) freq
+
+# @tag ts-orca
+r2SCAN-3c OptTS Freq {tshess}
+
+One route per line, named by the
+# @tag line above it (else its
+method). Same syntax as
+benchmarkMethods: [spin groups],
+{orcablocks tags}.""",
     "spinstates.txt": """\
 Fe2S2_*     oss
 Cu2O2_bis   oss
@@ -120,6 +139,11 @@ STAND_INS = [("CSS", 1, SpinState.CSS), ("OSS", 1, SpinState.OSS), ("Doublet", 2
              ("Triplet", 3, SpinState.OPEN)]
 GLOBAL, PROJECT = 1, 2          # table columns (0 is the key)
 FILES = 3                       # pending project-file text: self.pending[FILES, file name]
+
+
+def TemplateTags(template) -> list[str]:
+    """The {tags} a route card uses, unconditional and in its spin groups."""
+    return template.tags + [tag for _, _, groupTags in template.groups for tag in groupTags]
 
 
 def Shown(value, masked: bool = False) -> str:
@@ -277,31 +301,55 @@ class ConfigScreen(Screen):
     def PendingTexts(self) -> dict[str, str]:
         return {name: text for (column, name), text in self.pending.items() if column == FILES}
 
-    def UsedTags(self) -> list[str]:
-        """Every {tag} the (unsaved) benchmark suites use, global and project."""
-        tags = []
-        for column in (GLOBAL, PROJECT):
-            entries = self.Value(column, "benchmarkMethods")
-            for entry in ([] if entries is DELETE else entries):
-                template = ParseRouteTemplate(entry)
-                for tag in template.tags + [tag for _, _, groupTags in template.groups for tag in groupTags]:
-                    if tag not in tags:
-                        tags.append(tag)
-        return tags
+    def UsedTags(self) -> dict[str, list[str]]:
+        """Every {tag} the (unsaved) route cards use: the benchmark suites, global and project, and optmethods.txt."""
+        routes = {"benchmarkMethods": [entry for column in (GLOBAL, PROJECT)
+                                       for entry in ([] if self.Value(column, "benchmarkMethods") is DELETE
+                                                     else self.Value(column, "benchmarkMethods"))],
+                  "optmethods.txt": list(ExtractFromText(self.Value(FILES, "optmethods.txt"), ExtractOptMethods,
+                                                         empty={}).values())}
+        used = {}
+        for source, entries in routes.items():
+            tags = used.setdefault(source, [])
+            for entry in entries:
+                tags += [tag for tag in TemplateTags(ParseRouteTemplate(entry)) if tag not in tags]
+        return used
 
     def FileSummary(self, name: str, text: str) -> tuple[str, Text]:
         """(a short summary for the table, the full summary pane) of a project file's text."""
         lines = []
         if name == "orcablocks.txt":
             blocks = ExtractFromText(text, ExtractOrcaBlocks, empty={})
-            used = self.UsedTags()
             lines.append(Text(f"Tags: {', '.join(blocks) or 'None'}"))
-            if used:
-                lines.append(Text("benchmarkMethods Uses:"))
-                lines += [Styled(f"  {tag} ✓", "good") if tag in blocks else Styled(f"  {tag} ✗ Missing", "error") for tag in used]
+            for source, used in self.UsedTags().items():
+                if used:
+                    lines.append(Text(f"{source} Uses:"))
+                    lines += [Styled(f"  {tag} ✓", "good") if tag in blocks else Styled(f"  {tag} ✗ Missing", "error")
+                              for tag in used]
             reserved = sorted({name.lower() for name in regex.findall(r"(?m)^%(\w+)", text)} & RESERVED_ORCA_BLOCKS)
             lines += [Styled(f"⚠ %{block} is written by CompUtils; ignored", "warning") for block in reserved]
             short = f"{len(blocks)} Tag{'s' if len(blocks) != 1 else ''}"
+        elif name == "optmethods.txt":
+            # Each tag's program from the unsaved method map; its {tags} against the unsaved orcablocks.txt
+            methods = ExtractFromText(text, ExtractOptMethods, empty={})
+            programOf = dict(zip(self.Value(GLOBAL, "methodNames"), self.Value(GLOBAL, "targetProgram")))
+            blocks = ExtractFromText(self.Value(FILES, "orcablocks.txt"), ExtractOrcaBlocks, empty={})
+            lines.append(Text("Methods:" if methods else "No Methods"))
+            problems = []
+            for tag, route in methods.items():
+                template = ParseRouteTemplate(route)
+                program = ProgramName(template.method, programOf)
+                lines.append(Text(f"  {tag} → {program or 'G16'}"))
+                problems += [f"✗ {tag}: Unknown Selector {selector}" for selector in UnknownSelectors(route)]
+                if not program:
+                    problems.append(f"⚠ {tag}: {template.method} Not in methodNames (Runs as G16)")
+                elif program == "ORCA":
+                    problems += [f"✗ {tag}: orcablocks.txt Has No {{{block}}}" for block in TemplateTags(template)
+                                 if block not in blocks]
+            lines += [Styled(problem, "error" if problem.startswith("✗") else "warning") for problem in problems]
+            short = f"{len(methods)} Method{'s' if len(methods) != 1 else ''}"
+            if problems:
+                short += f" · {len(problems)} Problem{'s' if len(problems) != 1 else ''}"
         elif name == "mixedbasis.txt":
             basis = ExtractFromText(text, ExtractMixedBasis, empty=MixedBasis([], []))
             elements = [element for entry in basis.basis for element in entry.elements]
@@ -495,8 +543,7 @@ class ConfigScreen(Screen):
         problems[:0] = [f"Unknown selector '{selector}' (that group is ignored)" for selector in UnknownSelectors(entry)]
         if template.method not in programOf:
             problems.insert(0, f"{template.method or 'The first token'} is not in methodNames: it would run as Gaussian16")
-        tags = template.tags + [tag for _, _, groupTags in template.groups for tag in groupTags]
-        if tags and extension != Defaults.orcaExtension:
+        if TemplateTags(template) and extension != Defaults.orcaExtension:
             problems.append(f"{{tags}} only apply to ORCA jobs; ignored for {template.method}")
         return Text("\n").join(lines + ([ProblemText([f"⚠ {problem}" for problem in problems])] if problems else []))
 
