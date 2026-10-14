@@ -27,11 +27,12 @@ ACTION_LABELS = {
 SCREEN_ITEMS = {"screen-scrapers": "Scrapers ›", "screen-stalker": "Job Stalker", "screen-config": "Config",
                 "screen-files": "Project Files", "screen-update": "Update CompUtils", "screen-attributions": "Attributions"}
 # Sub-menus swap the Actions list for their items, after a "‹ Actions" item (it, or esc, swaps back). Input Builders
-# (first in the list) holds two file actions and the Optimization builder; the scrapers read the whole CWD. Screen items
-# (the builder, the scrapers) dim the file pane, as the screens below the divider do
+# (first in the list) holds the Optimization builder, then two file actions, in the order a project runs them (opt, then
+# SP); the scrapers read the whole CWD. Screen items (the builder, the scrapers) dim the file pane, as the screens below
+# the divider do
 BUILDERS_ITEM = "screen-builders"
-BUILDER_ITEMS = {f"action-{Action.SINGLE_POINT.value}": ACTION_LABELS[Action.SINGLE_POINT],
-                 f"action-{Action.BENCHMARK.value}": ACTION_LABELS[Action.BENCHMARK], "builder-opt": "Optimization"}
+BUILDER_ITEMS = {"builder-opt": "Optimization", f"action-{Action.SINGLE_POINT.value}": ACTION_LABELS[Action.SINGLE_POINT],
+                 f"action-{Action.BENCHMARK.value}": ACTION_LABELS[Action.BENCHMARK]}
 SCRAPER_ITEMS = {"scraper-si": "SI Scraper"}
 # Sub-menu item id -> (pane title prefix, the title while ‹ Actions is highlighted, its items)
 SUBMENUS = {BUILDERS_ITEM: ("Builders", "Input Builders", BUILDER_ITEMS),

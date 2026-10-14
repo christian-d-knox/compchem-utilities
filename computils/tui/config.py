@@ -17,8 +17,8 @@ from textual.widgets import DataTable, Input, Label, ListItem, ListView, Static
 from ..actions  import SpinState
 from ..catalog  import MethodKey, ParseRouteTemplate, UnknownSelectors
 from ..defaults import DELETE, Defaults, tomlValue, writeToml
-from ..fileops  import (PROGRAMS, RESERVED_ORCA_BLOCKS, ExtractFromText, ExtractMixedBasis, ExtractOptMethods,
-                        ExtractOrcaBlocks, MixedBasis, extensionGetter)
+from ..fileops  import (PROGRAMS, RESERVED_ORCA_BLOCKS, TAG_DIRECTIVE, ExtractFromText, ExtractMixedBasis,
+                        ExtractOptMethods, ExtractOrcaBlocks, MixedBasis, extensionGetter)
 from ..molecule import Molecule
 from ..project  import (PROJECT_CONFIG, PROJECT_FILES, FindProjectRoot, ProjectFilePath, ReloadConfig,
                         ResolveProjectFile, SaveProjectConfig)
@@ -57,7 +57,7 @@ FILE_EXAMPLES = {
     SMDsolvent "water"
 end
 
-# @tag toluene
+# @toluene
 %cpcm
     smd true
     SMDsolvent "toluene"
@@ -66,9 +66,10 @@ end
 %tddft
     nroots 10
 end
-Tag: its %name, or the # @tag
-line above it. Use them in
-routes: {cpcm} {toluene} {tddft}""",
+Tag: its %name, or the # @NAME
+(or # @tag NAME) line above it.
+Use them in routes:
+{cpcm} {toluene} {tddft}""",
     "mixedbasis.txt": """\
 C H N O 0
 6-31G(d)
@@ -85,20 +86,20 @@ The first blank line starts the
 ECP section. Each job keeps only
 the elements it contains.""",
     "optmethods.txt": """\
-# @tag intermediate
+# @intermediate
 M06/SDD opt freq
 
-# @tag min-oss
+# @min-oss
 M06/SDD opt [oss: guess=mix]
 
-# @tag ts
+# @ts
 M06/SDD opt=(ts,calcfc) freq
 
-# @tag ts-orca
+# @ts-orca
 r2SCAN-3c OptTS Freq {tshess}
 
 One route per line, named by the
-# @tag line above it (else its
+# @NAME line above it (else its
 method). Same syntax as
 benchmarkMethods: [spin groups],
 {orcablocks tags}.""",
@@ -346,6 +347,10 @@ class ConfigScreen(Screen):
                 elif program == "ORCA":
                     problems += [f"✗ {tag}: orcablocks.txt Has No {{{block}}}" for block in TemplateTags(template)
                                  if block not in blocks]
+            # A name declared twice is numbered, not dropped (two untagged routes of one method are expected)
+            declared = [name.lower() for name in regex.findall(rf"(?m)^\s*{TAG_DIRECTIVE}", text)]
+            problems += [f"⚠ @{name} Names {declared.count(name)} Routes (Second Is {name}-2)"
+                         for name in dict.fromkeys(declared) if declared.count(name) > 1]
             lines += [Styled(problem, "error" if problem.startswith("✗") else "warning") for problem in problems]
             short = f"{len(methods)} Method{'s' if len(methods) != 1 else ''}"
             if problems:

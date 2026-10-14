@@ -31,10 +31,17 @@ from .inspect   import ElectronProblem, Formula, JobSummary, OutputExtensions, P
 LEFT_WIDTH = 30          # the settings column, its borders included (the frame's junction sits on its right edge)
 STATUS_STYLES = {"Normal": "good", "Error": "error", "Unknown": "warning", "Input": "info"}
 FILE_NAME = r"[\w.\-]"   # the characters a job name takes
+# A method's name in its row, beside "(•) " and its program: the settings column less the list's scrollbar
+METHOD_NAME_WIDTH = LEFT_WIDTH - 17
 
 
 def ProgramOf(extensionType: str) -> str:
     return "ORCA" if extensionType == Defaults.orcaExtension else "G16"
+
+
+def Clipped(text: str, width: int) -> str:
+    """text cut to width, ending in … when it was longer."""
+    return text if len(text) <= width else text[:max(width - 1, 0)] + "…"
 
 
 class LeaveText(TextArea):
@@ -54,9 +61,21 @@ def SourceSettings() -> list[Setting]:
     ]
 
 
+class SourceList(SettingsList):
+    """The Source choice: ␣ (or a click on its box) chooses a source and moves on to its files (or the paste box), as
+    choosing on Home moves on to the next pane; ←→ only switch it."""
+
+    def action_toggle(self) -> None:
+        chosen = self.current.available and self.current.setting.choice
+        super().action_toggle()
+        if chosen:
+            self.screen.EnterSource()
+
+
 class SourceFiles(OptionList):
-    # The highlighted file is the one read; ⏎ continues with it, as from every field
-    BINDINGS = [Binding("enter", "screen.continue", "Continue")]
+    # The highlighted file is the one read; ⏎ continues with it, as from every field, and ␣ (choosing it) does too
+    BINDINGS = [Binding("enter", "screen.continue", "Continue"),
+                Binding("space", "screen.continue", "Continue", show=False)]
 
 
 class CoordinatesScreen(Screen):
@@ -84,7 +103,7 @@ class CoordinatesScreen(Screen):
         yield FrameRule("┌┐", "Source", split=LEFT_WIDTH - 1, id="inputs-top")
         with Horizontal(id="inputs-body"):
             with VerticalScroll(id="inputs-left", classes="side"):
-                yield SettingsList(SourceSettings(), stacked=True, widest=LEFT_WIDTH - 5, id="settings")
+                yield SourceList(SourceSettings(), stacked=True, widest=LEFT_WIDTH - 5, id="settings")
                 yield Static(id="structure")
             with Vertical(id="inputs-right"):
                 yield SourceFiles(id="source-files")
@@ -134,7 +153,9 @@ class CoordinatesScreen(Screen):
             try:
                 if source == "xyz":
                     coordinates = ExtractFrom(path, ExtractXyz, empty=[])
-                    summary = Text(f"{len(coordinates)} Atoms   {Formula(coordinates)}" if coordinates else "No Coordinates")
+                    # The atom count in a fixed column, so the formulas line up
+                    summary = Text(f"{f'{len(coordinates)} Atoms':<11}{Formula(coordinates)}" if coordinates
+                                   else "No Coordinates")
                 else:
                     program, status = JobSummary(path)
                     summary = Text.assemble(f"{program or '—':<7}", Styled(status, STATUS_STYLES.get(status, "dim")))
@@ -236,18 +257,35 @@ class CoordinatesScreen(Screen):
 
     # ─── Actions ──────────────────────────────────────────────────────
 
+    def OnSource(self) -> bool:
+        return self.focused is not None and self.query_one("#settings", SourceList) in self.focused.ancestors_with_self
+
     def check_action(self, action: str, parameters) -> bool | None:
-        # ⏎ Continue shows dimmed until a structure has been read
-        return None if action == "continue" and not self.Ready() else True
+        # ⏎ Continue shows dimmed until a structure has been read, except on the Source, where it moves to the files
+        return None if action == "continue" and not (self.Ready() or self.OnSource()) else True
+
+    def EnterSource(self) -> None:
+        """Move on to the chosen source's files, or into the paste box."""
+        if self.source == "paste":
+            self.query_one("#paste", LeaveText).focus()
+        elif self.paths:
+            self.query_one("#source-files", SourceFiles).focus()
+        else:
+            self.app.bell()
 
     def action_continue(self) -> None:
+        # ⏎ moves forward: from the Source to its files (or the paste box), from a file to the Job. The paste box takes
+        # ⏎ as a newline, so once coordinates are pasted (esc out of it), ⏎ on the Source continues
+        if self.OnSource() and not (self.source == "paste" and self.Ready()):
+            self.EnterSource()
+            return
         if not self.Ready():
             self.app.bell()
             return
         self.app.push_screen(OptimizationScreen(self.molecule, self.reason, self.source == "prior"))
 
     def action_leave_text(self) -> None:
-        self.query_one("#settings", SettingsList).current.target.focus()
+        self.query_one("#settings", SourceList).current.target.focus()
 
     def action_back(self) -> None:
         self.dismiss(None)
@@ -256,10 +294,12 @@ class CoordinatesScreen(Screen):
         Notice(self.app, "Help", "\n".join([
             "tab / shift+tab Move Between the Source and the Files (or the Paste Box)",
             "↑/↓ Move Between Sources or Files (the Highlighted File Is Read)",
-            "←/→ or space Choose the Source",
+            "←/→ Switch the Source",
+            "space / enter on a Source: Choose It and Go to Its Files (or the Paste Box)",
+            "space / enter on a File: Continue to the Job Settings With It",
             "Paste: Rows of Symbol x y z (Count and Comment Lines Optional; the Last Block Is Used)",
-            "esc in the Paste Box Return to the Source",
-            "enter Continue to the Job Settings", "esc Back to Home", "ctrl+q Quit"]))
+            "esc in the Paste Box Return to the Source, Where enter Continues",
+            "esc Back to Home", "ctrl+q Quit"]))
 
 
 # ─── Step 2: the Job ──────────────────────────────────────────────────
@@ -296,17 +336,20 @@ class OptimizationScreen(Screen):
             self.molecule.spinState, reason = override[0], f"spinstates.txt: {override[1]}"
         decided = reason and not reason.startswith("Multiplicity") and str(molecule.multiplicity or 1) == "1"
         self.spinNote = f"({reason})" if decided else ""
-        # The method choices: setting key -> (label, template, input extension), or the reason a template can't be made
-        self.methods: dict[str, tuple[str, RouteTemplate | None, str]] = {}
+        # The method choices: setting key -> (label, template, input extension, its route as written: what the Route
+        # row shows and a Custom route starts from); a None template can't be made (fromProblem says why)
+        self.methods: dict[str, tuple[str, RouteTemplate | None, str, str]] = {}
         self.fromProblem = ""
         if prior:
             template, self.fromProblem = ReRunTemplate(self.molecule)
             # ReRunTemplate sets the program the job ran in, which a verbatim route's first token may not name
-            self.methods["method-from"] = ("From Source", template, self.molecule.extensionType)
+            self.methods["method-from"] = ("From Source", template, self.molecule.extensionType,
+                                           self.molecule.sourceRoute)
         self.optMethods = OptMethods()
         for index, (tag, route) in enumerate(self.optMethods.items()):
             template = ParseRouteTemplate(route)
-            self.methods[f"method-{index}"] = (tag, template, extensionGetter(template.method))
+            self.methods[f"method-{index}"] = (tag, template, extensionGetter(template.method), route)
+        self.customRoute = ""        # the Custom route as last typed (the Route row shows the chosen method's otherwise)
         self.generated = ""          # the preview as last generated: the preview is edited when its text differs
         self.memoryDefault = ""      # the Memory value last pre-filled: replaced when the method changes it
         self.ready = False
@@ -315,19 +358,23 @@ class OptimizationScreen(Screen):
     def JobSettings(self) -> list[Setting]:
         molecule = self.molecule
         oss = molecule.spinState == SpinState.OSS
-        # The programs line up
-        width = max((len(label) for label, _, _ in self.methods.values()), default=0)
-        methods = [Setting(key, "", fixed=f"{label.ljust(width)}  {ProgramOf(extension)}", on=False, choice="method",
+        # The programs line up in their own column, which a long name never pushes off: names are cut (…) to the room
+        # left beside "(•) " and the program, with the list's scrollbar showing
+        width = min(max((len(label) for label, *_ in self.methods.values()), default=0), METHOD_NAME_WIDTH)
+        methods = [Setting(key, "", self.RouteMeaning(route), on=False, choice="method",
+                           fixed=f"{Clipped(label, width).ljust(width)}  {ProgramOf(extension)}",
                            available=template is not None)
-                   for key, (label, template, extension) in self.methods.items()]
+                   for key, (label, template, extension, route) in self.methods.items()]
         methods.append(Setting("custom", "", "" if self.optMethods else "No optmethods.txt: Add One in Project Files",
                                fixed="Custom", on=False, choice="method"))
         # The first usable method starts chosen: a prior job's own route, else the first tag, else Custom
-        next(setting for setting in methods if setting.available).on = True
+        chosen = next(setting for setting in methods if setting.available)
+        chosen.on = True
         methods[0].label = "Method"
-        # A prior job's route: the file it is from, or why it can't be used
+        # A prior job's route: why it can't be used, else (without routes listed) the file it is from
         if self.prior:
-            methods[0].meaning = self.fromProblem or self.source.name
+            methods[0].meaning = self.fromProblem or methods[0].meaning or self.source.name
+        route = self.methods[chosen.key][3] if chosen.key in self.methods else ""
         return [
             Setting("name", "Name", value=molecule.rootName, accepts=FILE_NAME),
             Setting("charge", "Charge", value=str(molecule.charge or 0), accepts=r"[\d-]"),
@@ -335,12 +382,18 @@ class OptimizationScreen(Screen):
             Setting("css", "Spin", fixed="CSS", on=not oss, choice="spin"),
             Setting("oss", "", fixed="OSS", on=oss, choice="spin"),
             *methods,
-            # A prior job's route starts here too, so a small change to it is one edit
-            Setting("route", "  └ Route", value=molecule.sourceRoute if self.prior else "", accepts=TEXT, under="custom"),
+            # The chosen method's route, so a small change to it is one edit (typing here chooses Custom)
+            Setting("route", "  └ Route", value=route, accepts=TEXT, under="custom"),
             Setting("cpus", "CPUs", value=str(Defaults.CPU), accepts=r"\d"),
             Setting("memory", "Memory per Core", value="", unit="GB", accepts=NUMBER),
             Setting("checkpoint", "Checkpoint", on=False),
         ]
+
+    @staticmethod
+    def RouteMeaning(route: str) -> Text | str:
+        # What a method runs, under its name (qol.toml: routeUnderEachMethod; in full, wrapped by the -route CSS).
+        # Text: a str "[oss: guess=mix]" would be read as markup
+        return Text(route) if Defaults.routeUnderEachMethod and route else ""
 
     def compose(self) -> ComposeResult:
         atoms = len(self.molecule.coordinateList)
@@ -357,6 +410,8 @@ class OptimizationScreen(Screen):
         yield NavFooter()
 
     def on_mount(self) -> None:
+        for key in self.methods:
+            self.settings.Row(key).add_class("-route")
         self.Refresh()
 
     @property
@@ -377,7 +432,7 @@ class OptimizationScreen(Screen):
         """(template, input extension, why there is none) for the chosen method."""
         chosen = self.settings.Chosen("method")
         if chosen != "custom":
-            _, template, extension = self.methods[chosen]
+            _, template, extension, _ = self.methods[chosen]
             return template, extension, ""
         route = self.settings.Row("route").value.strip()
         if not route:
@@ -479,10 +534,26 @@ class OptimizationScreen(Screen):
     # ─── Events ───────────────────────────────────────────────────────
 
     def on_input_changed(self, event) -> None:
+        # The Custom route as typed, restored whenever Custom is chosen again
+        row = getattr(event.input, "row", None)
+        if row is not None and row.setting.key == "route" and row.typing:
+            self.customRoute = event.value
         self.Refresh()
 
     def on_settings_list_changed(self, event: SettingsList.Changed) -> None:
+        self.ShowRoute()
         self.Refresh()
+
+    def ShowRoute(self) -> None:
+        """The Route row follows the chosen method: its route as written, or Custom's as last typed (else the route
+        shown when Custom was chosen, so Custom starts from it). Never while it is being typed in."""
+        row = self.settings.Row("route")
+        if row.target.has_focus:
+            return
+        chosen = self.settings.Chosen("method")
+        route = (self.customRoute or row.value) if chosen == "custom" else self.methods[chosen][3]
+        if row.value != route:
+            row.SetValue(route)
 
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         # Typing in the preview (or regenerating it) changes whether it is edited
@@ -542,7 +613,8 @@ class OptimizationScreen(Screen):
             "tab / shift+tab Move Between the Settings and the Input",
             "↑/↓ Move Between Settings (Type to Change a Value)",
             "←/→ or space Choose the Spin or the Method",
-            "Method: a Prior Job's Own Route, the Tags in optmethods.txt, or a Custom Route",
+            "Method: a Prior Job's Own Route, the Routes in optmethods.txt, or a Custom Route",
+            "Route Shows the Chosen Method's Route; Typing in It Makes a Custom Route From It",
             "The Input Follows the Settings Until You Type in It; ctrl+r Regenerates It",
             "esc in the Input Return to the Settings",
             "enter Save the Input and Submit It", "esc Back to the Coordinates", "ctrl+q Quit"]))
