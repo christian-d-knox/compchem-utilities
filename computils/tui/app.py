@@ -115,8 +115,9 @@ class CompUtilsApp(App):
     #source-files, #source-files:focus { height: 1fr; border: none; }
     /* :focus too, or TextArea's own focus border (more specific) comes back */
     #paste, #paste:focus, #input-preview, #input-preview:focus { height: 1fr; border: none; padding: 0 1; }
-    /* A prior job's file name, under its From Source row: one line, cut with … */
-    #setting-method-from .setting-meaning { text-wrap: nowrap; text-overflow: ellipsis; }
+    /* The Optimization builder's method rows: each route in full, wrapped (a cut line can hide the one difference
+       between two routes, e.g. a trailing [oss: guess=mix]); a long keyword folds onto the next line */
+    .setting.-route .setting-meaning { text-overflow: fold; }
 
     /* The config editor: the table takes the height the details strip leaves */
     #config-table { height: 1fr; }

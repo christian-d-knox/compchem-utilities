@@ -544,8 +544,9 @@ def HasRestrictedInstability(data) -> bool:
 
 # CompUtils writes these itself in genFile(), so user copies would conflict
 RESERVED_ORCA_BLOCKS = {"pal", "maxcore"}
-# '# @tag NAME' names what follows it in a project file: an orcablocks.txt block, an optmethods.txt route
-TAG_DIRECTIVE = r"#\s*@tag\s+([\w-]+)"
+# '# @NAME' (or '# @tag NAME') names what follows it in a project file: an orcablocks.txt block, an optmethods.txt route.
+# 'tag' needs whitespace after it to be the keyword, so '# @tagged' names 'tagged'
+TAG_DIRECTIVE = r"#\s*@(?:tag\s+)?([\w-]+)"
 
 def OrcaBlockName(blockText: str) -> str:
     """'%cpcm\\n  smd true\\nend\\n' -> 'cpcm'."""
@@ -591,8 +592,9 @@ def ExtractOrcaBlocks(data) -> dict[str, str]:
 
 def ExtractOptMethods(data) -> dict[str, str]:
     """Tagged routes from an optmethods.txt mmap data stream: tag -> route line, in file order. A route is a line that is
-    neither blank nor a # comment; its tag is the '# @tag NAME' directive above it, else its method (the first token
-    without Gaussian's /basis). Tags are lowercased; a duplicate keeps the first."""
+    neither blank nor a # comment; its tag is the '# @NAME' directive above it, else its method (the first token
+    without Gaussian's /basis). Tags are lowercased. No route is dropped: a repeated tag is numbered (ts, ts-2, ...), as
+    two untagged routes of one method are."""
     methods: dict[str, str] = {}
     pendingTag = ""
     data.seek(0)
@@ -605,10 +607,10 @@ def ExtractOptMethods(data) -> dict[str, str]:
         if not line or line.startswith("#"):
             continue
         tag, pendingTag = pendingTag or line.split()[0].split("/")[0].lower(), ""
-        if tag in methods:
-            console.print(f"[error]Duplicate tag '{tag}' in optmethods.txt. Keeping the first definition.[/error]")
-            continue
-        methods[tag] = line
+        name, number = tag, 2
+        while name in methods:
+            name, number = f"{tag}-{number}", number + 1
+        methods[name] = line
     return methods
 
 # Blocks an ORCA re-run never carries over: genFile writes %pal/%maxcore, and the new geometry comes from the output

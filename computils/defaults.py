@@ -157,6 +157,8 @@ class Defaults:
     needsFirstTimeSetup = False
     colorMode = ""
     bareCommandOpensTUI = True
+    # The Optimization builder's method list: each method's route under it (else only the chosen one's, in its Route row)
+    routeUnderEachMethod = True
 
     # What files contain what keys
     _FILE_GROUPS: dict[str, list[str]] = {
@@ -190,7 +192,7 @@ class Defaults:
             "broadcastThreshold",
         ],
         "qol.toml": [
-            "colorMode", "bareCommandOpensTUI", "trackedJobHours",
+            "colorMode", "bareCommandOpensTUI", "trackedJobHours", "routeUnderEachMethod",
         ]
     }
 
@@ -268,6 +270,8 @@ class Defaults:
         "colorMode": "Determined the level of color accuracy used in terminal output.",
         "bareCommandOpensTUI": "Set to true to open the TUI when `cu` is run with no arguments. `cu -tui` always opens it.",
         "trackedJobHours": "Hours an ended job stays in the Job Stalker (and bare `cu -st`) before it is dropped.",
+        "routeUnderEachMethod": "Set to true to show each method's route under it in the Optimization builder; false shows"
+            " only the chosen method's route, in its Route row.",
     }
 
     # Expected Python type for each config key, used by _CoerceValue to validate values loaded from user-editable TOML.
