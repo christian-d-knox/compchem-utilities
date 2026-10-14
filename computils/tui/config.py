@@ -178,14 +178,6 @@ def TemplateTags(template) -> list[str]:
     return template.tags + [tag for _, _, groupTags in template.groups for tag in groupTags]
 
 
-def ShortPath(path: Path) -> str:
-    """A path for a table cell: the home folder as ~."""
-    try:
-        return "~/" + path.relative_to(Path.home()).as_posix()
-    except ValueError:
-        return path.as_posix()
-
-
 def Shown(value, masked: bool = False) -> str:
     if value is DELETE:
         return "—"
@@ -415,16 +407,12 @@ class ConfigScreen(Screen):
         source = KeylistSource(name, self.PendingTexts())
         return source[0].label if source is not None else ""
 
-    def Location(self, label: str, name: str) -> str:
-        """Where a level's section is (or would be) written: its jobRelatedKeylists, or the old file standing in."""
-        level = self.Level(label)
-        if not self.InFile(label, name):
-            found = LevelSections(level).get(name)
-            if found is not None:
-                return f"{found[1].name} (Old)"
-            if not level.path.is_file():
-                return "—"
-        return ShortPath(level.path.parent)
+    def OldFile(self, label: str, name: str) -> Path | None:
+        """The old file (or TOML key's file) standing in for a level's section until `cu -refresh` merges it."""
+        if self.InFile(label, name) or (SECTION_TEXT, (label, name)) in self.pending:
+            return None
+        found = LevelSections(self.Level(label)).get(name)
+        return found[1] if found is not None else None
 
     def UsedTags(self) -> dict[str, list[str]]:
         """Every {tag} the method sections in force use (with the unsaved edits), by section."""
@@ -582,15 +570,14 @@ class ConfigScreen(Screen):
             # One section: a row per level, • on the one in force
             name = kind[len(KEYLIST):]
             self.keys = [level.label for level in self.levels]
-            self.valueWidth = FitColumns(table, ["Level", "Location", "Summary"], 9)
+            self.valueWidth = FitColumns(table, ["Level", "Summary"], 9)
             inForce = self.InForce(name)
             for level in self.levels:
                 body = self.Value(SECTION_TEXT, (level.label, name))
                 edited = "[Edited] " if (SECTION_TEXT, (level.label, name)) in self.pending else ""
                 table.add_row(Text(level.label + (" •" if level.label == inForce else "")),
-                              Text(Cut(self.Location(level.label, name), self.valueWidth),
-                                   "dim" if body is None or body is DELETE else ""),
-                              Text(Cut(edited + self.SectionSummary(name, body)[0], self.valueWidth)))
+                              Text(Cut(edited + self.SectionSummary(name, body)[0], self.valueWidth),
+                                   "dim" if body is None or body is DELETE else ""))
         elif kind == FILES_SECTION:
             self.keys = list(FILE_KEYS)
             self.valueWidth = FitColumns(table, ["File", "Location", "Summary"], max(map(len, self.keys)))
@@ -629,8 +616,7 @@ class ConfigScreen(Screen):
             name = current[1]
             inForce = self.InForce(name)
             lines = [Text(Cut(FILE_NOTES[name], width)),
-                     Text(Cut(f"In Force: {inForce or 'No Level Has It'}" +
-                              (f" ({ShortPath(self.Level(inForce).path)})" if inForce else ""), width)),
+                     Text(Cut(f"In Force: {inForce or 'No Level Has It'}", width)),
                      Styled("␣ Open the Section (Each Level's Copy)", "info")]
             details.update(Text("\n").join(lines))
             self.query_one("#config-rule", FrameRule).label = name
@@ -640,9 +626,12 @@ class ConfigScreen(Screen):
             text = self.PendingTexts().get(level.path) or (level.path.read_text(encoding="utf-8")
                                                            if level.path.is_file() else "")
             remove = "r Drop Unsaved Edits" if label == "Global" else "r Remove (Follow Global)"
+            old = self.OldFile(label, name)
+            if old is not None:
+                old = f"{'Old Key in' if old.suffix == '.toml' else 'Old'} {old.name}: cu -refresh Merges It"
+            problems = FileProblems(text) + ([old] if old else [])
             lines = [Text(Cut(FILE_NOTES[name], width)),
-                     Text(Cut(f"Path: {ShortPath(level.path)}", width)),
-                     *[Styled(Cut(f"⚠ {problem}", width), "warning") for problem in FileProblems(text)],
+                     *[Styled(Cut(f"⚠ {problem}", width), "warning") for problem in problems],
                      Styled(f"␣ Edit · {remove}", "info")]
             details.update(Text("\n").join(lines))
             self.query_one("#config-rule", FrameRule).label = f"{name} · {label}"
