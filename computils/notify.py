@@ -64,11 +64,14 @@ def _DetectTelegramChatID(botToken: str, timeoutSeconds: int = 60) -> str | None
     return None
 
 
-def NotifyPersonal(message: str) -> None:
+# False only when a message was sent and didn't arrive (e.g. no route to Telegram from a compute node): with
+# notifications off there is nothing left to send, so a caller that would retry the message doesn't
+def NotifyPersonal(message: str) -> bool:
     if not Defaults.isNotifications:
-        return
+        return True
     if Defaults.botToken and Defaults.chatID:
-        _SendTelegram(Defaults.botToken, Defaults.chatID, message)
+        return _SendTelegram(Defaults.botToken, Defaults.chatID, message)
+    return True
 
 
 def NotifyBroadcast(message: str) -> None:

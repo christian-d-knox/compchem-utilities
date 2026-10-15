@@ -14,7 +14,7 @@ from ..catalog  import Catalog, RouteTemplate
 from ..defaults import Defaults
 from ..fileops  import (MapFile, FindInMap, HasContent, ExtractFrom, ExtractTermination, ExtractResources, IdentifyMethod,
                         InputRoutes, JobChecks, SplitRoute, MoleculeElements, extensionGetter, ReadMolecule,
-                        ReRunTemplate, OrcaBlockName, ExtractProgram, ATOMIC_SYMBOLS, PROGRAMS)
+                        ReRunTemplate, OrcaBlockName, ExtractProgram, ATOMIC_SYMBOLS, PROGRAMS, TERMINATION_TAIL)
 from ..jobs     import RenderStages, StagesProblem
 from ..molecule import Molecule
 from ..spin     import ClassifySpin
@@ -38,10 +38,6 @@ def ActionExtensions(action: Action) -> tuple[str, ...]:
         case Action.GOODVIBES:  return (Defaults.outputExtension,)
         case _:                 return OutputExtensions()
 
-
-# The termination line is the last thing G16 and ORCA write (G16's archive entry, quote and timings come before it),
-# so only the end of the file is searched. A file without one in its tail is running or was killed
-TERMINATION_TAIL = 64 * 1024
 
 
 def _Termination(path: Path) -> str:

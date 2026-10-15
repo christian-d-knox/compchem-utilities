@@ -157,6 +157,8 @@ class Defaults:
     bareCommandOpensTUI = True
     # The Optimization builder's method list: each method's route under it (else only the chosen one's, in its Route row)
     routeUnderEachMethod = True
+    # The Optimization builder's Neva-Touch Scheduler row starts on (its SP is submitted when the opt ends normally)
+    autoNTS = False
 
     # What files contain what keys
     _FILE_GROUPS: dict[str, list[str]] = {
@@ -189,7 +191,7 @@ class Defaults:
             "broadcastThreshold",
         ],
         "qol.toml": [
-            "colorMode", "bareCommandOpensTUI", "trackedJobHours", "routeUnderEachMethod",
+            "colorMode", "bareCommandOpensTUI", "trackedJobHours", "routeUnderEachMethod", "autoNTS",
         ]
     }
 
@@ -264,6 +266,8 @@ class Defaults:
         "trackedJobHours": "Hours an ended job stays in the Job Stalker (and bare `cu -st`) before it is dropped.",
         "routeUnderEachMethod": "Set to true to show each method's route under it in the Optimization builder; false shows"
             " only the chosen method's route, in its Route row.",
+        "autoNTS": "Set to true to start the Optimization builder with the Neva-Touch Scheduler on: when the optimization"
+            " ends normally, its single point (Benchmark Methods entry 0) is submitted automatically.",
     }
 
     # Expected Python type for each config key, used by _CoerceValue to validate values loaded from user-editable TOML.

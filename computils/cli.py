@@ -13,6 +13,7 @@ ACTION_FLAGS = {
     "rerun": Action.RERUN, "formcheck": Action.FORM_CHECK, "excel": Action.EXCEL, "goodvibes": Action.GOODVIBES,
     "first": Action.FIRST_TIME_SETUP, "update": Action.UPDATE, "init": Action.INIT_PROJECT,
     "profile": Action.PROFILE, "refresh": Action.REFRESH, "attributions": Action.ATTRIBUTIONS,
+    "neva_touch": Action.NEVA_TOUCH,
 }
 
 
@@ -44,6 +45,8 @@ def BuildParser() -> argparse.ArgumentParser:
                              help="Show the license, disclaimer and credits: every program, library, method and service CompUtils relies on, with licenses and citations.")
     # Handled in Main() before parsing; listed here for --help and so argparse rejects it alongside another action
     actionGroup.add_argument('-tui', '--tui', action='store_true', help="Open the TUI. Cannot be combined with any other flag.")
+    # The Neva-Touch Scheduler's hook (nevatouch.HookCommand writes it into job scripts): never typed, so not listed
+    actionGroup.add_argument('--neva-touch', nargs=3, metavar=("STEP", "FILE", "JOBID"), help=argparse.SUPPRESS)
 
     # Modifiers (apply to whichever action was chosen, where relevant)
     parser.add_argument('-st', '--stalk', action='store_true',
@@ -51,6 +54,9 @@ def BuildParser() -> argparse.ArgumentParser:
     parser.add_argument('-ch', '--checkpoint', action='store_true', help="Enable Gaussian checkpoint files.")
     parser.add_argument('-nbo', '--nbo7', action='store_true', help="Enable NBO7 keylist.")
     parser.add_argument('-ovr', '--override', type=int, default=0, help="Index override for benchmark methods (zero-indexed).")
+    # The resources of the job the Neva-Touch Scheduler's hook generates (written into the hook; not listed)
+    parser.add_argument('--cpus', type=int, default=None, help=argparse.SUPPRESS)
+    parser.add_argument('--memory', type=float, default=None, help=argparse.SUPPRESS)
     parser.add_argument('--update-branch', type=str, default=None, help="With --update, install from this branch (default: the one CompUtils was installed from, else dev).")
 
     return parser
@@ -90,6 +96,10 @@ def ParseCLI(argv: list[str]) -> Intent:
         draft.profileFile = Path(args.profile).expanduser()
     if args.refresh is not None:
         draft.refreshScope = args.refresh
+    if args.neva_touch:
+        draft.nevaTouchStep, output, draft.nevaTouchJob = args.neva_touch
+        draft.files = [Path(output)]
+        draft.cpus, draft.memoryRatio = args.cpus, args.memory
 
     # Modifiers
     draft.stalk         = args.stalk

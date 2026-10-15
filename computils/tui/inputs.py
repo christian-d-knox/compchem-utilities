@@ -15,8 +15,8 @@ from textual.widgets import OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 from textual.worker import get_current_worker
 
-from ..actions  import Action, SpinState
-from ..catalog  import STAGE_JOIN, ParseRouteTemplate, RenderRoute, RouteTemplate, UnknownSelectors
+from ..actions  import Action, SpinState, NTS_SP
+from ..catalog  import STAGE_JOIN, Catalog, ParseRouteTemplate, RenderRoute, RouteTemplate, UnknownSelectors
 from ..defaults import Defaults
 from ..fileops  import (ExtractFrom, ExtractFromText, ExtractXyz, MoleculeElements, ReRunTemplate, Retarget,
                         StageProblem, extensionGetter, fileCreation)
@@ -427,7 +427,25 @@ class OptimizationScreen(Screen):
             Setting("cpus", "CPUs", value=str(Defaults.CPU), accepts=r"\d"),
             Setting("memory", "Memory per Core", value="", unit="GB", accepts=NUMBER),
             Setting("checkpoint", "Checkpoint", on=False),
+            # The Neva-Touch Scheduler: the SP it submits once the opt ends normally, with its own resources (the
+            # config's to start with; a big system's are typed here, and carried in the job's hook)
+            *self.SchedulerSettings(),
         ]
+
+    def SchedulerSettings(self) -> list[Setting]:
+        if not Catalog.templates:
+            return [Setting("nts", "Neva-Touch Scheduler", "No Benchmark Methods: Add Them in Config › Job Keylists",
+                            on=False, available=False),
+                    Setting("nts-cpus", "  └ SP CPUs", value="", accepts=r"\d", under="nts"),
+                    Setting("nts-memory", "  └ SP Memory per Core", value="", unit="GB", accepts=NUMBER, under="nts")]
+        template = Catalog.templates[0]
+        extension = extensionGetter(template.method)
+        # Text: a str "[oss: guess=mix]" would be read as markup. Refresh adds the SP's problem under it
+        self.ntsMeaning = Text(f"Then SP: {Catalog.benchmarkLines[0]} · {ProgramOf(extension)}")
+        return [Setting("nts", "Neva-Touch Scheduler", self.ntsMeaning, on=Defaults.autoNTS),
+                Setting("nts-cpus", "  └ SP CPUs", value=str(Defaults.CPU), accepts=r"\d", under="nts"),
+                Setting("nts-memory", "  └ SP Memory per Core", value=f"{DefaultMemoryRatio(template.base, extension):g}",
+                        unit="GB", accepts=NUMBER, under="nts")]
 
     @staticmethod
     def RouteMeaning(route: str) -> Text | str:
@@ -519,6 +537,8 @@ class OptimizationScreen(Screen):
             electrons = ElectronProblem(molecule.coordinateList, charge, multiplicity)
             if electrons:
                 errors.append(electrons)
+        if self.scheduled and self.SinglePointResources() is None:
+            errors.append("SP CPUs and Memory Must Be Numbers Above 0")
         fileProblem, warnings = "", []
         if template is not None:
             self.ShowStages(template, extension)
@@ -540,6 +560,14 @@ class OptimizationScreen(Screen):
                 errors.append("Memory Must Be a Number Above 0")
             # The same check genFile skips jobs with: every stage's route, its project files, and the stages themselves
             fileProblem = StagesProblem(template, molecule, MoleculeElements(molecule.coordinateList))
+            # ...and for the SP the Neva-Touch Scheduler will submit, so a missing basis shows now, not at 2 a.m.: in
+            # full under its row, and short on the bottom edge (a warning: the SP is written when the opt ends)
+            if Catalog.templates:
+                spProblem = self.SinglePointProblem(name or "untitled") if self.scheduled else ""
+                settings.Row("nts").SetMeaning(Text.assemble(self.ntsMeaning, "\n", Styled(f"⚠ {spProblem}", "warning"))
+                                               if spProblem else self.ntsMeaning)
+                if spProblem:
+                    warnings.append("Scheduled SP Problem")
             self.path = Path.cwd() / fileCreation(name, extension) if name else None
             # The preview needs only what goes into it: a name only names the file (and %chk)
             if charge is not None and cpus >= 1 and memory is not None and not self.edited:
@@ -557,6 +585,30 @@ class OptimizationScreen(Screen):
         self.query_one("#submit", FrameRule).right = (Styled(errors[0] + more, "error") if errors else Text.assemble(
             ready, " · ", KeyHint(self.app, "⏎", "Save and Submit")))
         self.refresh_bindings()
+
+    # ─── The Neva-Touch Scheduler ─────────────────────────────────────
+
+    @property
+    def scheduled(self) -> bool:
+        """Whether the Neva-Touch Scheduler submits this opt's SP."""
+        return self.settings.Applies(self.settings.Row("nts"))
+
+    def SinglePointResources(self) -> tuple[int, float] | None:
+        """The SP's (CPUs, memory per core), or None unless both are numbers above 0."""
+        try:
+            cpus = int(self.settings.Row("nts-cpus").value)
+            memory = float(self.settings.Row("nts-memory").value)
+        except ValueError:
+            return None
+        return (cpus, memory) if cpus >= 1 and memory > 0 else None
+
+    def SinglePointProblem(self, name: str) -> str:
+        """Why the SP would be skipped for this molecule ('' if it can be written): genFile's check, on a copy pointed at
+        the SP (Benchmark Methods' first entry), as `cu -sp` would point it."""
+        template = Catalog.templates[0]
+        spMolecule = copy.copy(self.molecule)
+        Retarget(spMolecule, name + Defaults.singlePointExtra, template)
+        return StagesProblem(template, spMolecule, MoleculeElements(spMolecule.coordinateList))
 
     def FillMemory(self, default: str) -> None:
         # Pre-filled per method (ORCA's DLPNO takes highMemoryRatio); a typed value is kept
@@ -707,6 +759,10 @@ class OptimizationScreen(Screen):
         with open(path, "w") as jobInput:
             jobInput.write(self.preview.text)
         draft = IntentDraft(action=Action.RUN, files=[Path(path.name)])
+        # The Neva-Touch Scheduler: the job's hook submits the SP, with these resources, once the opt ends normally
+        if self.scheduled:
+            draft.nevaTouch = NTS_SP
+            draft.nextCpus, draft.nextMemoryRatio = self.SinglePointResources()
         self.app.Submit(draft.Finalize(), 1)
 
     def action_leave_text(self) -> None:
@@ -724,6 +780,8 @@ class OptimizationScreen(Screen):
             "Route Shows the Chosen Method's Route; Typing in It Makes a Custom Route From It",
             "Stages: 'route -> route' (Gaussian --Link1--); Later Stages Read the Checkpoint (Geom=AllCheck, Guess=Read)",
             "space on a Stage's ModRed Input Edits Its Lines (Written After That Stage's Geometry)",
+            "Neva-Touch Scheduler: Once the Optimization Ends Normally, Its SP (the First Benchmark Method) Is Submitted "
+            "With the SP CPUs and Memory Below It (Default: qol.toml autoNTS)",
             "The Input Follows the Settings Until You Type in It; ctrl+r Regenerates It",
             "esc in the Input Return to the Settings",
             "enter Save the Input and Submit It", "esc Back to the Coordinates", "ctrl+q Quit"]))
