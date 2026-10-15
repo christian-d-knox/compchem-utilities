@@ -57,6 +57,9 @@ def BuildParser() -> argparse.ArgumentParser:
     # The resources of the job the Neva-Touch Scheduler's hook generates (written into the hook; not listed)
     parser.add_argument('--cpus', type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument('--memory', type=float, default=None, help=argparse.SUPPRESS)
+    # A Neva-Touch Scheduler re-run's count and the original stage it starts at (written into its hook; not listed)
+    parser.add_argument('--reruns', type=int, default=0, help=argparse.SUPPRESS)
+    parser.add_argument('--first-stage', type=int, default=1, help=argparse.SUPPRESS)
     parser.add_argument('--update-branch', type=str, default=None, help="With --update, install from this branch (default: the one CompUtils was installed from, else dev).")
 
     return parser
@@ -100,6 +103,7 @@ def ParseCLI(argv: list[str]) -> Intent:
         draft.nevaTouchStep, output, draft.nevaTouchJob = args.neva_touch
         draft.files = [Path(output)]
         draft.cpus, draft.memoryRatio = args.cpus, args.memory
+        draft.reRuns, draft.firstStage = args.reruns, args.first_stage
 
     # Modifiers
     draft.stalk         = args.stalk

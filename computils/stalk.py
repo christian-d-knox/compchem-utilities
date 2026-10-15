@@ -5,7 +5,7 @@ prints the lines, the TUI shows them.
 Outputs are read the bookmarked way: a termination line is a bookmark. Reporting data is always the LAST instance, so
 it is searched backwards from EOF and never further back than the latest bookmark; reading forward only happens at a
 step's start, to learn what that step reports (its route)."""
-import json, os, subprocess, time
+import copy, json, os, subprocess, time
 from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict, fields
 from pathlib import Path
@@ -15,7 +15,8 @@ from .console  import console
 from .defaults import Defaults, BackUpFile
 from .notify   import NotifyPersonal
 from .fileops  import (MapFile, HasContent, FindTermination, TerminationVariant, IsInternalStep, ExtractStability,
-                       ExtractConvergence, ExtractRouteEcho, ExtractOrcaInput, OrcaRouteLine, JobChecks)
+                       ExtractConvergence, ExtractOutOfSteps, ExtractRouteEcho, ExtractOrcaInput, OrcaRouteLine,
+                       JobChecks)
 
 TRACKED_FILE = "tracked-jobs.json"
 # JOBID|JOBNAME|STATE|START_TIME|CURRENT_DURATION for each of the user's jobs. '|'-separated and unpadded, so long job
@@ -31,6 +32,8 @@ AWAITING, IN_PROGRESS, COMPLETE, ERROR, STOPPED, NOT_REACHED = (
 AWAITING_PING, ENDED = "AWAITING PING", "ENDED"
 # What a job's Neva-Touch Scheduler step did (nevatouch.RunStep), and who took it
 SUBMITTED, FAILED, STOPPED, CHAIN_COMPLETE = "Submitted", "Couldn't Submit", "Stopped", "Chain Complete"
+# ...and for an opt that ran out of optimizer steps: re-run from its last geometry, or stopped after ntsReRunLimit
+RERUN, GAVE_UP = "Re-ran", "Out of Re-runs"
 BY_HOOK, BY_STALKER = "hook", "stalker"
 # The Neva-Touch Scheduler's log beside each of its jobs (<name>.nts): the hook's output, never the job's own
 NTS_LOG = ".nts"
@@ -47,6 +50,7 @@ class Stage:
     convergence: list[int] | None = None    # [criteria met, criteria]
     stable:      bool | None      = None
     planned:     str              = ""      # what the input's route for it runs (JobChecks.kinds), from submission
+    outOfSteps:  bool             = False   # its optimization ran out of optimizer steps (read once the step ends)
 
 
 @dataclass
@@ -80,10 +84,14 @@ class TrackedJob:
     # the step did, written only through UpdateTracked (straight into the store), so no stalker's copy overwrites it
     nevaTouch:     str       = ""
     hookCommand:   list[str] = field(default_factory=list)
+    reRuns:        int       = 0       # a re-run's: re-runs so far of the stage it starts at
+    firstStage:    int       = 1       # the original job's number for its first stage (stages are numbered from it)
     nextJob:       str       = ""      # the job the step submitted: '8a_SP (ID 123456)'
     stepBy:        str       = ""      # BY_HOOK or BY_STALKER
     stepOutcome:   str       = ""      # SUBMITTED, FAILED, STOPPED or CHAIN_COMPLETE
     stepNote:      str       = ""      # why it couldn't submit
+    stepStage:     int       = 0       # a stage that ran out of steps: the one re-run (or given up on)
+    stepCount:     int       = 0       # ...and which re-run of that stage this was (over ntsReRunLimit: given up)
     fallbackTried: bool      = False   # a stalker has taken the step (once only)
 
     @property
@@ -200,7 +208,7 @@ def _WriteStore(stored: dict[str, TrackedJob]) -> None:
 def _Progress(job: TrackedJob) -> tuple:
     return job.ended, job.stage, job.bookmark, job.stepRead
 
-STEP_FIELDS = ("nextJob", "stepBy", "stepOutcome", "stepNote", "fallbackTried")
+STEP_FIELDS = ("nextJob", "stepBy", "stepOutcome", "stepNote", "stepStage", "stepCount", "fallbackTried")
 
 def _Sync(job: TrackedJob, stored: TrackedJob) -> None:
     """Brings a held copy's shared fields up to the stored record's."""
@@ -321,6 +329,9 @@ def _ReadReports(job: TrackedJob, data, end: int | None = None) -> None:
         stable = ExtractStability(data, job.bookmark, end)
         if stable is not None:
             stage.stable = stable
+    # Once the step has ended (end: its termination line): whether its optimization ran out of steps
+    if job.stepOptimizes and end is not None and ExtractOutOfSteps(data, job.bookmark, end):
+        stage.outOfSteps = True
 
 def _End(job: TrackedJob, termination: str) -> None:
     job.state, job.termination, job.endedAt = ENDED, termination, time.time()
@@ -377,6 +388,14 @@ def _ReadProgress(job: TrackedJob, final: bool = False) -> None:
             job.stages[job.stage].status = IN_PROGRESS
     if final and not job.ended:
         _End(job, "")
+
+def ReadEnding(job: TrackedJob) -> TrackedJob:
+    """A copy of a job's record, read through to its end: the stage that ended it (job.stage) and what that stage
+    reported (its outOfSteps). The Neva-Touch Scheduler's step reads the job this way, as the stalker does."""
+    ending = copy.deepcopy(job)
+    if not ending.ended:
+        _ReadProgress(ending, final=True)
+    return ending
 
 
 # ─── Polling ──────────────────────────────────────────────────────────
@@ -435,12 +454,12 @@ def CheckTracked() -> None:
 # ─── The Neva-Touch Scheduler's fallback ──────────────────────────────
 
 def _FallbackDue(job: TrackedJob) -> bool:
-    """Whether a job's Neva-Touch Scheduler step is still to be taken after it left the queue: it ended normally, and
-    its hook (which runs inside the job, so it is over by now) submitted nothing: refused (e.g. no sbatch on compute
-    nodes), killed, or never run."""
+    """Whether a job's Neva-Touch Scheduler step is still to be taken after it left the queue: it ended normally (the
+    SP) or its last stage ran out of optimizer steps (a re-run), and its hook (which runs inside the job, so it is over
+    by now) took no step or couldn't submit: refused (e.g. no sbatch on compute nodes), killed, or never run."""
     normal = bool(job.termination) and job.termination != Defaults.terminationVariants[2]
-    return (job.nevaTouch == NTS_SP and job.leftQueue and normal and bool(job.hookCommand) and not job.nextJob
-            and not job.fallbackTried)
+    return (job.nevaTouch == NTS_SP and job.leftQueue and (normal or job.stages[job.stage].outOfSteps)
+            and bool(job.hookCommand) and not job.nextJob and not job.fallbackTried and job.stepOutcome in ("", FAILED))
 
 def _FireFallbacks(jobs: list[TrackedJob]) -> None:
     """Takes each due step once, through the hook's own command (nevatouch.FireStep), then brings the jobs up to date
@@ -454,8 +473,8 @@ def _FireFallbacks(jobs: list[TrackedJob]) -> None:
     for job in due:
         if not ClaimFallback(job):
             continue
-        console.print(f"[operation]Neva-Touch Scheduler: submitting {job.name}'s {job.nevaTouch} (its hook didn't; "
-                      f"log {job.logPath.name}).[/operation]")
+        console.print(f"[operation]Neva-Touch Scheduler: taking {job.name}'s step (its hook didn't; log "
+                      f"{job.logPath.name}).[/operation]")
         FireStep(job)
     stored = _ReadStore()
     for job in due:
@@ -484,9 +503,17 @@ def NevaTouchNote(job: TrackedJob, termination: str | None = None) -> str:
                                   else "" if normal else STOPPED)
     if outcome == SUBMITTED:
         return f"Neva-Touch Scheduler submitted {job.nextJob}."
+    if outcome == RERUN:
+        return (f"Neva-Touch Scheduler re-ran stage {job.stepStage} from its last geometry (out of optimizer steps): "
+                f"{job.nextJob}, re-run {job.stepCount} of {Defaults.ntsReRunLimit}.")
+    if outcome == GAVE_UP:
+        reRuns = job.stepCount - 1
+        return (f"Neva-Touch Scheduler stopped: stage {job.stepStage} ran out of optimizer steps "
+                + (f"on all {reRuns} re-run{'s' if reRuns != 1 else ''}." if reRuns > 0
+                   else "(re-runs are off: ntsReRunLimit is 0)."))
     if outcome == FAILED:
-        return f"Neva-Touch Scheduler couldn't submit the {job.nevaTouch}" + (f": {job.stepNote}." if job.stepNote
-                                                                              else ".")
+        tried = f"re-run of stage {job.stepStage}" if job.stepStage else job.nevaTouch
+        return f"Neva-Touch Scheduler couldn't submit the {tried}" + (f": {job.stepNote}." if job.stepNote else ".")
     if outcome == STOPPED:
         return ("Neva-Touch Scheduler: the chain stopped at its last step." if job.nevaTouch == NTS_DONE
                 else f"Neva-Touch Scheduler stopped: no {job.nevaTouch} was submitted.")
@@ -543,6 +570,8 @@ def _StageReport(stage: Stage) -> list[str]:
         lines.append(f"Converged on {stage.convergence[0]} out of {stage.convergence[1]} criteria.")
     if stage.stable is not None:
         lines.append("The wave function has stabilized." if stage.stable else "The wave function has not stabilized.")
+    if stage.outOfSteps:
+        lines.append("Ran out of optimizer steps.")
     if not lines and stage.status in (IN_PROGRESS, COMPLETE) and stage.label and not stage.reports:
         lines.append("No reporting criteria.")
     return lines
@@ -551,7 +580,8 @@ def StageLines(job: TrackedJob) -> list[str]:
     """'Stage N (Status) Planned: report' for every stage, reached or not (Planned: what its route runs, from the input
     at submission); a second report goes on its own line below."""
     lines = []
-    for number, stage in enumerate(job.stages, 1):
+    # A re-run starting at a later stage keeps the original job's numbers
+    for number, stage in enumerate(job.stages, job.firstStage):
         reports = _StageReport(stage)
         lines.append(f"Stage {number} ({stage.status})" + (f" {stage.planned}" if stage.planned else "")
                      + (f": {reports[0]}" if reports else ""))
@@ -561,7 +591,7 @@ def StageLines(job: TrackedJob) -> list[str]:
 def StagePosition(job: TrackedJob) -> str:
     """'2/3' with the step ('1/2, Freq') once it is read, else what the stage was planned to run ('2/3, Stability')."""
     label = job.stages[job.stage].label or job.stages[job.stage].planned
-    return f"{job.stage + 1}/{len(job.stages)}" + (f", {label}" if label else "")
+    return f"{job.firstStage + job.stage}/{job.firstStage - 1 + len(job.stages)}" + (f", {label}" if label else "")
 
 def HeadLine(job: TrackedJob) -> tuple[str, str]:
     """(the job's one-line status, its console style)."""
@@ -599,14 +629,19 @@ def NevaTouchLine(job: TrackedJob) -> str:
     """'Neva-Touch Scheduler: Then SP' (or Submitted 8a_SP (ID 123456), ...) for a job with a step."""
     if job.stepOutcome == SUBMITTED:
         state = f"Submitted {job.nextJob}"
+    elif job.stepOutcome == RERUN:
+        state = f"Re-ran Stage {job.stepStage} as {job.nextJob}, {job.stepCount} of {Defaults.ntsReRunLimit}"
+    elif job.stepOutcome == GAVE_UP:
+        state = f"Stopped (Out of Re-runs on Stage {job.stepStage})"
     elif job.stepOutcome == FAILED:
-        state = f"Couldn't Submit the {job.nevaTouch}"
+        state = f"Couldn't Submit the {f'Re-run of Stage {job.stepStage}' if job.stepStage else job.nevaTouch}"
     elif job.stepOutcome == STOPPED:
         state = "Stopped (Chain Not Complete)" if job.nevaTouch == NTS_DONE else f"Stopped (No {job.nevaTouch})"
     elif job.stepOutcome == CHAIN_COMPLETE:
         state = "Chain Complete"
     else:
-        state = "Last Step of the Chain" if job.nevaTouch == NTS_DONE else f"Then {job.nevaTouch}"
+        state = "Last Step of the Chain" if job.nevaTouch == NTS_DONE else f"Then {job.nevaTouch}" + (
+            f" (Re-run {job.reRuns} of {Defaults.ntsReRunLimit} of Stage {job.firstStage})" if job.reRuns else "")
     return f"Neva-Touch Scheduler: {state}" + (" (Fired by the Stalker)" if job.stepBy == BY_STALKER else "")
 
 

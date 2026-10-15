@@ -159,6 +159,8 @@ class Defaults:
     routeUnderEachMethod = True
     # The Optimization builder's Neva-Touch Scheduler row starts on (its SP is submitted when the opt ends normally)
     autoNTS = False
+    # How many times the Neva-Touch Scheduler re-runs any one stage of an opt that ran out of optimizer steps
+    ntsReRunLimit = 5
 
     # What files contain what keys
     _FILE_GROUPS: dict[str, list[str]] = {
@@ -192,6 +194,7 @@ class Defaults:
         ],
         "qol.toml": [
             "colorMode", "bareCommandOpensTUI", "trackedJobHours", "routeUnderEachMethod", "autoNTS",
+            "ntsReRunLimit",
         ]
     }
 
@@ -268,6 +271,8 @@ class Defaults:
             " only the chosen method's route, in its Route row.",
         "autoNTS": "Set to true to start the Optimization builder with the Neva-Touch Scheduler on: when the optimization"
             " ends normally, its single point (Benchmark Methods entry 0) is submitted automatically.",
+        "ntsReRunLimit": "How many times the Neva-Touch Scheduler re-runs any one stage of an optimization that ran out of"
+            " optimizer steps (from its last geometry) before it stops the chain.",
     }
 
     # Expected Python type for each config key, used by _CoerceValue to validate values loaded from user-editable TOML.
