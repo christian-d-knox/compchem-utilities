@@ -18,7 +18,7 @@ from .intent    import (
     RunIntent, SinglePointIntent, BenchmarkIntent, ReRunIntent,
     CubeIntent, FormCheckIntent, ExcelIntent, GoodVibesIntent,
     FirstTimeSetupIntent, UpdateIntent, InitProjectIntent, ProfileIntent, RefreshIntent, StalkIntent,
-    AttributionsIntent,
+    AttributionsIntent, NevaTouchIntent,
 )
 from .fileops   import grabPaths, formCheck, fileCreation, HasContent, MapFile, ReadMolecule, WriteXyz
 from .jobs      import runJob
@@ -26,7 +26,7 @@ from .          import jobs
 from .workflows import genBench, genSinglePoint, genReRun, gimmeCubes
 from .analysis  import goodVibesProcessor, GoodVibesArguments, SpcPartners, GOODVIBES_OUTPUT
 from .notify    import CheckAndBroadcast
-from .stalk     import TrackedJob, TrackJobs, LoadTracked, jobStalking
+from .stalk     import TrackedJob, LoadTracked, jobStalking
 from .spin      import ClassifySpin
 
 
@@ -51,6 +51,9 @@ def Dispatch(intent: Intent) -> list[TrackedJob]:
         case RefreshIntent():         _DispatchRefresh(intent)
         case StalkIntent():           jobStalking(LoadTracked(), Defaults.stalkDuration, Defaults.stalkFrequency, intent.loop)
         case AttributionsIntent():    _DispatchAttributions()
+        case NevaTouchIntent():
+            from .nevatouch import RunStep
+            RunStep(intent)
         case _:
             raise ValueError(f"Unknown intent: {type(intent).__name__}")
     return []
@@ -88,9 +91,9 @@ def _FileMolecules(files: list):
             yield Molecule(jobPath, baseName, 0, 0, 0, extension, baseName)
 
 
-# Every submitted job is tracked, so it can be stalked now (-st) or re-hooked into later (bare -st, the TUI)
+# Every submitted job is tracked (runJob records each one as it is submitted), so it can be stalked now (-st) or
+# re-hooked into later (bare -st, the TUI)
 def _AfterSubmission(trackedJobs: list[TrackedJob]) -> list[TrackedJob]:
-    TrackJobs(trackedJobs)
     # Every job went through jobs.SubmitJob, so this is the total
     CheckAndBroadcast(jobs.submittedJobs)
     return trackedJobs

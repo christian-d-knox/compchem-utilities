@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Optional
 
-from .actions import Action, CubeOption, FILE_ACTIONS, JOB_ACTIONS
+from .actions import Action, CubeOption, FILE_ACTIONS, JOB_ACTIONS, NTS_STEPS
 
 # CLI flags indicate a specific task. The parser populates an IntentDraft field-by-field as it reads each flag —
 # including setting draft.action to one of the Action enum values. After all fields are set, Validate() checks that the
@@ -41,13 +41,21 @@ class JobIntent(Intent):
 
     The modifier fields (stalk, stalkLoop, checkpoint, nbo7, indexOverride)
     correspond to today's -st, the stalk-loop sub-prompt, -ch, -nbo, -ovr.
+    The Neva-Touch Scheduler's: nevaTouch is the step each submitted job's hook takes once it ends (NTS_SP, NTS_DONE;
+    '' off), nextCpus/nextMemoryRatio the resources that step's job gets (None: the config's), and cpus/memoryRatio
+    the resources of the inputs generated here (None: the config's; the scheduled single point's come from its hook).
     """
-    files:         list[Path]
-    stalk:         bool = False
-    stalkLoop:     bool = False
-    checkpoint:    bool = False
-    nbo7:          bool = False
-    indexOverride: int  = 0
+    files:           list[Path]
+    stalk:           bool            = False
+    stalkLoop:       bool            = False
+    checkpoint:      bool            = False
+    nbo7:            bool            = False
+    indexOverride:   int             = 0
+    nevaTouch:       str             = ""
+    nextCpus:        Optional[int]   = None
+    nextMemoryRatio: Optional[float] = None
+    cpus:            Optional[int]   = None
+    memoryRatio:     Optional[float] = None
 
 # Subclass of JobIntent, specific for runJob() by Action()
 @dataclass
@@ -155,6 +163,17 @@ class AttributionsIntent(Intent):
 
 
 @dataclass
+class NevaTouchIntent(Intent):
+    """`cu --neva-touch STEP FILE JOBID` — a job's Neva-Touch Scheduler hook (nevatouch.RunStep). Written into job
+    scripts by runJob, and run by a stalker for a step the hook didn't take; never typed."""
+    step:        str
+    output:      Path
+    jobID:       str
+    cpus:        Optional[int]   = None   # the next job's resources (None: the config's)
+    memoryRatio: Optional[float] = None
+
+
+@dataclass
 class StalkIntent(Intent):
     """`cu -st` on its own — stalk every tracked job, whichever directory it was submitted from."""
     loop: bool = False
@@ -193,6 +212,15 @@ class IntentDraft:
     checkpoint:    bool = False
     nbo7:          bool = False
     indexOverride: int  = 0
+
+    # The Neva-Touch Scheduler (JobIntent's fields; NEVA_TOUCH: nevaTouchStep, files[0], nevaTouchJob, cpus/memoryRatio)
+    nevaTouch:       str             = ""
+    nextCpus:        Optional[int]   = None
+    nextMemoryRatio: Optional[float] = None
+    cpus:            Optional[int]   = None
+    memoryRatio:     Optional[float] = None
+    nevaTouchStep:   str             = ""
+    nevaTouchJob:    str             = ""
 
     # CUBE
     cubeOptions:  list[CubeOption] = field(default_factory=list)
@@ -247,6 +275,15 @@ class IntentDraft:
             errors.append("-st follows submitted jobs: use it with -r, -sp, -b, -cu or -re, or on its own to stalk every "
                           "tracked job.")
 
+        if self.action == Action.NEVA_TOUCH:
+            if self.nevaTouchStep not in NTS_STEPS:
+                errors.append(f"Unknown Neva-Touch Scheduler step '{self.nevaTouchStep}' (expected {', '.join(NTS_STEPS)}).")
+            if len(self.files) != 1:
+                errors.append("The Neva-Touch Scheduler takes one output file.")
+
+        if self.nevaTouch and self.nevaTouch not in NTS_STEPS:
+            errors.append(f"Unknown Neva-Touch Scheduler step '{self.nevaTouch}'.")
+
         if self.action == Action.REFRESH and self.refreshScope not in ("", "project"):
             errors.append(f"-refresh takes no argument, or 'project' (got '{self.refreshScope}').")
 
@@ -268,6 +305,9 @@ class IntentDraft:
                 return RefreshIntent(project=self.refreshScope == "project")
             case Action.STALK:
                 return StalkIntent(loop=self.stalkLoop)
+            case Action.NEVA_TOUCH:
+                return NevaTouchIntent(step=self.nevaTouchStep, output=self.files[0], jobID=self.nevaTouchJob,
+                                       cpus=self.cpus, memoryRatio=self.memoryRatio)
         intentType = _INTENT_TYPES.get(self.action)
         if intentType is None:
             raise ValueError(f"Unknown action: {self.action}")
@@ -393,6 +433,22 @@ if __name__ == "__main__":
     draft.action = Action.ATTRIBUTIONS
     assert draft.Validate() == [] and draft.Finalize() == AttributionsIntent()
     print("Test 11 (ATTRIBUTIONS intent): PASS")
+
+    # Test 12: Neva-Touch Scheduler: a run carries its step and the next job's resources; the hook's intent needs a
+    # known step and one file
+    draft = IntentDraft()
+    draft.action, draft.files = Action.RUN, [Path("8a.gjf")]
+    draft.nevaTouch, draft.nextCpus, draft.nextMemoryRatio = "SP", 32, 2.0
+    intent = draft.Finalize()
+    assert draft.Validate() == [] and intent.nevaTouch == "SP" and (intent.nextCpus, intent.nextMemoryRatio) == (32, 2.0)
+    draft = IntentDraft()
+    draft.action, draft.files, draft.nevaTouchStep, draft.nevaTouchJob = Action.NEVA_TOUCH, [Path("8a.out")], "SP", "12"
+    draft.cpus = 32
+    assert draft.Validate() == []
+    assert draft.Finalize() == NevaTouchIntent(step="SP", output=Path("8a.out"), jobID="12", cpus=32)
+    draft.nevaTouchStep = "Freq"
+    assert any("Unknown Neva-Touch" in e for e in draft.Validate()), "Test 12 should reject an unknown step"
+    print("Test 12 (Neva-Touch Scheduler intents): PASS")
 
     print("=" * 50)
     print("All smoke tests passed.")

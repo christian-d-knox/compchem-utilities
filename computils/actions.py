@@ -25,6 +25,7 @@ class Action(Enum):
     REFRESH          = "refresh"    # -refresh
     STALK            = "stalk"      # -st on its own
     ATTRIBUTIONS     = "attributions"  # -attributions
+    NEVA_TOUCH       = "nevatouch"  # --neva-touch: a job's Neva-Touch Scheduler hook (hidden: written into job scripts)
 
 # Actions that submit SLURM jobs, which -st can follow
 JOB_ACTIONS = (Action.RUN, Action.SINGLE_POINT, Action.BENCHMARK, Action.CUBE, Action.RERUN)
@@ -32,6 +33,11 @@ JOB_ACTIONS = (Action.RUN, Action.SINGLE_POINT, Action.BENCHMARK, Action.CUBE, A
 # Actions that take a batch of files (IntentDraft.Validate, and the TUI's Continue)
 FILE_ACTIONS = (Action.RUN, Action.SINGLE_POINT, Action.BENCHMARK, Action.CUBE, Action.RERUN, Action.FORM_CHECK,
                 Action.GOODVIBES)
+
+# The Neva-Touch Scheduler's steps: what a job's hook does once the job ends. SP submits the single point (an opt's);
+# DONE ends the chain (the single point's own hook only reports)
+NTS_SP, NTS_DONE = "SP", "Done"
+NTS_STEPS = (NTS_SP, NTS_DONE)
 
 # Spin-state class of a molecule, set once in dispatch by spin.ClassifySpin()
 class SpinState(Enum):

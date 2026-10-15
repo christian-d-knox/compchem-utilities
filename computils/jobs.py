@@ -11,7 +11,8 @@ from .fileops  import (fileCreation, HasContent, ExtractResources, MapFile, Stag
 from .keylists import Keylist, Where, MIXED_BASIS, OPTIMIZATION, ORCA_BLOCKS
 from .molecule import Molecule
 from .intent import JobIntent
-from .stalk    import TrackedJob, Stage, jobLocation
+from .stalk    import TrackedJob, Stage, jobLocation, TrackJobs, NTS_LOG
+from .nevatouch import HookCommand, HookLines, JOB_ID
 
 # The optimization methods (name -> route, in order): jobRelatedKeylists' Optimization Methods from the nearest level
 # that has them, or the unsaved text from the TUI's config editor ({level path: text}); {} without any
@@ -188,7 +189,7 @@ def genFile(molecule: Molecule, intent: JobIntent) -> bool:
     if problem:
         console.print(f"[error]{escape(problem)}. Skipping {molecule.baseName}.[/error]")
         return False
-    text = JobInputText(molecule, intent.checkpoint, intent.nbo7)
+    text = JobInputText(molecule, intent.checkpoint, intent.nbo7, intent.cpus, intent.memoryRatio)
     with open(molecule.fullPath, 'w') as jobInput:
         jobInput.write(text)
     return True
@@ -323,12 +324,21 @@ $(which orca) {inputName}
 # Every job reaches the queue through here, so the group broadcast can count the whole invocation (dispatch)
 submittedJobs = 0
 
+# The environment sbatch runs in. Inside a job (the Neva-Touch Scheduler's hook submits from one) the job's own SLURM_*
+# and SBATCH_* variables are left out, or the new job would inherit the old one's allocation settings
+def _SubmitEnvironment() -> dict[str, str] | None:
+    if "SLURM_JOB_ID" not in os.environ:
+        return None
+    return {name: value for name, value in os.environ.items()
+            if name == "SLURM_CONF" or not name.startswith(("SLURM_", "SBATCH_"))}
+
 # --parsable prints just 'ID' or 'ID;cluster'. Output is captured: sbatch must never write to the TUI's screen. Returns
 # (job ID, cluster), or None (after saying why) if sbatch refused the job: the caller skips only that job
 def SubmitJob(queueName: Path) -> tuple[str, str] | None:
     global submittedJobs
     try:
-        result = subprocess.run(["sbatch", "--parsable", str(queueName)], capture_output=True, text=True)
+        result = subprocess.run(["sbatch", "--parsable", str(queueName)], capture_output=True, text=True,
+                                env=_SubmitEnvironment())
     except FileNotFoundError:
         console.print(f"[error]sbatch isn't available here, so {queueName} wasn't submitted.[/error]")
         return None
@@ -340,12 +350,18 @@ def SubmitJob(queueName: Path) -> tuple[str, str] | None:
     jobID, _, cluster = result.stdout.strip().splitlines()[-1].partition(";")
     return jobID.strip(), cluster.strip()
 
-# This routine is for job submission to the cluster. Every submitted job is tracked (trackedJobs, recorded by
-# dispatch), so any later stalker can re-hook into it
+# This routine is for job submission to the cluster. Every submitted job is tracked (recorded at once, and returned in
+# trackedJobs), so any later stalker can re-hook into it
 def runJob(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
     # Sets up all the basic filenames for the rest of submission
     outputName = fileCreation(molecule.baseName, Defaults.outputExtension)
     queueName = fileCreation(molecule.baseName, Defaults.queueExtension)
+    # The Neva-Touch Scheduler's hook: the step this job takes once it ends, with the next job's resources
+    outputPath = Path(outputName).resolve()
+    hookCommand = (HookCommand(intent.nevaTouch, outputPath, intent.nextCpus, intent.nextMemoryRatio)
+                   if intent.nevaTouch else [])
+    hook = (HookLines(hookCommand, outputPath.parent, outputPath.parent / fileCreation(molecule.baseName, NTS_LOG))
+            if hookCommand else "")
 
     # Empty file guard
     if not HasContent(molecule.fullPath):
@@ -367,6 +383,7 @@ def runJob(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
             with open(queueName, 'a') as outputFile:
                 outputFile.writelines(Defaults.gaussianNonVariant)
                 outputFile.write(f"\ng16 < {molecule.fullPath}\n\n")
+                outputFile.write(hook)
 
         case Defaults.orcaExtension:
             program = "ORCA"
@@ -376,6 +393,7 @@ def runJob(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
                 outputFile.write(ORCA_RUN_SCRIPT.format(
                     inputName=fileCreation(molecule.baseName, Defaults.orcaExtension), resultFiles=resultFiles,
                     resultsFolder=fileCreation(molecule.baseName, "", Defaults.scratchFolderExtra)))
+                outputFile.write(hook)
 
         # Only Gaussian and ORCA inputs are submitted
         case _:
@@ -387,8 +405,12 @@ def runJob(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
         return
     jobID, cluster = submitted
     console.print(f"[good]Submitted job {molecule.baseName} to {program} (ID {jobID})[/good]")
-    trackedJobs.append(TrackedJob(jobID, cluster, molecule.baseName, str(Path(outputName).resolve()), jobLocation(),
-                                  molecule.extensionType, time.time(),
-                                  [Stage(planned=planned[index] if index < len(planned) else "")
-                                   for index in range(stageCount)]))
+    tracked = TrackedJob(jobID, cluster, molecule.baseName, str(outputPath), jobLocation(), molecule.extensionType,
+                         time.time(), [Stage(planned=planned[index] if index < len(planned) else "")
+                                       for index in range(stageCount)],
+                         nevaTouch=intent.nevaTouch,
+                         hookCommand=[jobID if word == JOB_ID else word for word in hookCommand])
+    # Recorded now, not after the batch: a quick job's Neva-Touch Scheduler hook looks for its record
+    TrackJobs([tracked])
+    trackedJobs.append(tracked)
 

@@ -410,6 +410,11 @@ def StageCount(data, program: str) -> int:
         return 1
     return len(_GaussianSections(data))
 
+# The termination line is the last thing G16 and ORCA write (G16's archive entry, quote and timings come before it),
+# so only the end of the file is searched for how a job ended (ExtractFrom(path, ExtractTermination, -TERMINATION_TAIL)).
+# A file without one in its tail is running or was killed
+TERMINATION_TAIL = 64 * 1024
+
 def FindTermination(data, start: int = 0, end: int | None = None, reverse: bool = True) -> regex.Match | None:
     """The last (or, reverse=False, the first) termination line in data[start:end]. Its offsets are the stalker's
     bookmarks: a later step's reporting is never searched for before one."""

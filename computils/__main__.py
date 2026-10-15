@@ -13,13 +13,29 @@ def Main() -> None:
         from .cli import BuildParser
         BuildParser().print_help()
         return
+    argv = sys.argv[1:]
+    # A Neva-Touch Scheduler hook (in a job script, or a stalker's run of one): nobody is there to answer, so nothing
+    # may prompt, and the startup checks below belong to the runs people start
+    nevaTouchHook = argv[:1] == ["--neva-touch"]
+    if nevaTouchHook:
+        from . import prompts
+        prompts.interactive = False
+
     # Load configs and lookup data BEFORE handing control to the CLI.
     Defaults.Load()
     # Project overrides must land before the Catalog derives route templates (from jobRelatedKeylists)
     LoadProjectConfig()
     Catalog.Load()
 
-    argv = sys.argv[1:]
+    if nevaTouchHook:
+        if Defaults.needsFirstTimeSetup:
+            console.print("[error]CompUtils isn't set up for this account (run `cu -first`); the Neva-Touch Scheduler "
+                          "took no step.[/error]")
+            return
+        from .cli      import ParseCLI
+        from .dispatch import Dispatch
+        Dispatch(ParseCLI(argv))
+        return
     opensTUI = argv in (["-tui"], ["--tui"]) or (not argv and Defaults.bareCommandOpensTUI)
     appliesProfile = argv[:1] in (["-profile"], ["--profile"])
 
