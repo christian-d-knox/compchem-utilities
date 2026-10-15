@@ -325,13 +325,6 @@ class ValueInput(Input):
             event.prevent_default()
 
 
-class SettingBox(Static):
-    def on_click(self) -> None:
-        row = next(ancestor for ancestor in self.ancestors if isinstance(ancestor, SettingRow))
-        row.parent.Choose(row)
-        row.parent.action_toggle()
-
-
 class SettingRow(Horizontal, can_focus=False):
     """Rows without a typed value take the focus themselves (the list keeps only its current row focusable).
     Stacked (a narrow column): the label on its own line, the value under it, then the meaning."""
@@ -347,10 +340,10 @@ class SettingRow(Horizontal, can_focus=False):
     def compose(self) -> ComposeResult:
         if self.stacked:
             with Horizontal(classes="setting-head" + ("" if self.setting.label else " -empty")):
-                yield SettingBox(classes="setting-box")
+                yield Static(classes="setting-box")
                 yield Static(self.setting.label, classes="setting-label")
         else:
-            yield SettingBox(classes="setting-box")
+            yield Static(classes="setting-box")
             yield Static(self.setting.label, classes="setting-label")
         with Horizontal(classes="setting-value"):
             if self.setting.value is not None:
@@ -410,8 +403,15 @@ class SettingRow(Horizontal, can_focus=False):
                     under.on = True
             self.parent.ShowAll()
 
-    def on_click(self) -> None:
-        self.parent.Choose(self)
+    def on_click(self, event) -> None:
+        # A click asks for this row, whatever had the focus: the scrolling column around the list took it on mouse-down
+        # (a row isn't focusable until it is current). A click on what ␣ acts on acts as ␣: the checkbox, a choice's
+        # "( ) Name", an editor row's value. A click on a label only chooses the row
+        self.parent.Choose(self, focus=True)
+        acts = (event.widget.has_class("setting-box") or event.widget.has_class("setting-fixed")
+                and (self.setting.choice or self.setting.opens))
+        if acts:
+            self.parent.action_toggle()
 
 
 class SettingsList(Vertical):
@@ -488,14 +488,15 @@ class SettingsList(Vertical):
         for row in self.rows:
             row.Show()
 
-    def Choose(self, row: SettingRow) -> None:
-        """Make row current: the only focusable one, so Tab enters and leaves the list in one stop."""
+    def Choose(self, row: SettingRow, focus: bool = False) -> None:
+        """Make row current: the only focusable one, so Tab enters and leaves the list in one stop. It takes the focus
+        if the list had it, nothing had, or focus is asked for (a click)."""
         hadFocus = self.screen.focused is not None and self in self.screen.focused.ancestors_with_self
         self.index = self.rows.index(row)
         for other in self.rows:
             other.set_class(other is row, "-current")
             other.target.can_focus = other is row
-        if hadFocus or self.screen.focused is None:
+        if focus or hadFocus or self.screen.focused is None:
             row.target.focus()
 
     def check_action(self, action: str, parameters) -> bool | None:

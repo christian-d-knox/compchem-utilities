@@ -271,6 +271,14 @@ def InputRoutes(data, program: str) -> list[str]:
                       if routeMatch else "")
     return routes
 
+def InputStageTexts(data, program: str) -> list[str]:
+    """Each stage of an input as written (a Gaussian input's --Link1-- sections, separators left out; ORCA's whole
+    input), newlines normalized. For jobs.RestartInputText, which rewrites the stage a re-run starts at."""
+    text = lambda start, end: data[start:end].decode(errors="replace").replace("\r\n", "\n")
+    if program == Defaults.orcaExtension:
+        return [text(0, len(data))]
+    return [text(start, end) for start, end in _GaussianSections(data)]
+
 def _GaussianChargeLine(data) -> regex.Match | None:
     """A Gaussian input's first charge/multiplicity line (groups 1 and 2): after the route section, a blank line, the
     title section and another blank line. None without one (e.g. Geom=AllCheck, which reads both from the checkpoint)."""
@@ -461,10 +469,13 @@ def ExtractStability(data, start: int = 0, end: int | None = None) -> bool | Non
         return None
     return FindInMap(data, STABLE_VERDICT, True, start=start, end=end) is not None
 
+# An optimization step's convergence table header (Gaussian: Threshold, ORCA: Tolerance)
+CONVERGENCE_HEADER = r"Item\s+Value\s+(?:Threshold|Tolerance)\s+Converged"
+
 def ExtractConvergence(data, start: int = 0, end: int | None = None) -> tuple[int, int] | None:
     """(criteria met, criteria) in the last optimization convergence table in data[start:end], or None if there is no
     complete row yet. Gaussian's table has 4 rows; ORCA's 4 or 5 (its first cycle has no energy change row)."""
-    finalTableHeader = FindInMap(data, r"Item\s+Value\s+(?:Threshold|Tolerance)\s+Converged", True, True, start, end)
+    finalTableHeader = FindInMap(data, CONVERGENCE_HEADER, True, True, start, end)
     if finalTableHeader is None:
         return None
     SkipInMap(data, finalTableHeader, 0)
@@ -477,6 +488,16 @@ def ExtractConvergence(data, start: int = 0, end: int | None = None) -> tuple[in
         elif total or (fields and fields[0].strip(b"-")):
             break
     return (met, total) if total else None
+
+# An optimization that stopped at its step limit, Gaussian then ORCA. Gaussian ends it with an error termination; ORCA
+# can still end normally, so this is read whatever the termination line says
+OUT_OF_STEPS = r"Number of steps exceeded|the maximum number of optimization cycles"
+
+def ExtractOutOfSteps(data, start: int = 0, end: int | None = None) -> bool:
+    """Whether the optimization in data[start:end] ran out of optimizer steps (the Neva-Touch Scheduler re-runs it).
+    Both programs say so after the last convergence table, so only what follows it is searched."""
+    lastTable = FindInMap(data, CONVERGENCE_HEADER, True, True, start, end)
+    return lastTable is not None and FindInMap(data, OUT_OF_STEPS, True, start=lastTable.end(), end=end) is not None
 
 def ExtractResources(data, extensionType: str) -> tuple[int, int]:
     """Extract CPU count and SLURM memory request from an mmap data stream.

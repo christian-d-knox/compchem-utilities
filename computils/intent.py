@@ -44,6 +44,8 @@ class JobIntent(Intent):
     The Neva-Touch Scheduler's: nevaTouch is the step each submitted job's hook takes once it ends (NTS_SP, NTS_DONE;
     '' off), nextCpus/nextMemoryRatio the resources that step's job gets (None: the config's), and cpus/memoryRatio
     the resources of the inputs generated here (None: the config's; the scheduled single point's come from its hook).
+    reRuns/firstStage: a Neva-Touch Scheduler re-run's count, so far, of re-runs of the stage it starts at, and that
+    stage's number in the original job (an opt that ran out of steps in stage 2 of 3 is re-run as stages 2-3).
     """
     files:           list[Path]
     stalk:           bool            = False
@@ -56,6 +58,8 @@ class JobIntent(Intent):
     nextMemoryRatio: Optional[float] = None
     cpus:            Optional[int]   = None
     memoryRatio:     Optional[float] = None
+    reRuns:          int             = 0
+    firstStage:      int             = 1
 
 # Subclass of JobIntent, specific for runJob() by Action()
 @dataclass
@@ -171,6 +175,8 @@ class NevaTouchIntent(Intent):
     jobID:       str
     cpus:        Optional[int]   = None   # the next job's resources (None: the config's)
     memoryRatio: Optional[float] = None
+    reRuns:      int             = 0      # the job's own (JobIntent's), carried in its hook
+    firstStage:  int             = 1
 
 
 @dataclass
@@ -221,6 +227,8 @@ class IntentDraft:
     memoryRatio:     Optional[float] = None
     nevaTouchStep:   str             = ""
     nevaTouchJob:    str             = ""
+    reRuns:          int             = 0
+    firstStage:      int             = 1
 
     # CUBE
     cubeOptions:  list[CubeOption] = field(default_factory=list)
@@ -307,7 +315,8 @@ class IntentDraft:
                 return StalkIntent(loop=self.stalkLoop)
             case Action.NEVA_TOUCH:
                 return NevaTouchIntent(step=self.nevaTouchStep, output=self.files[0], jobID=self.nevaTouchJob,
-                                       cpus=self.cpus, memoryRatio=self.memoryRatio)
+                                       cpus=self.cpus, memoryRatio=self.memoryRatio, reRuns=self.reRuns,
+                                       firstStage=self.firstStage)
         intentType = _INTENT_TYPES.get(self.action)
         if intentType is None:
             raise ValueError(f"Unknown action: {self.action}")
@@ -446,6 +455,9 @@ if __name__ == "__main__":
     draft.cpus = 32
     assert draft.Validate() == []
     assert draft.Finalize() == NevaTouchIntent(step="SP", output=Path("8a.out"), jobID="12", cpus=32)
+    draft.reRuns, draft.firstStage = 2, 3
+    assert draft.Finalize() == NevaTouchIntent(step="SP", output=Path("8a.out"), jobID="12", cpus=32, reRuns=2,
+                                               firstStage=3)
     draft.nevaTouchStep = "Freq"
     assert any("Unknown Neva-Touch" in e for e in draft.Validate()), "Test 12 should reject an unknown step"
     print("Test 12 (Neva-Touch Scheduler intents): PASS")

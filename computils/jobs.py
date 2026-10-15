@@ -7,7 +7,7 @@ from .defaults import Defaults
 from .catalog  import RenderRoute, RouteTemplate, ROUTE_LEAK_PATTERN
 from .fileops  import (fileCreation, HasContent, ExtractResources, MapFile, StageCount, MixedBasis, BasisEntry,
                        NormalizeElement, MoleculeElements, BASIS_PATTERN, InputRoutes, JobChecks, ExtractOrcaInput,
-                       StageProblem)
+                       StageProblem, InputStageTexts, GAUSSIAN_INPUT_ROUTE)
 from .keylists import Keylist, Where, MIXED_BASIS, OPTIMIZATION, ORCA_BLOCKS
 from .molecule import Molecule
 from .intent import JobIntent
@@ -288,6 +288,88 @@ def JobInputText(molecule: Molecule, checkpoint: bool = False, nbo7: bool = Fals
             return text + "\n*"
     return ""
 
+# ─── Restarting from a failed stage (the Neva-Touch Scheduler's re-run) ─
+
+# A Gaussian section's title and molecule blocks, after its route: blank line(s), the title lines, a blank line, then
+# the charge line and any coordinates
+_TITLE_AND_MOLECULE = r"(\n[ \t]*\n(?:[ \t]*\n)*)((?:[ \t]*\S[^\n]*\n)+)([ \t]*\n)((?:[ \t]*\S[^\n]*\n)+)"
+# ORCA's geometry: '* xyz 0 1' rows '*', or '* xyzfile 0 1 file.xyz'
+_ORCA_GEOMETRY = r"(?im)^[ \t]*\*[ \t]*(xyzfile|xyz)[ \t]+(-?\d+)[ \t]+(\d+)[^\n]*\n"
+_ORCA_GEOMETRY_END = r"(?m)^[ \t]*\*[ \t]*$"
+
+def _RenamedCheckpoint(line: str, oldName: str, newName: str) -> str:
+    """A %chk/%oldchk line with a checkpoint named after the old job renamed for the new one (8a_2.chk -> 8a_re_2.chk)."""
+    return regex.sub(rf"(?i)^(%(?:old)?chk=)(.*?){regex.escape(oldName)}(?=[_.])", rf"\g<1>\g<2>{newName}", line)
+
+def RestartInputText(inputPath: Path, program: str, stage: int, molecule: Molecule, oldName: str,
+                     newName: str) -> tuple[str, str]:
+    """A job's input restarted at one of its stages (1-based): that stage and every one after it, as written, with the
+    molecule's coordinates (the failed job's last geometry) in the restarted stage. (text, '') or ('', why it can't).
+    Gaussian: the restarted stage writes its own title, charge line and coordinates (a geom=allcheck/check token goes:
+    the checkpoint's geometry is the old job's), keeping guess=read and ChkBasis, which read from %oldchk=<the
+    checkpoint that stage was writing> when it isn't the first; checkpoints named after the old job are renamed. ORCA
+    (one stage): the '* xyz' rows are replaced. Everything else (Link 0, resources, ModRed lines, basis, blocks, NBO)
+    is kept as written."""
+    if not HasContent(inputPath):
+        return "", f"its input {inputPath.name} is gone"
+    with MapFile(inputPath) as data:
+        stages = InputStageTexts(data, program)
+    if not 1 <= stage <= len(stages):
+        return "", f"its input {inputPath.name} has no stage {stage}"
+    coordinates = "".join(molecule.coordinateList)
+
+    if program == Defaults.orcaExtension:
+        text = stages[0]
+        geometry = regex.search(_ORCA_GEOMETRY, text)
+        if geometry is None:
+            return "", f"{inputPath.name} has no '* xyz' or '* xyzfile' geometry"
+        if geometry.group(1).lower() == "xyzfile":
+            return text[:geometry.start()] + f"* xyz {geometry.group(2)} {geometry.group(3)}\n{coordinates}*\n" + \
+                   text[geometry.end():], ""
+        end = regex.search(_ORCA_GEOMETRY_END, text, pos=geometry.end())
+        if end is None:
+            return "", f"{inputPath.name}'s geometry has no closing '*'"
+        return text[:geometry.end()] + coordinates + text[end.start():], ""
+
+    sections = []
+    for number, section in enumerate(stages[stage - 1:], stage):
+        section = section.strip("\n") + "\n"
+        routeMatch = regex.search(GAUSSIAN_INPUT_ROUTE, section)
+        if routeMatch is None:
+            return "", f"stage {number} of {inputPath.name} has no route"
+        link0 = [_RenamedCheckpoint(line, oldName, newName) if not (number == stage and line.lower().startswith("%oldchk"))
+                 else line for line in section[:routeMatch.start()].splitlines() if line.strip()]
+        route, after = routeMatch.group(1), section[routeMatch.end():]
+        if number == stage:
+            # The checkpoint this stage was writing holds its last orbitals (and a Gen basis): the new one starts there
+            oldCheckpoint = next((line.partition("=")[2].strip() for line in section[:routeMatch.start()].splitlines()
+                                  if line.lower().startswith("%chk=")), "")
+            if stage > 1 and oldCheckpoint:
+                link0 = [line for line in link0 if not line.lower().startswith("%oldchk")]
+                position = next((index for index, line in enumerate(link0) if line.lower().startswith("%chk=")), len(link0))
+                link0.insert(position, f"%oldchk={oldCheckpoint}")
+            tokens = route.split()
+            geom = _KeywordAt(tokens, "geom")
+            reads = set(_KeywordOptions(tokens[geom])) & {"allcheck", "check"} if geom is not None else set()
+            if reads:
+                tokens.pop(geom)
+                route = " ".join(tokens)
+            if "allcheck" not in reads:
+                # Its own title and charge line are kept; the coordinates are the last geometry
+                written = regex.match(_TITLE_AND_MOLECULE, after)
+                if written is None:
+                    return "", f"stage {number} of {inputPath.name} has no title and charge line"
+                chargeLine = written.group(4).splitlines()[0].strip()
+                after = (written.group(1) + written.group(2) + written.group(3) + chargeLine + "\n" + coordinates
+                         + after[written.end():])
+            else:
+                # Everything came from the checkpoint: a title, and the charge line the job read
+                rest = after.lstrip(" \t\n")
+                after = (f"\n\n{newName}: stage {stage} restarted from the last geometry of {oldName}\n\n"
+                         f"{molecule.charge} {molecule.multiplicity}\n{coordinates}" + (f"\n{rest}" if rest else ""))
+        sections.append("\n".join(link0) + "\n" + route + after.rstrip("\n") + "\n\n")
+    return "--Link1--\n".join(sections), ""
+
 # Reorganized! Now handles SLURM commands independently because of HPC cluster agnosticism
 def slurmHandler(molecule: Molecule, queueName: Path, outputName: Path, cpus: int, jobRam: int) -> None:
     # What each header line gets filled with, by the flag it contains. Checked in this order; first match wins
@@ -358,8 +440,8 @@ def runJob(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
     queueName = fileCreation(molecule.baseName, Defaults.queueExtension)
     # The Neva-Touch Scheduler's hook: the step this job takes once it ends, with the next job's resources
     outputPath = Path(outputName).resolve()
-    hookCommand = (HookCommand(intent.nevaTouch, outputPath, intent.nextCpus, intent.nextMemoryRatio)
-                   if intent.nevaTouch else [])
+    hookCommand = (HookCommand(intent.nevaTouch, outputPath, intent.nextCpus, intent.nextMemoryRatio, intent.reRuns,
+                               intent.firstStage) if intent.nevaTouch else [])
     hook = (HookLines(hookCommand, outputPath.parent, outputPath.parent / fileCreation(molecule.baseName, NTS_LOG))
             if hookCommand else "")
 
@@ -408,7 +490,7 @@ def runJob(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
     tracked = TrackedJob(jobID, cluster, molecule.baseName, str(outputPath), jobLocation(), molecule.extensionType,
                          time.time(), [Stage(planned=planned[index] if index < len(planned) else "")
                                        for index in range(stageCount)],
-                         nevaTouch=intent.nevaTouch,
+                         nevaTouch=intent.nevaTouch, reRuns=intent.reRuns, firstStage=intent.firstStage,
                          hookCommand=[jobID if word == JOB_ID else word for word in hookCommand])
     # Recorded now, not after the batch: a quick job's Neva-Touch Scheduler hook looks for its record
     TrackJobs([tracked])

@@ -95,8 +95,12 @@ class SourceList(SettingsList):
 
     def action_toggle(self) -> None:
         chosen = self.current.available and self.current.setting.choice
+        changed = chosen and not self.current.on
         super().action_toggle()
         if chosen:
+            # The new source's files are listed now (its Changed message comes after), so it moves to those
+            if changed:
+                self.screen.ShowSource()
             self.screen.EnterSource()
 
 
