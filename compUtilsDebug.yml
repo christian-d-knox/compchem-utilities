@@ -1,7 +1,10 @@
-# compUtils.yml plus memray, for measuring resource use. Build it by hand:
+# compUtils.yml plus memray, for measuring resource use. CompUtils installs it
+# (cu -env install debug, or the TUI's Update Environment), or build it by hand:
 #   conda env create -f compUtilsDebug.yml
 #   conda activate compUtilsDebug
 #   pip install -e .    (from a clone, or the git URL conda-installer.py uses)
+# memray has no Windows build:
+# @platform linux
 # If conda asks you to accept Anaconda's Terms of Service, it is checking the channels your conda is set up with
 # (not this file's): remove them with 'conda config --remove channels defaults', or accept them if you use them.
 name: compUtilsDebug
@@ -24,4 +27,9 @@ dependencies:
   - scikit-learn
   - pyside6
   - periodictable
+  # For workflows to come: cheminformatics (SMILES, conformers), semiempirical
+  # xTB methods, and conformer/rotamer searches
+  - rdkit
+  - xtb
+  - crest
   - memray

@@ -24,6 +24,11 @@ Power users:
   --conda-dir PATH   find or install conda here instead of the usual places
   --yml PATH         build the environment from a hand-edited env file
 
+CompUtils also runs this file itself (cu -env, the TUI's Update Environment) in
+a hidden background mode, to refresh, rebuild or install an environment: it
+builds '<name>-next' alongside, checks it, and swaps it in once nothing runs
+from the old one. That mode is never typed; see Background().
+
 Written for Python 3.6+ and the standard library only: login nodes often have
 an old system python3.
 
@@ -34,9 +39,11 @@ import json
 import os
 import platform
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -51,7 +58,10 @@ REPO_OWNER = "christian-d-knox"
 REPO_NAME = "compchem-utilities"
 # This is the dev branch's installer, so it installs dev (main's installer installs main)
 BRANCH = "dev"
+# The environment's name when the env file doesn't give one
 ENV_NAME = "compUtils"
+# Where conda's executable sits inside a conda installation (Linux, then Windows)
+CONDA_PLACES = ["bin/conda", "Scripts/conda.exe", "condabin/conda.bat"]
 
 
 def YmlUrl() -> str:
@@ -66,15 +76,28 @@ def PackageUrl() -> str:
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
 
-def Run(args, check: bool = True) -> int:
+def Run(args, check: bool = True, env=None) -> int:
     """Run a command (a list, no shell), printing it first."""
-    print("\n+ " + " ".join(str(arg) for arg in args))
-    return subprocess.run([str(arg) for arg in args], check=check).returncode
+    print("\n+ " + " ".join(str(arg) for arg in args), flush=True)
+    return subprocess.run([str(arg) for arg in args], check=check, env=env).returncode
 
 
-def InEnv(conda: Path, *args) -> list:
-    """A command run inside the environment, its output shown as it happens."""
-    return [conda, "run", "--no-capture-output", "-n", ENV_NAME, *args]
+def InEnv(conda: Path, name: str, *args) -> list:
+    """A command run inside the named environment, its output shown as it happens."""
+    return [conda, "run", "--no-capture-output", "-n", name, *args]
+
+
+def InPrefix(conda: Path, prefix: Path, *args) -> list:
+    """A command run inside the environment at prefix (activated, so Windows finds its DLLs)."""
+    return [conda, "run", "--no-capture-output", "-p", prefix, *args]
+
+
+def CondaIn(folder: Path):
+    """The conda executable of the conda installation at folder, or None."""
+    for place in CONDA_PLACES:
+        if (folder / place).exists():
+            return folder / place
+    return None
 
 
 def Download(url: str, target: Path) -> None:
@@ -97,14 +120,14 @@ def FindConda(condaDir) -> Path:
     or module-loaded conda, then conda on PATH, then the usual home folders.
     """
     if condaDir is not None:
-        conda = condaDir / "bin" / "conda"
-        return conda if conda.exists() else None
+        return CondaIn(condaDir)
     found = os.environ.get("CONDA_EXE") or shutil.which("conda")
     if found and Path(found).exists():
         return Path(found)
     for folder in KNOWN_CONDA_DIRS:
-        if (folder / "bin" / "conda").exists():
-            return folder / "bin" / "conda"
+        conda = CondaIn(folder)
+        if conda is not None:
+            return conda
     return None
 
 
@@ -152,21 +175,25 @@ def FetchYml(scratch: Path) -> Path:
     return target
 
 
-def EnvExists(conda: Path) -> bool:
+def EnvExists(conda: Path, name: str) -> bool:
     output = subprocess.check_output([str(conda), "env", "list", "--json"], universal_newlines=True)
-    return any(Path(env).name == ENV_NAME for env in json.loads(output).get("envs", []))
+    return any(Path(env).name == name for env in json.loads(output).get("envs", []))
 
 
 def ReadYml(yml: Path):
-    """The env file's channels (nodefaults left out) and package specs. Only the flat lists compUtils.yml uses are
-    read (no yaml module in the standard library); a nested entry such as '- pip:' stops the install."""
-    channels, specs, section = [], [], None
+    """The env file's environment name, channels (nodefaults left out) and package specs. Only the flat lists
+    compUtils.yml uses are read (no yaml module in the standard library); a nested entry such as '- pip:' stops the
+    install. CompUtils keeps a twin (computils/environment.py's ReadYml), which also reads '# @platform' lines."""
+    name, channels, specs, section = ENV_NAME, [], [], None
     for raw in yml.read_text().splitlines():
         line = raw.split("#", 1)[0].rstrip()
         if not line.strip():
             continue
         if not line[0].isspace():
-            section = line.split(":", 1)[0].strip()
+            section, _, value = line.partition(":")
+            section = section.strip()
+            if section == "name" and value.strip():
+                name = value.strip()
             continue
         item = line.strip()
         if not item.startswith("- "):
@@ -180,38 +207,53 @@ def ReadYml(yml: Path):
             specs.append(item)
     if not channels or not specs:
         Fail(f"{yml} lists no channels or no dependencies.")
-    return channels, specs
+    return name, channels, specs
 
 
-def BuildEnv(conda: Path, yml: Path) -> None:
+def ChannelArgs(channels) -> list:
+    """Only the env file's channels (--override-channels): see BuildEnv."""
+    return ["--override-channels"] + [arg for channel in channels for arg in ("-c", channel)]
+
+
+def BuildEnv(conda: Path, yml: Path) -> str:
     """
     Create the environment, or bring an existing one up to date (packages you
     added are kept). Only the env file's channels are used (--override-channels):
     conda's Terms of Service check reads the channels conda is configured with,
     not an env file's, so 'conda env create' would ask about Anaconda's channels
     even though nothing comes from them. With conda-forge alone there is
-    nothing to accept.
+    nothing to accept. Returns the environment's name.
     """
-    channels, specs = ReadYml(yml)
-    verb = "install" if EnvExists(conda) else "create"
-    print(f"{'Updating' if verb == 'install' else 'Creating'} the conda environment '{ENV_NAME}' from "
+    name, channels, specs = ReadYml(yml)
+    verb = "install" if EnvExists(conda, name) else "create"
+    print(f"{'Updating' if verb == 'install' else 'Creating'} the conda environment '{name}' from "
           f"{', '.join(channels)} (this can take several minutes; your terminal will be busy).")
-    channelArgs = [arg for channel in channels for arg in ("-c", channel)]
-    Run([conda, verb, "-n", ENV_NAME, "--override-channels", *channelArgs, "-y", *specs])
-    print(f"✓ Conda environment '{ENV_NAME}' is ready.")
+    Run([conda, verb, "-n", name, *ChannelArgs(channels), "-y", *specs])
+    print(f"✓ Conda environment '{name}' is ready.")
+    return name
 
 
-def InstallCompUtils(conda: Path) -> None:
-    """Install CompUtils from the branch. Its dependencies come from compUtils.yml (hence --no-deps)."""
+def PipInstall(package: str, editable: bool = False) -> list:
+    """The pip arguments that install CompUtils. Its dependencies come from the env file (hence --no-deps)."""
+    return ["python", "-m", "pip", "install", "--upgrade", "--force-reinstall", "--no-deps", "--no-cache-dir",
+            *(["-e"] if editable else []), package]
+
+
+def InstallCompUtils(conda: Path, name: str) -> None:
+    """Install CompUtils from the branch."""
     print(f"Installing CompUtils from branch '{BRANCH}'.")
-    Run(InEnv(conda, "python", "-m", "pip", "install", "--upgrade", "--force-reinstall",
-              "--no-deps", "--no-cache-dir", PackageUrl()))
+    Run(InEnv(conda, name, *PipInstall(PackageUrl())))
 
 
-def CheckInstall(conda: Path) -> bool:
-    """Whether 'cu' runs inside the environment. 'cu --help' prints its help without touching the config, so setup
-    is left to the first real run."""
-    works = Run(InEnv(conda, "cu", "--help"), check=False) == 0
+# Imports every CompUtils module and checks GoodVibes, writing no config: what proves an environment works
+SELF_TEST = ["python", "-m", "computils", "--self-test"]
+
+
+def CheckInstall(conda: Path, name: str) -> bool:
+    """Whether 'cu' runs inside the environment, and every module imports. Neither touches the config, so setup is
+    left to the first real run."""
+    works = (Run(InEnv(conda, name, "cu", "--help"), check=False) == 0 and
+             Run(InEnv(conda, name, *SELF_TEST), check=False) == 0)
     print("✓ 'cu' runs." if works else "✗ 'cu' did not run; see the output above.")
     return works
 
@@ -265,6 +307,213 @@ def RemoveLegacyCuAlias() -> None:
         print("✓ Removed legacy 'alias cu=...' from ~/.alias.")
 
 
+# ─── Background mode (run by CompUtils: cu -env, the TUI's Update Environment) ─
+#
+# Never typed. CompUtils starts it detached on conda's own Python (never the
+# environment's, which it may replace) and reads its progress from the state
+# file. Nothing here asks anything. The environment in use is never touched
+# until a replacement is built and checked:
+#   install  conda create at the prefix, CompUtils, self-test (nothing to swap)
+#   refresh  clone the environment to <prefix>-next (your own packages kept),
+#            add what the env file asks for, CompUtils, self-test, swap
+#   rebuild  create <prefix>-next fresh from the env file, CompUtils, self-test,
+#            swap
+# The swap waits until nothing on this machine runs from the environment, then
+# renames it aside (instant, reversible), clones -next into its place and
+# checks that; a failure renames the old one back. While it swaps, a guard file
+# (<prefix>.swapping) tells job scripts' Neva-Touch Scheduler hooks to wait.
+
+DONE, FAILED = "Done", "Failed"
+WAITING = "Waiting for CompUtils to Close"
+WAIT_SECONDS = 30
+
+
+class State:
+    """The job's state file, read and rewritten whole (CompUtils reads it; its keys are kept)."""
+    def __init__(self, path: Path):
+        self.path = path
+
+    def Read(self) -> dict:
+        try:
+            return json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def Set(self, **changes) -> None:
+        state = self.Read()
+        state.update(changes)
+        temporary = self.path.with_name(self.path.name + ".tmp")
+        temporary.write_text(json.dumps(state, indent=2))
+        os.replace(str(temporary), str(self.path))
+
+    def Phase(self, phase: str) -> None:
+        print(f"\n=== {phase} ===", flush=True)
+        self.Set(phase=phase)
+
+
+def RemoveEnv(conda: Path, prefix: Path) -> None:
+    """Remove an environment by its path (conda's records too); a folder conda doesn't know is deleted."""
+    if not prefix.exists():
+        return
+    Run([conda, "remove", "--all", "-y", "-p", prefix], check=False)
+    if prefix.exists():
+        shutil.rmtree(str(prefix), ignore_errors=True)
+
+
+def Executables():
+    """(pid, executable path) of every process this user can see on this machine: /proc on Linux, the process list on
+    Windows (ctypes; Windows lets a folder be renamed and deleted under a running program, so it must be asked)."""
+    if os.path.isdir("/proc"):
+        for pid in os.listdir("/proc"):
+            if pid.isdigit():
+                try:
+                    yield int(pid), os.readlink("/proc/{}/exe".format(pid))
+                except OSError:
+                    continue
+        return
+    if os.name != "nt":
+        return
+    import ctypes
+    from ctypes import wintypes
+    psapi, kernel = ctypes.WinDLL("psapi"), ctypes.WinDLL("kernel32")
+    pids, used = (wintypes.DWORD * 8192)(), wintypes.DWORD()
+    if not psapi.EnumProcesses(pids, ctypes.sizeof(pids), ctypes.byref(used)):
+        return
+    for pid in pids[:used.value // ctypes.sizeof(wintypes.DWORD)]:
+        handle = kernel.OpenProcess(0x1000, False, pid)          # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            continue
+        buffer, size = ctypes.create_unicode_buffer(1024), wintypes.DWORD(1024)
+        if kernel.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+            yield pid, buffer.value
+        kernel.CloseHandle(handle)
+
+
+def InUse(prefix: Path) -> bool:
+    """Whether a process of this user on this machine runs from the environment (its executable is inside it)."""
+    inside, me = os.path.normcase(os.path.realpath(str(prefix))) + os.sep, os.getpid()
+    for pid, executable in Executables():
+        if pid != me and os.path.normcase(os.path.realpath(executable)).startswith(inside):
+            return True
+    return False
+
+
+class JobFailed(Exception):
+    pass
+
+
+def Install(conda: Path, prefix: Path, args) -> None:
+    """CompUtils (the code CompUtils had installed: --package, or nothing for a checkout on --pythonpath), then the
+    self-test: every module imports and GoodVibes runs."""
+    if args.package:
+        if Run(InPrefix(conda, prefix, *PipInstall(args.package, args.editable)), check=False) != 0:
+            raise JobFailed("pip couldn't install CompUtils")
+    # Never the caller's PYTHONPATH: the test must read the new environment's code (or the checkout it was given)
+    env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    if args.pythonpath:
+        env["PYTHONPATH"] = args.pythonpath
+    if Run(InPrefix(conda, prefix, *SELF_TEST), check=False, env=env) != 0:
+        raise JobFailed("the self-test failed (see the log)")
+
+
+def SwapIn(conda: Path, prefix: Path, built: Path, args, state: State) -> None:
+    """Replace the environment at prefix with the one built beside it."""
+    aside = Path(str(prefix) + ".old")
+    guard = Path(str(prefix) + ".swapping")
+    RemoveEnv(conda, aside)
+    while True:
+        if InUse(prefix):
+            if state.Read().get("phase") != WAITING:
+                state.Phase(WAITING)
+            time.sleep(WAIT_SECONDS)
+            continue
+        state.Phase("Swapping")
+        guard.write_text(str(os.getpid()))
+        try:
+            os.rename(str(prefix), str(aside))
+            break
+        except OSError:
+            # Something inside is held open after all: wait, as for a process
+            guard.unlink()
+            if state.Read().get("phase") != WAITING:
+                state.Phase(WAITING)
+            time.sleep(WAIT_SECONDS)
+    try:
+        if Run([conda, "create", "-y", "--offline", "-p", prefix, "--clone", built], check=False) != 0:
+            raise JobFailed("conda couldn't copy the new environment into place")
+        # The clone moved CompUtils' own files: install it again, so its command points at the final place
+        Install(conda, prefix, args)
+    except Exception:
+        print("\nThe swap failed: putting the old environment back.", flush=True)
+        shutil.rmtree(str(prefix), ignore_errors=True)
+        try:
+            os.rename(str(aside), str(prefix))
+        except OSError as error:
+            raise RollbackFailed("the swap failed, and the old environment couldn't be put back ({}): rename {} to {}"
+                                 .format(error, aside, prefix))
+        raise
+    finally:
+        if guard.exists():
+            guard.unlink()
+    shutil.rmtree(str(aside), ignore_errors=True)
+    RemoveEnv(conda, built)
+
+
+class RollbackFailed(JobFailed):
+    pass
+
+
+def Background(args) -> None:
+    state = State(args.background)
+    lock = args.background.with_suffix(".lock")
+    state.Set(pid=os.getpid(), host=socket.gethostname())
+    prefix = args.prefix
+    built = prefix if args.mode == "install" else Path(str(prefix) + "-next")
+    conda = FindConda(args.conda_dir)
+    # Whether built is this job's to remove on a failure (never an environment that was there before it)
+    ours = False
+    try:
+        if conda is None:
+            raise JobFailed("conda wasn't found")
+        name, channels, specs = ReadYml(args.yml)
+        state.Phase("Building")
+        if args.mode == "install" and prefix.exists():
+            raise JobFailed("{} already exists".format(prefix))
+        if args.mode != "install" and not (prefix / "conda-meta").is_dir():
+            raise JobFailed("there's no environment at {}".format(prefix))
+        # A -next left by an earlier job that died
+        RemoveEnv(conda, built)
+        ours = True
+        if args.mode == "refresh":
+            # A copy of the environment as it is (the package cache, so no channel is asked), then what's missing
+            if Run([conda, "create", "-y", "--offline", "-p", built, "--clone", prefix], check=False) != 0:
+                raise JobFailed("conda couldn't copy the environment")
+            if Run([conda, "install", "-y", "-p", built, *ChannelArgs(channels), *specs], check=False) != 0:
+                raise JobFailed("conda couldn't install the packages")
+        elif Run([conda, "create", "-y", "-p", built, *ChannelArgs(channels), *specs], check=False) != 0:
+            raise JobFailed("conda couldn't create the environment")
+        state.Phase("Installing CompUtils")
+        Install(conda, built, args)
+        if args.mode != "install":
+            SwapIn(conda, prefix, built, args, state)
+        state.Set(phase=DONE, finished=time.time())
+        print("\n✓ Done.", flush=True)
+    except BaseException as error:
+        # Fail() (an unreadable env file) exits; its message is already in the log
+        reason = (str(error) if isinstance(error, JobFailed) else "it stopped (see the log)"
+                  if isinstance(error, SystemExit) else repr(error))
+        print("\n✗ " + reason, flush=True)
+        current = state.Read().get("phase", "")
+        # The environment in use is as it was (a failed swap put it back): what was built goes. Unless the old one
+        # couldn't be put back, when the built one is the only working copy
+        if ours and not isinstance(error, RollbackFailed):
+            RemoveEnv(conda, built)
+        state.Set(phase=FAILED, failedDuring=current, error=reason, finished=time.time())
+    finally:
+        if lock.exists():
+            lock.unlink()
+
+
 # ─── Entry point ───────────────────────────────────────────────────────────────
 
 def ParseArgs():
@@ -273,11 +522,25 @@ def ParseArgs():
                         help=f"Where to find conda, or install Miniconda if it isn't there (default: search, "
                              f"then install to {DEFAULT_CONDA_DIR}).")
     parser.add_argument("--yml", type=Path, help="Build the environment from this env file instead of the branch's.")
-    return parser.parse_args()
+    # The background mode CompUtils runs (never typed; see Background)
+    hidden = argparse.SUPPRESS
+    parser.add_argument("--background", type=Path, metavar="STATE", help=hidden)
+    parser.add_argument("--mode", choices=("install", "refresh", "rebuild"), help=hidden)
+    parser.add_argument("--prefix", type=Path, help=hidden)
+    parser.add_argument("--package", help=hidden)
+    parser.add_argument("--editable", action="store_true", help=hidden)
+    parser.add_argument("--pythonpath", help=hidden)
+    args = parser.parse_args()
+    if args.background is not None and (args.mode is None or args.prefix is None or args.yml is None):
+        parser.error("--background needs --mode, --prefix and --yml")
+    return args
 
 
 def Main() -> None:
     args = ParseArgs()
+    if args.background is not None:
+        Background(args)
+        return
     print("=" * 64)
     print(" CompUtils Installer")
     print("=" * 64)
@@ -295,9 +558,9 @@ def Main() -> None:
         else:
             print(f"✓ Using conda at {conda}.")
         with tempfile.TemporaryDirectory() as scratch:
-            BuildEnv(conda, args.yml or FetchYml(Path(scratch)))
-        InstallCompUtils(conda)
-        works = CheckInstall(conda)
+            name = BuildEnv(conda, args.yml or FetchYml(Path(scratch)))
+        InstallCompUtils(conda, name)
+        works = CheckInstall(conda, name)
         RemoveLegacyCuAlias()
         AddAliases()
     except (subprocess.CalledProcessError, OSError) as error:  # OSError covers failed downloads
@@ -311,7 +574,7 @@ def Main() -> None:
     if installed:
         print("       (needed once, so the new conda is set up in your shell)")
     print("  2. Activate the environment:     con")
-    print(f"       (or equivalently:           conda activate {ENV_NAME})")
+    print(f"       (or equivalently:           conda activate {name})")
     print("  3. Run CompUtils:                cu")
     print("       (the first run walks you through setting it up, and asks for your lab's profile if it has one)")
     print()

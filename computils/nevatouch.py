@@ -18,6 +18,7 @@ from rich.markup import escape
 from .actions  import NTS_SP, NTS_DONE
 from .console  import console
 from .defaults import Defaults
+from .environment import StablePython, SwapGuard
 from .fileops  import (ExtractFrom, ExtractTermination, ExtractProgram, StageCount, IncrementSuffix, fileCreation,
                        TERMINATION_TAIL)
 from .intent   import NevaTouchIntent, SinglePointIntent, RunIntent
@@ -39,7 +40,8 @@ def HookCommand(step: str, output: Path, cpus: int | None = None, memoryRatio: f
     """The hook's command: this CompUtils (its own interpreter, so neither PATH nor `module purge` matters), the step,
     the job's output, its ID, the resources of the job the step submits (None: the config's) and, for a re-run, its
     count and the original stage it starts at (so a hook without its record still counts right)."""
-    command = [sys.executable, "-m", "computils", "--neva-touch", step, str(output), JOB_ID]
+    # <env>/bin/python, not python3.11: a queued job's hook still runs after its environment is rebuilt on a new Python
+    command = [StablePython(), "-m", "computils", "--neva-touch", step, str(output), JOB_ID]
     if cpus is not None:
         command += ["--cpus", str(cpus)]
     if memoryRatio is not None:
@@ -55,9 +57,12 @@ def HookLines(command: list[str], folder: Path, log: Path) -> str:
     in a subshell (ORCA's EXIT trap copies results from the scratch folder it is in), and everything it prints goes to
     the log: SLURM -o is the job's own output, which the stalker, GoodVibes and cclib read."""
     words = " ".join(f'"{word}"' if word == JOB_ID else shlex.quote(word) for word in command)
+    guard = shlex.quote(str(SwapGuard()))
     return ("status=$?\n"
             f"# Neva-Touch Scheduler: this chain's next step, once the program has ended. Its messages go to {log.name},"
             " never into the job's own output\n"
+            f"# While CompUtils' environment is being swapped for an updated one (cu -env), wait (up to 10 minutes)\n"
+            f"for i in $(seq 60); do [ -e {guard} ] || break; sleep 10; done\n"
             f"( cd {shlex.quote(str(folder))} && {words} ) >> {shlex.quote(str(log))} 2>&1\n"
             "exit $status\n")
 

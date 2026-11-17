@@ -231,7 +231,7 @@ class Busy(Popup):
         event.stop()
 
 
-def Notice(app, title: str, message: str, severity: str = "", then=None) -> None:
+def Notice(app, title: str, message: str | Text, severity: str = "", then=None) -> None:
     """A one-button Popup (⏎ OK); then() runs once it is dismissed."""
     app.push_screen(Popup(title, message, severity=severity), (lambda _: then()) if then else None)
 

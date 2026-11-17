@@ -20,6 +20,7 @@ class Action(Enum):
     GOODVIBES        = "goodvibes"  # -gv
     FIRST_TIME_SETUP = "first"      # -first
     UPDATE           = "update"     # -up
+    ENVIRONMENT      = "env"        # -env
     INIT_PROJECT     = "init"       # -init
     PROFILE          = "profile"    # -profile
     REFRESH          = "refresh"    # -refresh

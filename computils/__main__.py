@@ -1,6 +1,7 @@
 """Entry point for the cu command (and `python -m computils`)."""
 import sys
 from pathlib import Path
+from rich.markup import escape
 from .defaults import Defaults
 from .catalog  import Catalog
 from .console  import ApplyTheme, console
@@ -14,6 +15,10 @@ def Main() -> None:
         BuildParser().print_help()
         return
     argv = sys.argv[1:]
+    # The environment check (conda-installer.py's, before an environment is swapped in): touches nothing either
+    if argv == ["--self-test"]:
+        from .environment import SelfTest
+        raise SystemExit(SelfTest())
     # A Neva-Touch Scheduler hook (in a job script, or a stalker's run of one): nobody is there to answer, so nothing
     # may prompt, and the startup checks below belong to the runs people start
     nevaTouchHook = argv[:1] == ["--neva-touch"]
@@ -60,6 +65,11 @@ def Main() -> None:
         # covers live jobs (one squeue call, and only while some tracked job is still live)
         from .stalk import CheckTracked
         CheckTracked()
+        # Environment jobs that ended since the last run, each reported once (the TUI shows them itself)
+        if not opensTUI:
+            from .environment import Reports
+            for severity, message in Reports():
+                console.print(f"[{severity}]{escape(message)}[/{severity}]")
         if opensTUI and "notifications.toml" in Defaults.generatedFiles:
             from .wizards import NotificationSetup
             NotificationSetup()

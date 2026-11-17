@@ -11,7 +11,8 @@ from .actions import CubeOption, Action, FILE_ACTIONS
 ACTION_FLAGS = {
     "run": Action.RUN, "singlePoint": Action.SINGLE_POINT, "bench": Action.BENCHMARK, "cube": Action.CUBE,
     "rerun": Action.RERUN, "formcheck": Action.FORM_CHECK, "excel": Action.EXCEL, "goodvibes": Action.GOODVIBES,
-    "first": Action.FIRST_TIME_SETUP, "update": Action.UPDATE, "init": Action.INIT_PROJECT,
+    "first": Action.FIRST_TIME_SETUP, "update": Action.UPDATE, "environment": Action.ENVIRONMENT,
+    "init": Action.INIT_PROJECT,
     "profile": Action.PROFILE, "refresh": Action.REFRESH, "attributions": Action.ATTRIBUTIONS,
     "neva_touch": Action.NEVA_TOUCH,
 }
@@ -35,6 +36,10 @@ def BuildParser() -> argparse.ArgumentParser:
                              help="Run GoodVibes interactively on the given outputs (default: every output here), then convert to xlsx.")
     actionGroup.add_argument('-first','--first', action='store_true', help="Re-run first-time setup.")
     actionGroup.add_argument('-up', '--update', action='store_true', help="Update CompUtils from GitHub.")
+    actionGroup.add_argument('-env', '--environment', nargs='*', metavar="ARG",
+                             help="Show the CompUtils environments' status. 'refresh|rebuild|install [ENVIRONMENT]' "
+                                  "updates one in the background (default: the one CompUtils runs from), e.g. "
+                                  "'-env install debug'.")
     actionGroup.add_argument('-init', '--init', action='store_true', help="Mark the CWD as a project root.")
     actionGroup.add_argument('-profile', '--profile', nargs='?', const="", metavar="FILE",
                              help="Apply a lab profile (its clusters and shared settings). Without FILE, re-apply the last one.")
@@ -99,6 +104,12 @@ def ParseCLI(argv: list[str]) -> Intent:
         draft.profileFile = Path(args.profile).expanduser()
     if args.refresh is not None:
         draft.refreshScope = args.refresh
+    if args.environment is not None:
+        if len(args.environment) > 2:
+            console.print("[error]-env takes at most a job and an environment, e.g. '-env install debug'.[/error]")
+            raise SystemExit(2)
+        job, draft.environmentVariant = (args.environment + ["", ""])[:2]
+        draft.environmentJob = job.lower()
     if args.neva_touch:
         draft.nevaTouchStep, output, draft.nevaTouchJob = args.neva_touch
         draft.files = [Path(output)]

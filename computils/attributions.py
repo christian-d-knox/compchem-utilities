@@ -169,7 +169,8 @@ SECTIONS = [
                "contributors", "Apache-2.0 (and BSD-3-Clause for older code)", "https://github.com/dateutil/dateutil",
                distribution="python-dateutil", copyright="Copyright 2017- Paul Ganssle; Copyright 2017- dateutil "
                "contributors; Copyright (c) 2003-2011 Gustavo Niemeyer", via="pandas"),
-        Credit("six", "Python 2/3 compatibility for python-dateutil.", "Benjamin Peterson", "MIT",
+        Credit("six", "Python 2/3 compatibility for python-dateutil before 4.0 (environments built before it).",
+               "Benjamin Peterson", "MIT",
                "https://github.com/benjaminp/six", distribution="six", copyright="Copyright (c) 2010-2024 Benjamin "
                "Peterson", via="python-dateutil"),
         Credit("tzdata", "Time zone data for pandas (the IANA tz database, which is public domain).",
@@ -233,12 +234,40 @@ SECTIONS = [
         Credit("threadpoolctl", "Thread pool control for scikit-learn.", "Thomas Moreau and the threadpoolctl "
                "contributors", "BSD-3-Clause", "https://github.com/joblib/threadpoolctl", distribution="threadpoolctl",
                copyright="Copyright (c) 2019, threadpoolctl contributors", via="scikit-learn"),
+        Credit("Narwhals", "A dataframe compatibility layer for scikit-learn (1.9 and later).", "Marco Gorelli and the "
+               "Narwhals contributors", "MIT", "https://github.com/narwhals-dev/narwhals", distribution="narwhals",
+               copyright="Copyright (c) 2024 to present, Marco Gorelli", via="scikit-learn"),
+        Credit("cloudpickle", "Pickling of functions for joblib's parallel workers.", "The cloudpickle contributors",
+               "BSD-3-Clause", "https://github.com/cloudpipe/cloudpickle", distribution="cloudpickle",
+               copyright="Copyright (c) 2015, Cloudpickle contributors; Copyright (c) 2012, Regents of the University "
+               "of California", via="joblib"),
         Credit("PySide6 (Qt for Python)", "A graphical interface (planned).", "The Qt Company", "LGPL-3.0-only (also "
                "GPL or commercial)", "https://www.qt.io/qt-for-python", distribution="PySide6"),
         Credit("Shiboken6", "The binding generator runtime behind PySide6.", "The Qt Company", "LGPL-3.0-only (also "
                "GPL or commercial)", "https://www.qt.io/qt-for-python", distribution="shiboken6", via="PySide6"),
         Credit("Qt 6", "The framework PySide6 wraps.", "The Qt Company and the Qt Project", "LGPL-3.0-only (also GPL "
                "or commercial)", "https://www.qt.io", via="PySide6"),
+        Credit("RDKit", "Cheminformatics (planned): molecules from SMILES, conformers.", "Greg Landrum and the RDKit "
+               "contributors", "BSD-3-Clause", "https://www.rdkit.org", distribution="rdkit",
+               copyright="Copyright (c) 2006-2015, Rational Discovery LLC, Greg Landrum, and Julie Penzotti and others",
+               citation="RDKit: Open-source cheminformatics. https://www.rdkit.org (the RDKit has no paper; it also asks "
+               "for the DOI of the version used, listed at https://doi.org/10.5281/zenodo.591637)"),
+        Credit("xtb", "Semiempirical extended tight-binding methods (GFN-xTB) and the GFN-FF force field (planned); "
+               "CREST's engine.", "The Grimme group (Mulliken Center for Theoretical Chemistry, University of Bonn) "
+               "and the xtb contributors", "LGPL-3.0-or-later", "https://github.com/grimme-lab/xtb",
+               citation="C. Bannwarth, E. Caldeweyher, S. Ehlert, A. Hansen, P. Pracht, J. Seibert, S. Spicher, "
+               "S. Grimme, WIREs Comput. Mol. Sci. 2021, 11, e1493. doi:10.1002/wcms.1493; the program: "
+               "M. Katbashev, M. Stahn, T. Rose, V. Alizadeh, M. Friede, C. Plett, P. Steinbach, S. Ehlert, J. Phys. "
+               "Chem. A 2025, 129, 2667-2682. doi:10.1021/acs.jpca.4c08263; and the method used, e.g. GFN2-xTB: "
+               "C. Bannwarth, S. Ehlert, S. Grimme, J. Chem. Theory Comput. 2019, 15, 1652-1671. "
+               "doi:10.1021/acs.jctc.8b01176 (xtb's README lists the papers for GFN1-xTB, GFN-FF and ALPB/GBSA)"),
+        Credit("CREST", "Conformer and rotamer searches (planned; Linux, as conda-forge has no Windows build).",
+               "Philipp Pracht, Stefan Grimme and the CREST contributors", "LGPL-3.0-or-later",
+               "https://github.com/crest-lab/crest",
+               citation="P. Pracht, S. Grimme, C. Bannwarth, F. Bohle, S. Ehlert, G. Feldmann, J. Gorges, M. Müller, "
+               "T. Neudecker, C. Plett, S. Spicher, P. Steinbach, P. A. Wesołowski, F. Zeller, J. Chem. Phys. 2024, "
+               "160, 114110. doi:10.1063/5.0197592; P. Pracht, F. Bohle, S. Grimme, Phys. Chem. Chem. Phys. 2020, 22, "
+               "7169-7192. doi:10.1039/C9CP06869D (CREST's README lists the papers behind each of its algorithms)"),
     ]),
     Section("Infrastructure", "What CompUtils is installed with, runs on and talks to.", [
         Credit("Slurm", "Every job is submitted with sbatch and followed with squeue.", "SchedMD LLC and the Slurm "

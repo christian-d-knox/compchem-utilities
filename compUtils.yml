@@ -1,7 +1,10 @@
 # The CompUtils environment. conda-installer.py builds it (with only these
 # channels: --override-channels) and then pip-installs CompUtils from its branch
 # with --no-deps, so this list must cover pyproject.toml's dependencies. It reads
-# flat lists only: no nested entries such as '- pip:'.
+# flat lists only: no nested entries such as '- pip:'. CompUtils keeps it
+# current (cu -env, the TUI's Update Environment) from the branch's copy, so
+# adding a package here reaches every install. Windows has its own file:
+# @platform linux
 name: compUtils
 channels:
   - conda-forge
@@ -22,3 +25,8 @@ dependencies:
   - scikit-learn
   - pyside6
   - periodictable
+  # For workflows to come: cheminformatics (SMILES, conformers), semiempirical
+  # xTB methods, and conformer/rotamer searches
+  - rdkit
+  - xtb
+  - crest
