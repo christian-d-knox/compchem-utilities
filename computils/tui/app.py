@@ -5,6 +5,7 @@ import os, time
 from pathlib import Path
 
 from rich.markup import escape
+from rich.text import Text
 from textual.app import App
 from textual.containers import Center, Middle
 from textual.screen import ModalScreen
@@ -15,12 +16,15 @@ from ..console import console
 from ..intent  import Intent
 from ..        import jobs
 from ..        import update
+from ..        import environment
 from .         import RELAUNCH, UPDATED_VARIABLE
 from .common   import CAPTURE, Busy, ChoiceList, Notice, Popup
-from .home     import HomeScreen
+from .home     import HomeScreen, ITEM_LABELS, ENVIRONMENT_ITEM
 from .stalker  import StalkerScreen, StalkingRoutine
 
 MIN_WIDTH, MIN_HEIGHT = 84, 24
+# How often the app looks at the environment jobs' state files (seconds)
+ENVIRONMENT_WATCH = 10
 
 
 class TooSmallScreen(ModalScreen):
@@ -150,6 +154,9 @@ class CompUtilsApp(App):
         updated = os.environ.pop(UPDATED_VARIABLE, "")
         if updated:
             Notice(self, "Updated", f"CompUtils is now {updated}.", "good")
+        # Environment jobs run in the background (environment.py): their progress and endings
+        self.call_after_refresh(self.WatchEnvironmentJobs)
+        self.set_interval(ENVIRONMENT_WATCH, self.WatchEnvironmentJobs)
 
     # ─── Submitting in the app ────────────────────────────────────────
 
@@ -281,13 +288,24 @@ class CompUtilsApp(App):
                          Chosen)
 
     def _Install(self, branch: str) -> None:
-        self.push_screen(Busy("Update CompUtils", f"Installing from branch {branch}..."))
+        self.push_screen(Busy("Update CompUtils", f"Checking the environment, then installing from branch {branch}..."))
 
         def Install() -> None:
+            # Never code the environment can't run, and never under a running environment job (its swap would undo it)
+            problem = environment.CodeUpdateProblem(update.InstalledSource(), branch)
+            if problem:
+                self.call_from_thread(self._InstallBlocked, problem)
+                return
             with CAPTURE.Capture() as log:
                 done = update.Install(branch)
             self.call_from_thread(self._Installed, branch, done, log[0])
         self.run_worker(Install, thread=True, group="update", exit_on_error=False)
+
+    def _InstallBlocked(self, problem: list[str]) -> None:
+        self.pop_screen()
+        self.push_screen(Popup("Update CompUtils", Text("\n".join(problem)), [("e", "Update Environment", "env")],
+                               "warning", cancel="Close"),
+                         lambda result: self.OpenEnvironment() if result == "env" else None)
 
     def _Installed(self, branch: str, done: bool, log) -> None:
         self.pop_screen()
@@ -298,6 +316,109 @@ class CompUtilsApp(App):
         source = update.InstalledSource()
         os.environ[UPDATED_VARIABLE] = f"{source.branch} @ {source.commit[:7]}" if source.commit else branch
         self.exit(RELAUNCH)
+
+    # ─── Updating the environments (environment.py; TUI_DESIGN 4.14) ─
+
+    def OpenEnvironment(self, chosen: str | None = None) -> None:
+        """Every environment file on the installed branch against what is installed, then the chosen environment's
+        pop-up (default: the one CompUtils runs from). Its jobs run in the background (conda-installer.py)."""
+        self.push_screen(Busy("Update Environment", "Checking GitHub..."))
+
+        def Check() -> None:
+            source = update.InstalledSource()
+            variants = environment.ReadVariants(source)
+            statuses = ([] if isinstance(variants, str) else
+                        [environment.CheckStatus(variant) for variant in variants.found])
+            self.call_from_thread(self._EnvironmentsRead, source, variants, statuses, chosen)
+        self.run_worker(Check, thread=True, group="update", exit_on_error=False)
+
+    def _EnvironmentsRead(self, source, variants, statuses: list, chosen: str | None) -> None:
+        self.pop_screen()
+        if isinstance(variants, str):
+            Notice(self, "Update Environment", f"Couldn't read the environment files ({variants}).", "error")
+            return
+        if not statuses:
+            Notice(self, "Update Environment", f"{variants.where[0].upper()}{variants.where[1:]} has no environment "
+                   f"file for this platform.", "warning")
+            return
+        wanted = chosen or environment.RunningName()
+        status = next((status for status in statuses if status.variant.name == wanted), statuses[0])
+        self._EnvironmentPopup(source, variants, statuses, status)
+
+    def _EnvironmentPopup(self, source, variants, statuses: list, status) -> None:
+        lines = environment.StatusLines(status, variants.where)
+        name = status.variant.name
+        if status.running is False and environment.RunningName() not in [one.variant.name for one in statuses]:
+            lines.insert(0, f"CompUtils runs from {environment.RunningName() or 'outside conda'}, which no "
+                            f"environment file names.")
+        choices = []
+        if status.job is None:
+            if status.prefix is None:
+                choices.append(("⏎", "Install", "install"))
+                lines += ["", "Installing runs in the background; Home shows it."]
+            elif status.needsRebuild:
+                choices.append(("r", "Rebuild", "rebuild"))
+                lines += ["", f"Its Python changed, so it is rebuilt from {status.variant.file}, in the background."]
+            else:
+                if not status.current:
+                    choices.append(("⏎", "Refresh", "refresh"))
+                    lines += ["", "Refresh runs in the background; Home shows it."]
+                choices.append(("r", "Rebuild", "rebuild"))
+        if len(statuses) > 1:
+            choices.append(("o", "Other Environment", "other"))
+        if environment.LogPath(name).is_file():
+            choices.append(("l", "Log", "log"))
+
+        def Answered(result: str) -> None:
+            match result:
+                case "install" | "refresh":
+                    self._StartEnvironmentJob(status, result, source)
+                case "rebuild":
+                    self.push_screen(Popup("Rebuild", f"Rebuild {name} from {status.variant.file}? Packages you added "
+                                           f"to it yourself are not kept.", [("⏎", "Rebuild", "rebuild")]),
+                                     lambda answer: self._StartEnvironmentJob(status, "rebuild", source)
+                                     if answer == "rebuild" else None)
+                case "other":
+                    entries = [(one.variant.name, f"{one.variant.label} ({one.variant.name}): {one.Verdict()}")
+                               for one in statuses]
+
+                    def Chosen(value: str) -> None:
+                        other = next((one for one in statuses if one.variant.name == value), None)
+                        if other is not None:
+                            self._EnvironmentPopup(source, variants, statuses, other)
+                    self.push_screen(ChoiceList("Other Environment", "Which environment?", entries, name), Chosen)
+                case "log":
+                    self.push_screen(Popup(f"Log: {name}", Text(environment.LogTail(name) or "(Empty)")),
+                                     lambda _: self._EnvironmentPopup(source, variants, statuses, status))
+        self.push_screen(Popup("Update Environment", Text("\n".join(lines)), choices, cancel="Close"), Answered)
+
+    def _StartEnvironmentJob(self, status, mode: str, source) -> None:
+        self.push_screen(Busy("Update Environment", f"Starting: {environment.DOING[mode]} {status.variant.name}..."))
+
+        def Start() -> None:
+            started, message = environment.Start(status, mode, source)
+            self.call_from_thread(self._EnvironmentJobStarted, started, message)
+        self.run_worker(Start, thread=True, group="update", exit_on_error=False)
+
+    def _EnvironmentJobStarted(self, started: bool, message: str) -> None:
+        self.pop_screen()
+        # Text: paths and conda's words are never read as markup
+        Notice(self, "Update Environment", Text(message), "good" if started else "error")
+        self.WatchEnvironmentJobs()
+
+    def WatchEnvironmentJobs(self) -> None:
+        """Every few seconds: Home's Update Environment item names a running job, and a job that ended is reported
+        once (on Home, so a form isn't interrupted)."""
+        job = environment.AnyJobRunning()
+        label = f"Update Env: {environment.DOING[job['mode']]}" if job else ITEM_LABELS[ENVIRONMENT_ITEM]
+        for screen in self.screen_stack:
+            if isinstance(screen, HomeScreen):
+                screen.SetItemLabel(ENVIRONMENT_ITEM, label)
+        if isinstance(self.screen, HomeScreen):
+            reports = environment.Reports()
+            if reports:
+                severity = "error" if any(severity == "error" for severity, _ in reports) else "good"
+                Notice(self, "Update Environment", Text("\n\n".join(message for _, message in reports)), severity)
 
     def action_quit(self) -> None:
         # A screen holding unsaved work (the config editor) asks first

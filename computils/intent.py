@@ -143,6 +143,14 @@ class UpdateIntent(Intent):
 
 
 @dataclass
+class EnvironmentIntent(Intent):
+    """`cu -env [refresh|rebuild|install] [VARIANT]` — the environments' status, or a job on one (environment.py).
+    job '' shows the status; variant '' is the one CompUtils runs from."""
+    job:     str = ""
+    variant: str = ""
+
+
+@dataclass
 class InitProjectIntent(Intent):
     """`cu -init` — mark the CWD as a project root."""
     pass
@@ -185,7 +193,8 @@ class StalkIntent(Intent):
     loop: bool = False
 
 
-# The Intent each Action finalizes to. Excel and Update aren't listed: their fields are named differently on the draft
+# The Intent each Action finalizes to. Excel, Update and Environment aren't listed: their fields are named differently
+# on the draft
 _INTENT_TYPES = {
     Action.RUN: RunIntent, Action.SINGLE_POINT: SinglePointIntent, Action.BENCHMARK: BenchmarkIntent,
     Action.RERUN: ReRunIntent, Action.CUBE: CubeIntent, Action.FORM_CHECK: FormCheckIntent,
@@ -251,6 +260,10 @@ class IntentDraft:
     # UPDATE
     updateBranch: Optional[str] = None  # None: the branch CompUtils was installed from
 
+    # ENVIRONMENT: the job ('' status) and the variant ('' the running one)
+    environmentJob:     str = ""
+    environmentVariant: str = ""
+
     # PROFILE
     profileFile: Optional[Path] = None  # None: re-apply the last one
 
@@ -292,6 +305,9 @@ class IntentDraft:
         if self.nevaTouch and self.nevaTouch not in NTS_STEPS:
             errors.append(f"Unknown Neva-Touch Scheduler step '{self.nevaTouch}'.")
 
+        if self.action == Action.ENVIRONMENT and self.environmentJob not in ("", "refresh", "rebuild", "install"):
+            errors.append(f"-env takes refresh, rebuild or install, then an environment (got '{self.environmentJob}').")
+
         if self.action == Action.REFRESH and self.refreshScope not in ("", "project"):
             errors.append(f"-refresh takes no argument, or 'project' (got '{self.refreshScope}').")
 
@@ -309,6 +325,8 @@ class IntentDraft:
                 return ExcelIntent(inputFile=self.excelInputFile)
             case Action.UPDATE:
                 return UpdateIntent(branch=self.updateBranch)
+            case Action.ENVIRONMENT:
+                return EnvironmentIntent(job=self.environmentJob, variant=self.environmentVariant)
             case Action.REFRESH:
                 return RefreshIntent(project=self.refreshScope == "project")
             case Action.STALK:

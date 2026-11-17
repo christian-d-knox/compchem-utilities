@@ -9,6 +9,7 @@ import json
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,8 +34,10 @@ def PackageUrl(branch: str) -> str:
 class Source:
     """Where the running CompUtils was installed from."""
     branch:    str
-    commit:    str = ""      # the full SHA pip recorded ('' if unknown)
-    localPath: str = ""      # set for a local install (editable, a folder, or a checkout pip doesn't know)
+    commit:    str  = ""     # the full SHA pip recorded ('' if unknown)
+    localPath: str  = ""     # set for a local install (editable, a folder, or a checkout pip doesn't know)
+    editable:  bool = False  # a local install pip made editable (pip install -e)
+    pipRecord: bool = True   # False: running from a checkout pip never installed (PYTHONPATH)
 
 
 @dataclass
@@ -49,26 +52,53 @@ def InstalledSource() -> Source:
         record = json.loads(importlib.metadata.distribution(PACKAGE).read_text("direct_url.json") or "{}")
     except importlib.metadata.PackageNotFoundError:
         # Not installed by pip at all: running from a checkout
-        return Source(FALLBACK_BRANCH, localPath=str(Path(__file__).resolve().parent.parent))
+        return Source(FALLBACK_BRANCH, localPath=str(Path(__file__).resolve().parent.parent), pipRecord=False)
     except ValueError:
         record = {}
     if "dir_info" in record:
-        return Source(FALLBACK_BRANCH, localPath=record.get("url", "").removeprefix("file://") or "a local folder")
+        url = record.get("url", "")
+        path = urllib.request.url2pathname(urllib.parse.urlparse(url).path) if url.startswith("file:") else url
+        return Source(FALLBACK_BRANCH, localPath=path or "a local folder",
+                      editable=bool(record["dir_info"].get("editable")))
     vcs = record.get("vcs_info", {})
     return Source(vcs.get("requested_revision") or FALLBACK_BRANCH, vcs.get("commit_id", ""))
 
 
+def _Get(url: str, accept: str = "") -> str:
+    """The text at url. Raises urllib.error.URLError / OSError / ValueError."""
+    request = urllib.request.Request(url, headers={"User-Agent": "CompUtils", **({"Accept": accept} if accept else {})})
+    with urllib.request.urlopen(request, timeout=API_TIMEOUT) as response:
+        return response.read().decode()
+
+
+def _Reason(error: Exception) -> str:
+    if isinstance(error, urllib.error.HTTPError):
+        return f"GitHub answered {error.code} {error.reason}"
+    return str(getattr(error, "reason", error))
+
+
 def _GitHub(path: str):
     """A GitHub API response (JSON), or a str saying why there isn't one."""
-    request = urllib.request.Request(f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/{path}",
-                                     headers={"User-Agent": "CompUtils", "Accept": "application/vnd.github+json"})
     try:
-        with urllib.request.urlopen(request, timeout=API_TIMEOUT) as response:
-            return json.loads(response.read().decode())
-    except urllib.error.HTTPError as error:
-        return f"GitHub answered {error.code} {error.reason}"
+        return json.loads(_Get(f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/{path}",
+                               "application/vnd.github+json"))
     except (urllib.error.URLError, OSError, ValueError) as error:
-        return str(getattr(error, "reason", error))
+        return _Reason(error)
+
+
+def RepoFiles(ref: str) -> list[str] | str:
+    """The names of the files at the repository's root at ref (a branch or commit), or why they couldn't be read."""
+    answer = _GitHub(f"contents?ref={urllib.parse.quote(ref)}")
+    return answer if isinstance(answer, str) else [entry["name"] for entry in answer if entry.get("type") == "file"]
+
+
+def RawFile(ref: str, path: str) -> tuple[bool, str]:
+    """(True, the text of the repository's file at ref), or (False, why it couldn't be read). Raw files don't count
+    against the API's hourly limit."""
+    try:
+        return True, _Get(f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{ref}/{path}")
+    except (urllib.error.URLError, OSError, ValueError) as error:
+        return False, _Reason(error)
 
 
 def LatestCommit(branch: str) -> Commit | str:

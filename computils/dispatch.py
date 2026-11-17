@@ -18,7 +18,7 @@ from .intent    import (
     RunIntent, SinglePointIntent, BenchmarkIntent, ReRunIntent,
     CubeIntent, FormCheckIntent, ExcelIntent, GoodVibesIntent,
     FirstTimeSetupIntent, UpdateIntent, InitProjectIntent, ProfileIntent, RefreshIntent, StalkIntent,
-    AttributionsIntent, NevaTouchIntent,
+    AttributionsIntent, NevaTouchIntent, EnvironmentIntent,
 )
 from .fileops   import grabPaths, formCheck, fileCreation, HasContent, MapFile, ReadMolecule, WriteXyz
 from .jobs      import runJob
@@ -26,6 +26,7 @@ from .          import jobs
 from .workflows import genBench, genSinglePoint, genReRun, gimmeCubes
 from .analysis  import goodVibesProcessor, GoodVibesArguments, SpcPartners, GOODVIBES_OUTPUT
 from .notify    import CheckAndBroadcast
+from .          import environment
 from .stalk     import TrackedJob, LoadTracked, jobStalking
 from .spin      import ClassifySpin
 
@@ -46,6 +47,7 @@ def Dispatch(intent: Intent) -> list[TrackedJob]:
         case GoodVibesIntent():       _DispatchGoodVibes(intent)
         case FirstTimeSetupIntent():  _DispatchFirstTimeSetup(intent)
         case UpdateIntent():          _DispatchUpdate(intent)
+        case EnvironmentIntent():     _DispatchEnvironment(intent)
         case InitProjectIntent():     _DispatchInitProject(intent)
         case ProfileIntent():         _DispatchProfile(intent)
         case RefreshIntent():         _DispatchRefresh(intent)
@@ -203,8 +205,58 @@ def _DispatchUpdate(intent: UpdateIntent) -> None:
             console.print(f"[info]{escape(line)}[/info]")
         if update.UpToDate(source, latest) and not AskBool("Reinstall anyway?", "n"):
             return
+    # Never code the environment can't run, and never under a running environment job (its swap would undo it)
+    problem = environment.CodeUpdateProblem(source, intent.branch or source.branch)
+    if problem:
+        console.print(f"[warning]{escape(chr(10).join(problem))}[/warning]")
+        console.print("[info]Run `cu -env` to see the environment, `cu -env refresh` to update it.[/info]")
+        return
     if update.Install(intent.branch or source.branch):
         console.print("[good]The next cu run uses the new version.[/good]")
+
+
+def _DispatchEnvironment(intent: EnvironmentIntent) -> None:
+    """`cu -env`: every variant's status; with a job, starts it in the background on one variant."""
+    from . import update
+    from .prompts import AskBool
+    source = update.InstalledSource()
+    variants = environment.ReadVariants(source)
+    if isinstance(variants, str):
+        console.print(f"[error]Couldn't read the environment files ({escape(variants)}).[/error]")
+        return
+    for problem in variants.problems:
+        console.print(f"[warning]Skipped {escape(problem)}.[/warning]")
+    running = environment.RunningName()
+    if not intent.job:
+        if running is not None and running not in (variant.name for variant in variants.found):
+            console.print(f"[info]CompUtils runs from {escape(running)}, which no environment file names.[/info]")
+        elif running is None:
+            console.print("[info]CompUtils isn't running from a conda environment.[/info]")
+        for variant in variants.found:
+            lines = environment.StatusLines(environment.CheckStatus(variant), variants.where)
+            console.print(f"[operation]{escape(lines[0])}[/operation]")
+            for line in lines[1:]:
+                console.print(f"[info]  {escape(line)}[/info]")
+        console.print("[info]`cu -env refresh|rebuild|install [ENVIRONMENT]` updates one in the background.[/info]")
+        return
+    wanted = (intent.variant or running or "").lower()
+    variant = next((variant for variant in variants.found if wanted in (variant.label.lower(), variant.name.lower())),
+                   None)
+    if variant is None:
+        names = ", ".join(f"{variant.label} ({variant.name})" for variant in variants.found)
+        console.print(f"[error]{'No environment named ' + escape(wanted) if wanted else 'Say which environment'}. "
+                      f"From {escape(variants.where)}: {escape(names)}.[/error]")
+        return
+    status = environment.CheckStatus(variant)
+    if intent.job == "refresh" and status.current:
+        console.print(f"[good]{escape(variant.name)} is up to date with {escape(variants.where)}'s "
+                      f"{escape(variant.file)}: nothing to refresh.[/good]")
+        return
+    if intent.job == "rebuild" and not AskBool(f"Rebuild {variant.name} from {variant.file}? Packages you added to it "
+                                               f"yourself are not kept.", "n"):
+        return
+    started, message = environment.Start(status, intent.job, source)
+    console.print(f"[{'good' if started else 'error'}]{escape(message)}[/{'good' if started else 'error'}]")
 
 
 def _DispatchInitProject(intent: InitProjectIntent) -> None:

@@ -25,7 +25,9 @@ ACTION_LABELS = {
 }
 # Screens below the divider, opened with ␣, ⏎ or a click (HomeScreen.OpenScreenItem): item id -> label
 SCREEN_ITEMS = {"screen-scrapers": "Scrapers ›", "screen-stalker": "Job Stalker", "screen-config": "Config",
-                "screen-files": "Project Files", "screen-update": "Update CompUtils", "screen-attributions": "Attributions"}
+                "screen-files": "Project Files", "screen-update": "Update CompUtils",
+                "screen-environment": "Update Environment", "screen-attributions": "Attributions"}
+ENVIRONMENT_ITEM = "screen-environment"
 # Sub-menus swap the Actions list for their items, after a "‹ Actions" item (it, or esc, swaps back). Input Builders
 # (first in the list) holds the Optimization builder, then two file actions, in the order a project runs them (opt, then
 # SP); the scrapers read the whole CWD. Screen items (the builder, the scrapers) dim the file pane, as the screens below
@@ -271,6 +273,12 @@ class HomeScreen(Screen):
         self.LoadStatuses(paths)
         self.ScheduleDetails(paths[0] if paths else None, 0)
 
+    def SetItemLabel(self, itemId: str, label: str) -> None:
+        """Relabel a list item (Update Environment while a job runs); nothing when the list doesn't show it."""
+        for item in self.query_one("#actions", ActionList).children:
+            if item.id == itemId:
+                item.query_one(Label).update(label)
+
     def ScreenItemHighlighted(self) -> str | None:
         item = self.query_one("#actions", ActionList).highlighted_child
         return item.id if item is not None and item.id in ITEM_LABELS else None
@@ -451,6 +459,8 @@ class HomeScreen(Screen):
                 self.OpenConfig("Project Files")
             case "screen-update":
                 self.app.OpenUpdate()
+            case "screen-environment":
+                self.app.OpenEnvironment()
             case "screen-attributions":
                 from .attributions import AttributionsScreen
                 self.app.push_screen(AttributionsScreen())
