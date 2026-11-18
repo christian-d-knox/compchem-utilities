@@ -6,7 +6,8 @@ from .catalog  import Catalog
 from .fileops import fileCreation, IncrementSuffix, Retarget, ReRunTemplate
 from .actions  import CubeOption
 from .intent import JobIntent, BenchmarkIntent, ReRunIntent, CubeIntent
-from .jobs     import genFile, runJob, slurmHandler, SubmitJob
+from .jobs     import genFile, runJob, slurmHandler, SubmitJob, DRY_RUN
+from .         import agent
 from .molecule import Molecule
 from .prompts import AskStr
 
@@ -52,14 +53,15 @@ def gimmeCubes(molecule: Molecule, intent: CubeIntent) -> None:
         label = cubeOption.value # Taken from its Enum
         if cubeOption == CubeOption.RANGE:
             if not intent.orbitalRange:
-                intent.orbitalRange = AskStr("Enter the range of MOs you want printed (e.g. 10-15)")
+                intent.orbitalRange = AskStr("Enter the range of MOs you want printed (e.g. 10-15)", key="orbital-range")
             label += intent.orbitalRange
             keyWord = f"MO={intent.orbitalRange}"
         elif label in keyWords:
             keyWord = keyWords[label]
         else:
             # e.g. a label renamed in programs.toml no longer matches its CubeOption: skip it rather than crash
-            console.print(f"[error]Error: Unknown keyword found in keylist for {molecule.baseName} : {label}[/error]")
+            agent.Skip(f"{molecule.baseName} {label}", f"Unknown cube keyword {label}",
+                       f"Error: Unknown keyword found in keylist for {molecule.baseName} : {label}")
             continue
         outputName = fileCreation(molecule.baseName, Defaults.cubeExtension, label)
         queueName = fileCreation(molecule.baseName, Defaults.queueExtension, label)
@@ -73,15 +75,16 @@ def gimmeCubes(molecule: Molecule, intent: CubeIntent) -> None:
             queueFile.write(f"cubegen 1 {keyWord} {molecule.fullPath} {outputName} 0\n\n")
 
         submitted = SubmitJob(queueName)
-        if submitted is not None:
+        if submitted is not None and submitted != DRY_RUN:
             console.print(f"[good]Submitted cube job {molecule.baseName} {cubeOption.value} to the cluster (ID "
                           f"{submitted[0]}).[/good]")
+            agent.Submitted(f"{molecule.baseName} {cubeOption.value}", submitted[0], submitted[1], str(outputName))
 
 # Because jobs don't always work the first time
 def genReRun(molecule: Molecule, intent: ReRunIntent, trackedJobs: list) -> None:
     template, problem = ReRunTemplate(molecule)
     if template is None:
-        console.print(f"[error]{problem}. Skipping {molecule.baseName}.[/error]")
+        agent.Skip(molecule.baseName, problem)
         return
     # A re-run of a re-run increments instead of stacking: mol_re -> mol_re2, not mol_re_re. The program was set by
     # ReRunTemplate, which a verbatim route's first token may not name

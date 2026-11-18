@@ -645,6 +645,65 @@ def NevaTouchLine(job: TrackedJob) -> str:
     return f"Neva-Touch Scheduler: {state}" + (" (Fired by the Stalker)" if job.stepBy == BY_STALKER else "")
 
 
+# ─── Reports (cu -st --json) ──────────────────────────────────────────
+
+def JobRecord(job: TrackedJob) -> dict:
+    """One tracked job for a report: what HeadLine and ProgressLines say, as fields. Empty values are left out."""
+    head, _ = HeadLine(job)
+    record = {"name": job.name, "jobId": job.jobID, "cluster": job.cluster, "output": job.outputPath,
+              "state": job.state, "headline": head, "termination": job.termination, "elapsed": job.elapsed,
+              "expectedStart": job.startAt if job.state == "PENDING" else "",
+              "stages": [{key: value for key, value in (
+                  ("number", number), ("status", stage.status), ("planned", stage.planned), ("step", stage.label),
+                  ("convergence", {"met": stage.convergence[0], "total": stage.convergence[1]}
+                                  if stage.convergence is not None else None),
+                  ("stable", stage.stable), ("outOfSteps", stage.outOfSteps or None)) if value not in ("", None)}
+                         for number, stage in enumerate(job.stages, job.firstStage)],
+              "nevaTouch": NevaTouchLine(job) if job.nevaTouch else "", "nextJob": job.nextJob}
+    return {key: value for key, value in record.items() if value not in ("", None, [])}
+
+
+def Snapshot(jobs: list[TrackedJob]) -> list[TrackedJob]:
+    """One ping (a stalker's, so endings are notified and saved as usual), then every job printed and recorded: what
+    `cu -st --json` gives instead of a loop that would hold an agent's shell."""
+    from . import agent
+    if not jobs:
+        console.print("[info]No tracked jobs.[/info]")
+        return []
+    if PollQueue(jobs) is None:
+        agent.Warn("Could not read the queue (squeue failed): these are the jobs as last read.")
+    for job in jobs:
+        _PrintJob(job)
+        agent.Result(JobRecord(job))
+    return jobs
+
+
+def Dismiss(names: list[str]) -> None:
+    """Stops tracking the named jobs (IDs, names, or 'ended': every ended one), as the TUI's d / D. A live job is asked
+    about first (key dismiss-live)."""
+    from . import agent
+    from .prompts import AskBool
+    jobs, chosen = LoadTracked(), {}
+    for name in names:
+        matches = ([job for job in jobs if job.ended] if name.lower() == "ended"
+                   else [job for job in jobs if name in (job.jobID, job.name, job.key)])
+        if not matches and name.lower() != "ended":
+            agent.Skip(name, "No tracked job has that ID or name")
+        chosen.update({job.key: job for job in matches})
+    live = [job.name for job in chosen.values() if Watched(job)]
+    if live and not AskBool(f"{', '.join(live)} {'is' if len(live) == 1 else 'are'} still in the queue. Stop tracking "
+                            f"{'it' if len(live) == 1 else 'them'} anyway?", "n", key="dismiss-live"):
+        for name in live:
+            agent.Skip(name, "Still live (not dismissed)", show=False)
+        chosen = {key: job for key, job in chosen.items() if not Watched(job)}
+    if chosen:
+        DismissJobs(set(chosen))
+        console.print(f"[good]No longer tracking {', '.join(job.name for job in chosen.values())}.[/good]")
+        agent.Result({"dismissed": [job.name for job in chosen.values()]})
+    elif not names or all(name.lower() == "ended" for name in names):
+        console.print("[info]Nothing to dismiss.[/info]")
+
+
 # ─── The CLI stalker ──────────────────────────────────────────────────
 
 def _PrintJob(job: TrackedJob) -> None:

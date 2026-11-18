@@ -9,6 +9,7 @@ from rich.markup import escape
 from .defaults import Defaults
 from .catalog  import Catalog, MethodKey, SplitReference, RouteTemplate, MatchTemplate, STAGE_JOIN
 from .molecule import Molecule
+from .         import agent
 
 
 # A new, working RegEx Refactor
@@ -517,11 +518,11 @@ def ExtractResources(data, extensionType: str) -> tuple[int, int]:
 
     coreMatch = FindInMap(data, corePattern, ignoreCase=True)
     if not coreMatch:
-        console.print("[error]Couldn't find CPU count in input file. Submitting according to Defaults.[/error]")
+        agent.Warn("Couldn't find the CPU count in the input file. Submitting according to Defaults.")
     cpus = int(coreMatch.group(1)) if coreMatch else Defaults.CPU
     ramMatch = FindInMap(data, ramPattern, ignoreCase=True)
     if not ramMatch:
-        console.print("[error]Couldn't find RAM count in input file. Submitting according to Defaults.[/error]")
+        agent.Warn("Couldn't find the RAM in the input file. Submitting according to Defaults.")
     ram = ToGB(int(ramMatch.group(1)), cpus) if ramMatch else cpus * Defaults.memoryRatio
     return cpus, int(ram + Defaults.memoryBuffer)
 
@@ -833,6 +834,36 @@ def ExtractMixedBasis(data) -> MixedBasis:
             seen.update(entry.elements)
     return MixedBasis([entry for entry in basis if entry.tokens], [entry for entry in ecp if entry.tokens])
 
+# Element symbol -> atomic number
+ATOMIC_NUMBERS = {symbol: number for number, symbol in ATOMIC_SYMBOLS.items()}
+
+
+def Symbols(coordinateList: list[str]) -> list[str]:
+    # A coordinate line's element (fileops.CoordinateLines writes the symbol first)
+    return [line.split()[0] for line in coordinateList if line.split()]
+
+
+def Formula(coordinateList: list[str]) -> str:
+    """The molecular formula in Hill order (C, then H, then alphabetical; alphabetical without carbon): C12H10N2."""
+    counts = {}
+    for symbol in Symbols(coordinateList):
+        counts[symbol] = counts.get(symbol, 0) + 1
+    order = sorted(counts, key=lambda symbol: (("C", "H").index(symbol) if "C" in counts and symbol in ("C", "H")
+                                               else 2, symbol))
+    return "".join(f"{symbol}{counts[symbol] if counts[symbol] > 1 else ''}" for symbol in order)
+
+
+def ElectronProblem(coordinateList: list[str], charge: int, multiplicity: int) -> str:
+    """Why this charge and multiplicity can't describe the molecule ('' if they can): Gaussian and ORCA stop at once."""
+    electrons = sum(ATOMIC_NUMBERS.get(symbol, 0) for symbol in Symbols(coordinateList)) - charge
+    if electrons < 1:
+        return f"Charge {charge} Leaves No Electrons"
+    # Multiplicity 2S + 1: an even electron count has odd multiplicities, at most one more than the electrons
+    if multiplicity < 1 or multiplicity > electrons + 1 or (electrons + multiplicity) % 2 == 0:
+        return f"Multiplicity {multiplicity} Can't Fit {electrons} Electrons"
+    return ""
+
+
 def MoleculeElements(coordinateList: list[str]) -> set[str]:
     """Element symbols in a coordinate list. Handles atomic numbers, 'C(Fragment=1)', 'C-Bq' (ghost atoms still carry
     basis functions), 'C1' labels; drops bare 'Bq' and dummy 'X' atoms."""
@@ -903,14 +934,17 @@ def formCheck(molecule: Molecule) -> bool:
         result = subprocess.run(["bash", "-l", "-c", f"module load gaussian && formchk {molecule.fullPath}"],
                                 capture_output=True, text=True)
     except FileNotFoundError:
-        console.print(f"[error]Couldn't run formchk on {molecule.baseName} (no bash). Skipping it.[/error]")
+        agent.Skip(molecule.baseName, "formchk can't run here (no bash)",
+                   f"Couldn't run formchk on {molecule.baseName} (no bash). Skipping it.")
         return False
     if result.stdout.strip():
         console.print(escape(result.stdout.strip()))
     if result.returncode != 0:
-        console.print(f"[error]formchk failed on {molecule.baseName}: {escape(result.stderr.strip())}. Skipping it.[/error]")
+        agent.Skip(molecule.baseName, f"formchk failed: {result.stderr.strip()}",
+                   f"formchk failed on {molecule.baseName}: {result.stderr.strip()}. Skipping it.")
         return False
     Retarget(molecule, molecule.rootName, extensionType=".fchk")
+    agent.Written(molecule.fullPath)
     return True
 
 # Everything CompUtils reads from a source output or input, from ONE open map (the caller manages MapFile, and runs
@@ -957,5 +991,5 @@ def grabPaths(fileName: str|Path) -> tuple[str,str] | tuple[None,None]:
         baseName, extension = filePath.stem, filePath.suffix
         return baseName, extension
     else:
-        console.print(f"[error]Could not locate: {fileName} [/error]")
+        agent.Skip(str(fileName), "No such file", f"Could not locate: {fileName}")
         return None, None

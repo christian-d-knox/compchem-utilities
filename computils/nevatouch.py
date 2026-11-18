@@ -10,7 +10,7 @@ ntsReRunLimit times per stage, its hook the same SP step. Whoever takes a step s
 The hook is the job's own; a stalker only steps in after the job has left the queue (the hook is over by then) for a
 step it didn't take: refused (e.g. no sbatch on compute nodes), killed, or never run. It runs the same command
 (FireStep), as a run of its own in the job's folder, so a stalker's own CWD and config are never touched."""
-import os, shlex, subprocess, sys, time, traceback
+import os, shlex, subprocess, time, traceback
 from pathlib import Path
 
 from rich.markup import escape

@@ -13,9 +13,9 @@ from textual.widgets import Input, Static
 from ..actions import Action
 from ..analysis import GOODVIBES_OUTPUT, DetectSuffix, Outputs
 from ..defaults import Defaults
-from ..scrape  import (ORDER_FILE, PROGRAM_NAMES, SI_FILE, FindSpecies, GoodVibesNeeded, GoodVibesRun,
-                       GoodVibesTable, NaturalKey, ReadOrder, ReadSpecies, SIText, SPThermo, Species,
-                       TableUsed, WriteOrder)
+from ..scrape  import (ORDER_FILE, PROGRAM_NAMES, SI_FILE, BlockedProblems, FindSpecies, GoodVibesFiles,
+                       GoodVibesNeeded, GoodVibesRun, GoodVibesTable, MissingFromTable, NaturalKey, ReadOrder,
+                       ReadSpecies, SIText, SPThermo, Species, StartsIncluded, TableUsed, WriteOrder)
 from .common   import (NAME, NAV_BINDINGS, TEXT, FrameRule, KeyHint, MoveRow, NavFooter, Notice, Popup,
                        ReorderableTable, Setting, SettingsList, ValueInput)
 from .home     import TitleLine
@@ -125,9 +125,9 @@ class SIScraperScreen(Screen):
     def Read(self) -> None:
         # Without list.txt, what can't be written (or ended in error) starts left out, unless already chosen by hand
         if self.listed is None:
+            starts = StartsIncluded(self.species, None, self.quasiHarmonic)
             for one in self.species:
-                if one.name not in self.touched and (one.Blocks(self.quasiHarmonic) or
-                                                     any(flag == "Error" for flag, _ in one.Flags(False))):
+                if one.name not in self.touched and one.name not in starts:
                     self.included.discard(one.name)
         self.Redraw()
 
@@ -190,12 +190,7 @@ class SIScraperScreen(Screen):
             problems.append("No Species Included")
         if any(not one.read for one in included):
             problems.append("Reading Outputs…")
-        blocked: dict[str, list[str]] = {}
-        for one in included:
-            reason = one.Blocks(self.quasiHarmonic)
-            if reason:
-                blocked.setdefault(reason, []).append(one.name)
-        problems += [f"{reason}: {', '.join(names)}" for reason, names in blocked.items()]
+        problems += BlockedProblems(included, self.quasiHarmonic)
         return problems
 
     def Refresh(self) -> None:
@@ -267,8 +262,7 @@ class SIScraperScreen(Screen):
         if needed:
             from .builder import BuilderScreen
             # GoodVibes rewrites the whole table, so the run covers every included species it gives, not only the stale
-            run = [one for one in included if one.needsGoodVibes]
-            files = [Path(one.path.name) for one in run] + [Path(one.spPath.name) for one in run]
+            files = GoodVibesFiles(included)
             suffix = self.settings.Row("suffix").value.strip().lstrip("_")
             self.app.push_screen(BuilderScreen(Action.GOODVIBES, files, {"singlePoint": suffix}, returns=True),
                                  lambda succeeded: self.ConfirmWrite() if succeeded else self.Refresh())
@@ -288,7 +282,7 @@ class SIScraperScreen(Screen):
     def Write(self, target: Path) -> None:
         settings, included = self.settings, self.Included()
         thermo = SPThermo(included, self.folder, self.quasiHarmonic)
-        missing = [name for name in thermo.missing if len(next(one for one in included if one.name == name).imaginary) < 2]
+        missing = MissingFromTable(thermo, included)
         if missing:
             Notice(self.app, "No qh-G Found", f"{GOODVIBES_OUTPUT} has no qh-G(T) for: {', '.join(missing)}. "
                    "Nothing was written.", "error")

@@ -15,19 +15,18 @@ from textual.widgets import OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 from textual.worker import get_current_worker
 
-from ..actions  import Action, SpinState, NTS_SP
-from ..catalog  import STAGE_JOIN, Catalog, ParseRouteTemplate, RenderRoute, RouteTemplate, UnknownSelectors
+from ..actions  import SpinState
+from ..catalog  import STAGE_JOIN, Catalog, RouteTemplate
 from ..defaults import Defaults
-from ..fileops  import (ExtractFrom, ExtractFromText, ExtractXyz, MoleculeElements, ReRunTemplate, Retarget,
-                        StageProblem, extensionGetter, fileCreation)
-from ..intent   import IntentDraft
-from ..jobs     import DefaultMemoryRatio, JobInputText, OptMethods, StagesProblem
+from ..fileops  import ExtractFrom, ExtractFromText, ExtractXyz, extensionGetter, fileCreation
+from ..jobs     import OptMethods
 from ..molecule import Molecule
-from ..spin     import SpinOverride
+from ..optimize import (STAGE_INPUT, ModRedCheck, MethodChoices, MethodProblems, CustomMethod, StartingSpin,
+                        SinglePointDefaults, OptimizationJob)
 from .common    import (NAV_BINDINGS, NUMBER, TEXT, FrameRule, KeyHint, NavFooter, Notice, Popup, Setting, SettingsList,
                         ValueInput)
 from .home      import TitleLine
-from .inspect   import ElectronProblem, Formula, JobSummary, OutputExtensions, PreviewMolecule, Styled
+from .inspect   import Formula, JobSummary, OutputExtensions, PreviewMolecule, Styled
 from .lists     import Cut, ProblemText, TextEditor
 
 LEFT_WIDTH = 30          # the settings column, its borders included (the frame's junction sits on its right edge)
@@ -35,8 +34,6 @@ STATUS_STYLES = {"Normal": "good", "Error": "error", "Unknown": "warning", "Inpu
 FILE_NAME = r"[\w.\-]"   # the characters a job name takes
 # A method's name in its row, beside "(•) " and its program: the settings column less the list's scrollbar
 METHOD_NAME_WIDTH = LEFT_WIDTH - 17
-# A stage whose route needs lines after the geometry gets a row for them: Gaussian's Opt=ModRedundant
-STAGE_INPUT = r"(?i)modred"
 # The ModRed editor's example (32 columns)
 MODRED_EXAMPLE = """\
 B 1 2 F
@@ -49,23 +46,6 @@ bond, A angle, D dihedral, by
 atom number (as in the
 geometry), then F to freeze it,
 or S steps step-size to scan."""
-
-
-def ModRedCheck(text: str, atoms: int) -> tuple[str, list[str]]:
-    """(a short summary, problems) for a stage's ModRed lines: atom numbers must be in the geometry (1 to atoms)."""
-    lines = [line.split() for line in text.splitlines() if line.strip()]
-    problems = []
-    for number, fields in enumerate(lines, 1):
-        # The type letter, then atom numbers until the first field that isn't one ('*' is any atom)
-        for field in fields[1:]:
-            if field == "*":
-                continue
-            if not regex.fullmatch(r"-?\d+", field):
-                break
-            if not 1 <= int(field) <= atoms:
-                problems.append(f"✗ Line {number}: Atom {field} Isn't in the Geometry (1–{atoms})")
-    summary = f"{len(lines)} Line{'s' if len(lines) != 1 else ''}" if lines else "Empty"
-    return summary, problems
 
 
 def ProgramOf(extensionType: str) -> str:
@@ -363,27 +343,16 @@ class OptimizationScreen(Screen):
         self.molecule, self.prior = copy.copy(molecule), prior
         self.source = molecule.sourcePath if prior else None
         # Why a singlet's spin starts where it does: spinstates.txt, else how the prior job was classified
-        override = SpinOverride(molecule.rootName) if molecule.rootName else None
-        if override is not None:
-            self.molecule.spinState, reason = override[0], f"spinstates.txt: {override[1]}"
-        decided = reason and not reason.startswith("Multiplicity") and str(molecule.multiplicity or 1) == "1"
-        self.spinNote = f"({reason})" if decided else ""
-        # The method choices: setting key -> (label, template, input extension, its route as written: what the Route
-        # row shows and a Custom route starts from); a None template can't be made (fromProblem says why)
-        self.methods: dict[str, tuple[str, RouteTemplate | None, str, str]] = {}
-        self.fromProblem = ""
-        if prior:
-            template, self.fromProblem = ReRunTemplate(self.molecule)
-            # ReRunTemplate sets the program the job ran in, which a verbatim route's first token may not name
-            self.methods["method-from"] = ("From Source", template, self.molecule.extensionType,
-                                           self.molecule.sourceRoute)
+        decided = StartingSpin(self.molecule, reason)
+        self.spinNote = f"({decided})" if decided else ""
+        # The method choices (optimize.MethodChoices, shared with cu -opt): setting key -> (label, template, input
+        # extension, its route as written: what the Route row shows and a Custom route starts from); a None template
+        # can't be made (fromProblem says why)
+        self.methods, self.fromProblem = MethodChoices(self.molecule, prior)
         self.optMethods = OptMethods()
-        for index, (tag, route) in enumerate(self.optMethods.items()):
-            template = ParseRouteTemplate(route)
-            self.methods[f"method-{index}"] = (tag, template, extensionGetter(template.method), route)
         # Why a method's stages can't be written (ORCA stages, mixed programs): its row is greyed with the reason
-        self.problems = {key: StageProblem(template) for key, (_, template, _, _) in self.methods.items()
-                         if template is not None and StageProblem(template)}
+        self.problems = MethodProblems(self.methods)
+        self.job: OptimizationJob | None = None   # the settings as last checked (Refresh)
         # A ModRed row per stage, up to the longest listed method (a longer Custom route's extra stages: the preview)
         self.stageRows = max([3] + [len(template.stages) for _, template, _, _ in self.methods.values()
                                     if template is not None])
@@ -442,13 +411,13 @@ class OptimizationScreen(Screen):
                             on=False, available=False),
                     Setting("nts-cpus", "  └ SP CPUs", value="", accepts=r"\d", under="nts"),
                     Setting("nts-memory", "  └ SP Memory per Core", value="", unit="GB", accepts=NUMBER, under="nts")]
-        template = Catalog.templates[0]
-        extension = extensionGetter(template.method)
+        extension = extensionGetter(Catalog.templates[0].method)
+        spCpus, spMemory = SinglePointDefaults()
         # Text: a str "[oss: guess=mix]" would be read as markup. Refresh adds the SP's problem under it
         self.ntsMeaning = Text(f"Then SP: {Catalog.benchmarkLines[0]} · {ProgramOf(extension)}")
         return [Setting("nts", "Neva-Touch Scheduler", self.ntsMeaning, on=Defaults.autoNTS),
-                Setting("nts-cpus", "  └ SP CPUs", value=str(Defaults.CPU), accepts=r"\d", under="nts"),
-                Setting("nts-memory", "  └ SP Memory per Core", value=f"{DefaultMemoryRatio(template.base, extension):g}",
+                Setting("nts-cpus", "  └ SP CPUs", value=str(spCpus), accepts=r"\d", under="nts"),
+                Setting("nts-memory", "  └ SP Memory per Core", value=f"{spMemory:g}",
                         unit="GB", accepts=NUMBER, under="nts")]
 
     @staticmethod
@@ -500,14 +469,7 @@ class OptimizationScreen(Screen):
         if chosen != "custom":
             _, template, extension, _ = self.methods[chosen]
             return template, extension, ""
-        route = self.settings.Row("route").value.strip()
-        if not route:
-            return None, "", "Enter the Custom Route"
-        unknown = UnknownSelectors(route)
-        if unknown:
-            return None, "", f"Unknown Selector {', '.join(unknown)}"
-        template = ParseRouteTemplate(route)
-        return template, extensionGetter(template.method), ""
+        return CustomMethod(self.settings.Row("route").value)
 
     def Refresh(self) -> None:
         """Re-validate live: write the settings onto the molecule, regenerate the preview (unless it was edited), and
@@ -535,47 +497,33 @@ class OptimizationScreen(Screen):
             memory = float(settings.Row("memory").value or 0) or None
         except ValueError:
             cpus, memory = 0, None
-        if cpus < 1:
-            errors.append("CPUs Must Be a Whole Number Above 0")
-        if charge is not None:
-            electrons = ElectronProblem(molecule.coordinateList, charge, multiplicity)
-            if electrons:
-                errors.append(electrons)
-        if self.scheduled and self.SinglePointResources() is None:
-            errors.append("SP CPUs and Memory Must Be Numbers Above 0")
         fileProblem, warnings = "", []
         if template is not None:
             self.ShowStages(template, extension)
-            # A ModRed stage's lines: atom numbers outside the geometry stop it; empty lines are only a warning
-            for number in self.ModRedStages():
-                summary, problems = ModRedCheck(self.stageInputs.get(number, ""), len(molecule.coordinateList))
-                errors += [problem.removeprefix("✗ ").replace("Line", f"Stage {number} ModRed Line", 1)
-                           for problem in problems]
-                if summary == "Empty":
-                    warnings.append(f"Stage {number} ModRed Is Empty")
-            if charge is not None:
-                molecule.charge, molecule.multiplicity = charge, multiplicity
-            molecule.spinState = (SpinState.OPEN if openShell else
-                                  SpinState.OSS if settings.Chosen("spin") == "oss" else SpinState.CSS)
-            Retarget(molecule, name or "untitled", template, extension)
-            route, tags = RenderRoute(template, molecule)
-            self.FillMemory(f"{DefaultMemoryRatio(route, extension):g}")
+            # The settings as one job (optimize.OptimizationJob, cu -opt's too), on this screen's molecule
+            resources = self.SinglePointResources() if self.scheduled else None
+            self.job = job = OptimizationJob(
+                molecule, name, charge, multiplicity, SpinState.OSS if settings.Chosen("spin") == "oss" else SpinState.CSS,
+                template, extension, cpus, memory, settings.Applies(settings.Row("checkpoint")),
+                {number: self.stageInputs.get(number, "") for number in self.ModRedStages()}, self.scheduled,
+                *(resources or (None, None)))
+            job.Apply()
+            self.FillMemory(f"{job.DefaultMemory():g}")
+            # Its checks: CPUs, electrons, the SP's resources, ModRed lines (atom numbers outside the geometry stop it;
+            # empty lines are only a warning), then the project files and the scheduled SP
+            checkErrors, warnings, fileProblem = job.Check()
+            errors += checkErrors
             if memory is None:
                 errors.append("Memory Must Be a Number Above 0")
-            # The same check genFile skips jobs with: every stage's route, its project files, and the stages themselves
-            fileProblem = StagesProblem(template, molecule, MoleculeElements(molecule.coordinateList))
-            # ...and for the SP the Neva-Touch Scheduler will submit, so a missing basis shows now, not at 2 a.m.: in
-            # full under its row, and short on the bottom edge (a warning: the SP is written when the opt ends)
+            # The scheduled SP's problem: in full under its row, and short on the bottom edge (a warning: the SP is
+            # written when the opt ends)
             if Catalog.templates:
-                spProblem = self.SinglePointProblem(name or "untitled") if self.scheduled else ""
-                settings.Row("nts").SetMeaning(Text.assemble(self.ntsMeaning, "\n", Styled(f"⚠ {spProblem}", "warning"))
-                                               if spProblem else self.ntsMeaning)
-                if spProblem:
-                    warnings.append("Scheduled SP Problem")
+                settings.Row("nts").SetMeaning(Text.assemble(self.ntsMeaning, "\n", Styled(f"⚠ {job.spProblem}", "warning"))
+                                               if job.spProblem else self.ntsMeaning)
             self.path = Path.cwd() / fileCreation(name, extension) if name else None
             # The preview needs only what goes into it: a name only names the file (and %chk)
             if charge is not None and cpus >= 1 and memory is not None and not self.edited:
-                self.Regenerate(cpus, memory)
+                self.Regenerate()
         # A project-file problem stops a generated input; an edited one is the user's to fix
         if fileProblem and not self.edited:
             errors.append(fileProblem)
@@ -606,14 +554,6 @@ class OptimizationScreen(Screen):
             return None
         return (cpus, memory) if cpus >= 1 and memory > 0 else None
 
-    def SinglePointProblem(self, name: str) -> str:
-        """Why the SP would be skipped for this molecule ('' if it can be written): genFile's check, on a copy pointed at
-        the SP (Benchmark Methods' first entry), as `cu -sp` would point it."""
-        template = Catalog.templates[0]
-        spMolecule = copy.copy(self.molecule)
-        Retarget(spMolecule, name + Defaults.singlePointExtra, template)
-        return StagesProblem(template, spMolecule, MoleculeElements(spMolecule.coordinateList))
-
     def FillMemory(self, default: str) -> None:
         # Pre-filled per method (ORCA's DLPNO takes highMemoryRatio); a typed value is kept
         row = self.settings.Row("memory")
@@ -621,12 +561,9 @@ class OptimizationScreen(Screen):
             row.SetValue(default)
         self.memoryDefault = default
 
-    def Regenerate(self, cpus: int | None = None, memory: float | None = None) -> None:
-        settings = self.settings
-        if cpus is None:
-            cpus, memory = int(settings.Row("cpus").value), float(settings.Row("memory").value)
-        self.generated = JobInputText(self.molecule, settings.Applies(settings.Row("checkpoint")), False, cpus, memory,
-                                      extraInput=self.ExtraInput())
+    def Regenerate(self) -> None:
+        # The job's input as genFile writes one (optimize.OptimizationJob.InputText: cu -opt writes the same)
+        self.generated = self.job.InputText(self.stageRows)
         if self.preview.text != self.generated:
             self.preview.load_text(self.generated)
 
@@ -636,11 +573,6 @@ class OptimizationScreen(Screen):
         """The chosen method's stages that take ModRed lines (their rows are shown)."""
         return [number for number in range(1, self.stageRows + 1)
                 if self.settings.Row(f"stage-input-{number}").display]
-
-    def ExtraInput(self) -> list[str]:
-        """Each stage's lines after its geometry, for JobInputText ('' for a stage without a ModRed row)."""
-        shown = set(self.ModRedStages())
-        return [self.stageInputs.get(number, "") if number in shown else "" for number in range(1, self.stageRows + 1)]
 
     def ShowStages(self, template: RouteTemplate, extension: str) -> None:
         """Rows that follow the chosen method's stages: a ModRed row per ModRed stage (Gaussian), and Checkpoint, which
@@ -762,12 +694,8 @@ class OptimizationScreen(Screen):
         # the Results pop-up (which offers the Job Stalker) back on Home
         with open(path, "w") as jobInput:
             jobInput.write(self.preview.text)
-        draft = IntentDraft(action=Action.RUN, files=[Path(path.name)])
-        # The Neva-Touch Scheduler: the job's hook submits the SP, with these resources, once the opt ends normally
-        if self.scheduled:
-            draft.nevaTouch = NTS_SP
-            draft.nextCpus, draft.nextMemoryRatio = self.SinglePointResources()
-        self.app.Submit(draft.Finalize(), 1)
+        # The Neva-Touch Scheduler: the job's hook submits the SP, with its resources, once the opt ends normally
+        self.app.Submit(self.job.Draft(path).Finalize(), 1)
 
     def action_leave_text(self) -> None:
         self.settings.current.target.focus()

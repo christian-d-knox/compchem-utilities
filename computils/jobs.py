@@ -2,7 +2,6 @@ import os, regex, subprocess, time
 from dataclasses import dataclass, field
 from pathlib import Path
 from .console  import console
-from rich.markup import escape
 from .defaults import Defaults
 from .catalog  import RenderRoute, RouteTemplate, ROUTE_LEAK_PATTERN
 from .fileops  import (fileCreation, HasContent, ExtractResources, MapFile, StageCount, MixedBasis, BasisEntry,
@@ -13,6 +12,7 @@ from .molecule import Molecule
 from .intent import JobIntent
 from .stalk    import TrackedJob, Stage, jobLocation, TrackJobs, NTS_LOG
 from .nevatouch import HookCommand, HookLines, JOB_ID
+from .          import agent
 
 # The optimization methods (name -> route, in order): jobRelatedKeylists' Optimization Methods from the nearest level
 # that has them, or the unsaved text from the TUI's config editor ({level path: text}); {} without any
@@ -187,11 +187,12 @@ def genFile(molecule: Molecule, intent: JobIntent) -> bool:
     # rendered for this molecule's spin state (base + matching [spin groups] + U/RO reference, then the chaining)
     problem = StagesProblem(molecule.template, molecule, MoleculeElements(molecule.coordinateList))
     if problem:
-        console.print(f"[error]{escape(problem)}. Skipping {molecule.baseName}.[/error]")
+        agent.Skip(molecule.baseName, problem)
         return False
     text = JobInputText(molecule, intent.checkpoint, intent.nbo7, intent.cpus, intent.memoryRatio)
     with open(molecule.fullPath, 'w') as jobInput:
         jobInput.write(text)
+    agent.Written(molecule.fullPath)
     return True
 
 # The memory per core a job gets unless told otherwise (GB): DLPNO in ORCA needs more
@@ -414,18 +415,26 @@ def _SubmitEnvironment() -> dict[str, str] | None:
     return {name: value for name, value in os.environ.items()
             if name == "SLURM_CONF" or not name.startswith(("SLURM_", "SBATCH_"))}
 
+# What SubmitJob returns for a dry run (--dry-run): the script was written, and nothing was submitted or tracked
+DRY_RUN = ("", "dry-run")
+
 # --parsable prints just 'ID' or 'ID;cluster'. Output is captured: sbatch must never write to the TUI's screen. Returns
-# (job ID, cluster), or None (after saying why) if sbatch refused the job: the caller skips only that job
+# (job ID, cluster), DRY_RUN, or None (after saying why) if sbatch refused the job: the caller skips only that job
 def SubmitJob(queueName: Path) -> tuple[str, str] | None:
     global submittedJobs
+    agent.Written(queueName)
+    if agent.dryRun:
+        console.print(f"[info]Dry run: {queueName} is ready to submit (not submitted).[/info]")
+        return DRY_RUN
     try:
         result = subprocess.run(["sbatch", "--parsable", str(queueName)], capture_output=True, text=True,
                                 env=_SubmitEnvironment())
     except FileNotFoundError:
-        console.print(f"[error]sbatch isn't available here, so {queueName} wasn't submitted.[/error]")
+        agent.Skip(str(queueName), "sbatch isn't available here", f"sbatch isn't available here, so {queueName} wasn't submitted.")
         return None
     if result.returncode != 0:
-        console.print(f"[error]sbatch refused {queueName}: {escape(result.stderr.strip())}[/error]")
+        agent.Skip(str(queueName), f"sbatch refused it: {result.stderr.strip()}",
+                   f"sbatch refused {queueName}: {result.stderr.strip()}")
         return None
     #os.remove(queueName)
     submittedJobs += 1
@@ -447,7 +456,8 @@ def runJob(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
 
     # Empty file guard
     if not HasContent(molecule.fullPath):
-        console.print(f"[error]Job file {molecule.baseName} is empty or blank. Skipping submission.[/error]")
+        agent.Skip(str(molecule.fullPath), "The job file is empty or blank",
+                   f"Job file {molecule.baseName} is empty or blank. Skipping submission.")
         return
 
     # Extract CPU and RAM from the input file via mmap regex, and the --Link1-- stages it runs, each with what it runs
@@ -479,14 +489,20 @@ def runJob(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
 
         # Only Gaussian and ORCA inputs are submitted
         case _:
+            agent.Skip(str(molecule.fullPath), f"Only Gaussian ({Defaults.gaussianExtension}) and ORCA "
+                                               f"({Defaults.orcaExtension}) inputs can be submitted")
             return
 
     submitted = SubmitJob(queueName)
     if submitted is None:
+        # SubmitJob said why (and recorded the skip)
         console.print(f"[error]Skipping {molecule.baseName}.[/error]")
+        return
+    if submitted == DRY_RUN:
         return
     jobID, cluster = submitted
     console.print(f"[good]Submitted job {molecule.baseName} to {program} (ID {jobID})[/good]")
+    agent.Submitted(molecule.baseName, jobID, cluster, str(outputPath), intent.nevaTouch)
     tracked = TrackedJob(jobID, cluster, molecule.baseName, str(outputPath), jobLocation(), molecule.extensionType,
                          time.time(), [Stage(planned=planned[index] if index < len(planned) else "")
                                        for index in range(stageCount)],

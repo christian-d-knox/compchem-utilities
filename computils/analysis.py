@@ -3,36 +3,47 @@ from pathlib import Path
 
 import pandas
 
-from .console  import console
 from .defaults import Defaults
 from .prompts import AskBool, AskFloat, AskStr
 from .fileops import ExtractFrom, ExtractGoodVibes
+from .        import agent
 
 # GoodVibes 3.2 (the conda build) writes its table here, in the CWD
 GOODVIBES_OUTPUT = "Goodvibes_output.dat"
 # GoodVibes' own default temperature: -t is only passed for any other value
 DEFAULT_TEMPERATURE = 298.15
+# The GoodVibes Builder's starting values (TUI_DESIGN 4.2b), which `cu -gv` without the wizard uses too: Head-Gordon's
+# quasi-harmonic enthalpy with its cutoff, Grimme's entropy, a scale factor of 1.0, no concentration correction
+DEFAULT_CUTOFF, DEFAULT_SCALE, DEFAULT_CONCENTRATION = 100.0, 1.0, 1.0
+
+
+def GoodVibesDefaults(draft, suffix: str | None) -> None:
+    """Fill a draft with the Builder's starting values (and the single point suffix it would detect), for a run
+    without the wizard: an agent's, or any run given a GoodVibes flag."""
+    draft.headGordonEnthalpy, draft.freqCutoff, draft.truhlarEntropy = True, DEFAULT_CUTOFF, False
+    draft.tempCorrection, draft.concCorrection, draft.vibeScale = DEFAULT_TEMPERATURE, None, DEFAULT_SCALE
+    draft.checkConsistency, draft.singlePointPattern, draft.extraKeys = False, suffix, None
 
 
 # Because everyone hates remembering manuals. Walks through the most common use-cases with catch-all final custom keylist.
 # Fills the GoodVibes fields of an IntentDraft; GoodVibesArguments turns them into the goodvibes command
 def goodVibesInteractive(draft) -> None:
-    draft.headGordonEnthalpy = AskBool("Apply the Head-Gordon quasi-harmonic enthalpy correction?", "Y")
+    draft.headGordonEnthalpy = AskBool("Apply the Head-Gordon quasi-harmonic enthalpy correction?", "Y", key="gv-qh")
     # The cutoff is asked (and passed) only with the Head-Gordon correction, as in the TUI
-    if draft.headGordonEnthalpy and AskBool("Utilize a frequency cutoff?", "Y"):
-        draft.freqCutoff = AskFloat("Enter the frequency cutoff (wavenumbers)", 100)
-    if AskBool("Utilize a temperature correction?", "N"):
-        draft.tempCorrection = AskFloat("Enter temperature (K)")
-    if AskBool("Utilize a concentration correction?", "N"):
-        draft.concCorrection = AskFloat("Enter concentration (mol/l)")
-    if AskBool("Utilize a non-default (i.e. not 1.0) vibrational scale factor?", "N"):
-        draft.vibeScale = AskFloat("Enter vibrational scale factor")
-    if AskBool("Run program with single point corrections?", "Y"):
+    if draft.headGordonEnthalpy and AskBool("Utilize a frequency cutoff?", "Y", key="gv-use-cutoff"):
+        draft.freqCutoff = AskFloat("Enter the frequency cutoff (wavenumbers)", 100, key="gv-cutoff")
+    if AskBool("Utilize a temperature correction?", "N", key="gv-use-temperature"):
+        draft.tempCorrection = AskFloat("Enter temperature (K)", key="gv-temperature")
+    if AskBool("Utilize a concentration correction?", "N", key="gv-use-concentration"):
+        draft.concCorrection = AskFloat("Enter concentration (mol/l)", key="gv-concentration")
+    if AskBool("Utilize a non-default (i.e. not 1.0) vibrational scale factor?", "N", key="gv-use-scale"):
+        draft.vibeScale = AskFloat("Enter vibrational scale factor", key="gv-scale")
+    if AskBool("Run program with single point corrections?", "Y", key="gv-use-spc"):
         default = Defaults.singlePointExtra.lstrip("_")
-        isNonDefault = AskBool(f"Is your filemask pattern different than the CompUtils default (_{default})?", "N")
-        draft.singlePointPattern = AskStr("Enter your filemask pattern without the underscore") if isNonDefault else default
-    if AskBool("Do you want to run with additional, less common keys?", "N"):
-        draft.extraKeys = AskStr("Enter all of your non-common keys exactly as GoodVibes must receive them, separated by spaces.")
+        isNonDefault = AskBool(f"Is your filemask pattern different than the CompUtils default (_{default})?", "N", key="gv-custom-spc")
+        draft.singlePointPattern = AskStr("Enter your filemask pattern without the underscore", key="gv-spc") if isNonDefault else default
+    if AskBool("Do you want to run with additional, less common keys?", "N", key="gv-use-extra"):
+        draft.extraKeys = AskStr("Enter all of your non-common keys exactly as GoodVibes must receive them, separated by spaces.", key="gv-extra")
 
 
 def GoodVibesArguments(intent) -> list[str]:
@@ -83,11 +94,18 @@ def DetectSuffix(outputs: list[Path], among: set[str] | None = None) -> str | No
     return found.most_common(1)[0][0] if found else None
 
 
+def SelectionSuffix(files: list[Path]) -> str | None:
+    """The suffix a GoodVibes selection's structures use, among the CWD's outputs (a selected SP file counts for its
+    structure): the GoodVibes Builder's and `cu -gv`'s starting value. None when nothing pairs up."""
+    selected = {path.stem for path in files} | {path.stem.rsplit("_", 1)[0] for path in files}
+    return DetectSuffix(Outputs(Path.cwd()), selected)
+
+
 # An improved version of goodVibesToExcelv3 that now properly formats the numbers in Excel as numbers
 def goodVibesProcessor(inputFile: Path) -> None:
     outputData = ExtractFrom(Path(inputFile), ExtractGoodVibes, empty=[])
     if len(outputData) < 2:
-        console.print(f"[error]No GoodVibes table found in {inputFile}. No Excel file was written.[/error]")
+        agent.Fail(f"No GoodVibes table found in {inputFile}. No Excel file was written.")
         return
     dataFrame = pandas.DataFrame(outputData)
     # Sets the headers to the table header from GoodVibes
@@ -102,3 +120,4 @@ def goodVibesProcessor(inputFile: Path) -> None:
     formatNumber = workBook.add_format({'num_format': '#,##0.000000'})
     workSheet.set_column('B:J', 12, formatNumber)
     writer.close()
+    agent.Written("GoodVibes.xlsx")

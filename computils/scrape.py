@@ -118,6 +118,46 @@ def WriteOrder(folder: Path, names: list[str]) -> None:
     (folder / ORDER_FILE).write_text("".join(f"{name}\n" for name in names))
 
 
+def StartsIncluded(species: list[Species], listed: list[str] | None, quasiHarmonic: bool) -> set[str]:
+    """Which species are written unless someone says otherwise: list.txt's (when there is one); else every one that can
+    be written and didn't end in error (read first)."""
+    if listed is not None:
+        return {one.name for one in species if one.name in listed}
+    return {one.name for one in species
+            if not (one.Blocks(quasiHarmonic) or any(flag == "Error" for flag, _ in one.Flags(False)))}
+
+
+def ListedOrder(species: list[Species], listed: list[str] | None) -> list[Species]:
+    """list.txt's names first, in its order, then the rest in natural order."""
+    names = listed or []
+    first = [one for name in names for one in species if one.name == name]
+    return first + sorted((one for one in species if one not in first), key=lambda one: NaturalKey(one.name))
+
+
+def BlockedProblems(included: list[Species], quasiHarmonic: bool) -> list[str]:
+    """What stops writing among the included species, one line per reason: 'No SP: 8a, 8b'."""
+    blocked: dict[str, list[str]] = {}
+    for one in included:
+        reason = one.Blocks(quasiHarmonic)
+        if reason:
+            blocked.setdefault(reason, []).append(one.name)
+    return [f"{reason}: {', '.join(names)}" for reason, names in blocked.items()]
+
+
+def GoodVibesFiles(included: list[Species]) -> list[Path]:
+    """The files a GoodVibes run for the SI needs: every included species it gives (it rewrites the whole table, so not
+    only the stale ones) and their single point files, by name (it runs in the folder)."""
+    run = [one for one in included if one.needsGoodVibes]
+    return [Path(one.path.name) for one in run] + [Path(one.spPath.name) for one in run]
+
+
+def MissingFromTable(thermo: "ThermoSource", included: list[Species]) -> list[str]:
+    """Species the table should have given (qh-G) and doesn't; one flagged for several imaginary modes is written as a
+    note instead, so it isn't missing."""
+    return [name for name in thermo.missing
+            if len(next(one for one in included if one.name == name).imaginary) < 2]
+
+
 # ─── Single point thermochemistry: the outputs, or what GoodVibes corrected ──
 
 @dataclass

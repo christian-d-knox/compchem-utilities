@@ -73,15 +73,39 @@ first-time setup (`cu -profile FILE` applies one later).
 | `cu -refresh [project]` | Rewrites the config files in the current layout, keeping your values |
 | `cu --update` | Updates CompUtils from GitHub |
 | `cu -attributions` | Shows the disclaimer and credits |
+| `cu -opt FILE` | Writes and submits an optimization of one molecule (an .xyz or a prior job), as the Optimization builder does |
+| `cu -si` | Writes SI_coordinates.txt from the folder's outputs, as the SI Scraper does |
+| `cu -info FILE…` | Shows what outputs and inputs say: status, energies, frequencies, convergence |
+| `cu -methods` | Lists the Optimization and Benchmark Methods in force in this folder |
+| `cu -agent [TOPIC]` | Prints the skill that teaches an AI agent to use CompUtils (see below) |
 
 | Modifiers | Purpose |
 |---|---|
 | `-ch` | Causes generated Gaussian inputs to create .chk files |
 | `-nbo` | Appends an NBO7-styled section to generated input (tested only for Gaussian at time of writing) |
 | `-ovr N` | Starts single points or benchmarking from entry N in the benchmarking list |
+| `--dry-run` | Writes the inputs and job scripts without submitting them |
+| `--json` | Prints one machine-readable report (for scripts and AI agents) |
 | `--help` | Lists flags and their usage |
 
 The terminal interface needs a window of at least 84 × 24 characters.
+
+### Using CompUtils with an AI Agent
+
+An AI agent (Google's Antigravity, Claude Code, …) can drive CompUtils over ssh instead of writing inputs or parsing
+outputs itself. Every command can run without a person at the keyboard: `--json` gives a report with an exit code,
+what was submitted, skipped and why, and what to run next. A question stops the run before anything is done, and the
+agent answers it with `--answer KEY=VALUE` (chemistry decisions are left to you).
+
+To teach your agent, run this on your computer (once; it keeps itself up to date afterwards), replacing `cluster` with
+your ssh name for the cluster and the path with your environment's:
+
+```
+ssh cluster '~/miniconda3/envs/compUtils/bin/cu -agent --ssh-host cluster' > SKILL.md
+```
+
+and put `SKILL.md` in a `computils` folder in your agent's skills folder (Antigravity: `~/.gemini/config/skills/computils/`
+for every workspace; Claude Code: `~/.claude/skills/computils/`).
 
 ## Configuration
 

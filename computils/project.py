@@ -34,6 +34,9 @@ def ProjectFilePath(root: Path, fileName: str) -> Path:
 # Shared by -init and the auto-prompt
 def CreateProjectRoot(target: Path, offerMove: bool = True) -> Path | None:
     markerDir = target / Defaults.projectMarker
+    # Asked before anything is created, so a run stopped at a question (agent.QuestionNeeded) has changed nothing
+    toMove = [fileName for fileName in PROJECT_FILES if offerMove and Path(fileName).is_file()
+              and AskBool(f"Move ./{fileName} into {markerDir} to share it project-wide?", "y", key=f"move-{fileName}")]
     try:
         markerDir.mkdir(exist_ok=True)
     except OSError as error:
@@ -44,12 +47,9 @@ def CreateProjectRoot(target: Path, offerMove: bool = True) -> Path | None:
     ResolveProjectFile.cache_clear()
     EnsureProjectConfig(target)
 
-    if offerMove:
-        for fileName in PROJECT_FILES:
-            localFile = Path(fileName)
-            if localFile.is_file() and AskBool(f"Move ./{fileName} into {markerDir} to share it project-wide?", "y"):
-                shutil.move(localFile, markerDir / fileName)
-                console.print(f"[operation]Moved {fileName} -> {markerDir / fileName}[/operation]")
+    for fileName in toMove:
+        shutil.move(Path(fileName), markerDir / fileName)
+        console.print(f"[operation]Moved {fileName} -> {markerDir / fileName}[/operation]")
     return target
 
 

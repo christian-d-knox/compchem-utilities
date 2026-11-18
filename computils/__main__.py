@@ -1,29 +1,70 @@
 """Entry point for the cu command (and `python -m computils`)."""
 import sys
 from pathlib import Path
-from rich.markup import escape
 from .defaults import Defaults
 from .catalog  import Catalog
 from .console  import ApplyTheme, console
 from .project  import LoadProjectConfig
+from . import agent
 
 
-def Main() -> None:
+def Main() -> int:
+    """Runs one cu command and returns its exit code (agent.Exit): what happened, for scripts and agents. With --json,
+    the run's report is printed on stdout too (agent.py)."""
+    argv = sys.argv[1:]
     # Help touches nothing: no config is written and no setup is asked (conda-installer.py checks the install with it)
-    if any(arg in ("-h", "--help") for arg in sys.argv[1:]):
+    if any(arg in ("-h", "--help") for arg in argv):
         from .cli import BuildParser
         BuildParser().print_help()
-        return
-    argv = sys.argv[1:]
+        return 0
     # The environment check (conda-installer.py's, before an environment is swapped in): touches nothing either
     if argv == ["--self-test"]:
         from .environment import SelfTest
-        raise SystemExit(SelfTest())
+        return SelfTest()
+
+    agent.Configure(argv)
+    agent.Reset(_CommandName(argv))
+    try:
+        _Run(argv)
+    except agent.QuestionNeeded as question:
+        agent.report.question = question.question
+        console.print(f"[warning]Needs an answer: {question}[/warning]", markup=False)
+    except agent.UsageError as error:
+        agent.report.usage, agent.report.error = True, str(error)
+        console.print(f"cu: error: {error}", style="error", markup=False)
+    except agent.NeedsHuman as human:
+        agent.Human(str(human), human.then)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception:
+        # A CompUtils bug: the traceback goes to stderr, as Python would print it, and the report names it
+        import traceback
+        traceback.print_exc()
+        agent.Crashed()
+    code = agent.Finish()
+    # A Neva-Touch Scheduler hook records its own outcome on the tracked job; its exit code means only "crashed or not"
+    # (a stalker's fallback, nevatouch.FireStep, reads it that way)
+    if argv[:1] == ["--neva-touch"] and code != agent.Exit.CRASHED:
+        return 0
+    return code
+
+
+def _CommandName(argv: list[str]) -> str:
+    """The action flag, for the report ('opt' for -opt; 'stalk' for -st on its own)."""
+    flags = [arg.lstrip("-") for arg in argv if arg.startswith("-") and arg not in ("--json", "--dry-run", "--answer")]
+    return flags[0] if flags else ""
+
+
+def _Run(argv: list[str]) -> None:
+    from . import prompts
+    # Nobody can answer a question without a TTY (an agent's ssh command, a script) or with --json: one with no
+    # --answer stops the run before it acts (prompts.py)
+    if agent.jsonOutput or not sys.stdin.isatty():
+        prompts.interactive = False
     # A Neva-Touch Scheduler hook (in a job script, or a stalker's run of one): nobody is there to answer, so nothing
     # may prompt, and the startup checks below belong to the runs people start
     nevaTouchHook = argv[:1] == ["--neva-touch"]
     if nevaTouchHook:
-        from . import prompts
         prompts.interactive = False
 
     # Load configs and lookup data BEFORE handing control to the CLI.
@@ -43,6 +84,11 @@ def Main() -> None:
         return
     opensTUI = argv in (["-tui"], ["--tui"]) or (not argv and Defaults.bareCommandOpensTUI)
     appliesProfile = argv[:1] in (["-profile"], ["--profile"])
+
+    # Setup is a conversation with a person: a run nobody can answer stops here, saying who must run what
+    if not prompts.interactive and (Defaults.needsFirstTimeSetup or Defaults.colorMode not in ("lowColor", "hexCode")):
+        raise agent.NeedsHuman("CompUtils isn't set up for this account yet: a person must run `cu` once in a terminal "
+                               "on this cluster (it asks about the cluster and notifications).", "cu -first")
 
     # If Defaults._Validate determined that first-time setup is needed,
     # run it here rather than from inside Defaults.
@@ -69,7 +115,7 @@ def Main() -> None:
         if not opensTUI:
             from .environment import Reports
             for severity, message in Reports():
-                console.print(f"[{severity}]{escape(message)}[/{severity}]")
+                agent.Notice(severity, message)
         if opensTUI and "notifications.toml" in Defaults.generatedFiles:
             from .wizards import NotificationSetup
             NotificationSetup()
@@ -80,6 +126,8 @@ def Main() -> None:
     from .dispatch import Dispatch
 
     if opensTUI:
+        if not sys.stdin.isatty():
+            raise agent.UsageError("The TUI needs a terminal.")
         # The TUI only builds the Intent; it then runs here exactly as a CLI invocation would
         from .tui import RunTUI, RELAUNCH
         intent = RunTUI()
@@ -90,16 +138,22 @@ def Main() -> None:
         if intent is None:
             return
     elif "-tui" in argv or "--tui" in argv:
-        console.print("[error]-tui cannot be combined with any other flag.[/error]")
-        raise SystemExit(2)
+        raise agent.UsageError("-tui cannot be combined with any other flag.")
     else:
         intent = ParseCLI(argv)
     submitted = Dispatch(intent)
-    # Every submitted job is tracked; -st stalks them right away
+    # A dry run's next step is the same command, submitting (unless the command said something more exact)
+    if agent.dryRun and agent.report.written and not agent.report.next:
+        agent.Next(agent.CommandLine(arg for arg in argv if arg != "--dry-run"), "Submit what was previewed.",
+                   show=False)
+    # Every submitted job is tracked; -st stalks them right away (with --json: one snapshot, never a loop)
     if getattr(intent, "stalk", False):
-        from .stalk import jobStalking
-        jobStalking(submitted, Defaults.stalkDuration, Defaults.stalkFrequency, intent.stalkLoop)
+        from .stalk import jobStalking, Snapshot
+        if agent.jsonOutput:
+            Snapshot(submitted)
+        else:
+            jobStalking(submitted, Defaults.stalkDuration, Defaults.stalkFrequency, intent.stalkLoop)
 
 
 if __name__ == "__main__":
-    Main()
+    raise SystemExit(Main())

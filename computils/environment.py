@@ -374,6 +374,25 @@ def StatusLines(status: Status, where: str) -> list[str]:
     return lines
 
 
+def StatusRecord(status: Status, where: str) -> dict:
+    """One variant's status for a report (`cu -env --json`)."""
+    variant = status.variant
+    record = {"label": variant.label, "name": variant.name, "file": variant.file, "from": where,
+              "inUse": status.running, "installed": status.prefix is not None, "verdict": status.Verdict()}
+    if status.prefix is not None:
+        record["prefix"] = str(status.prefix)
+    if status.missing:
+        record["missing"] = status.missing
+    if status.behind:
+        record["behind"] = [{"spec": spec, "installed": version} for spec, version in status.behind]
+    if status.python is not None:
+        record["python"] = {"spec": status.python[0], "installed": status.python[1]}
+    if status.job is not None:
+        record["job"] = {key: status.job.get(key) for key in ("mode", "phase", "started", "host")}
+        record["log"] = str(LogPath(variant.name))
+    return record
+
+
 def ChangeSummary(status: Status) -> str:
     """What a job will change, for its report: 'rdkit added, textual updated'."""
     parts = [f"{SpecName(spec)} added" for spec in status.missing]

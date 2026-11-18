@@ -9,7 +9,8 @@ from textual.screen import Screen
 from textual.widgets import Checkbox, Input, OptionList, Static
 
 from ..actions  import Action, CubeOption
-from ..analysis import DetectSuffix, GoodVibesArguments, Outputs, SpcPartners
+from ..analysis import (DEFAULT_CONCENTRATION, DEFAULT_CUTOFF, DEFAULT_SCALE, DEFAULT_TEMPERATURE,
+                         GoodVibesArguments, SelectionSuffix, SpcPartners)
 from ..catalog  import Catalog
 from ..defaults import Defaults
 from ..intent   import IntentDraft
@@ -38,13 +39,14 @@ def GoodVibesSettings(suffix: str) -> list[Setting]:
     This screen's text is in Title Case (Christian). A choice's notes read as one note across its rows, the later
     ones indented as its hanging lines."""
     return [
-        Setting("temperature", "Temperature", "Default 298.15 K", "298.15", "K"),
-        Setting("concentration", "Concentration", "Off: Gas Phase (1 atm)", "1.0", "mol/l", on=False),
+        Setting("temperature", "Temperature", f"Default {DEFAULT_TEMPERATURE:g} K", f"{DEFAULT_TEMPERATURE:g}", "K"),
+        Setting("concentration", "Concentration", "Off: Gas Phase (1 atm)", f"{DEFAULT_CONCENTRATION:.1f}", "mol/l",
+                on=False),
         Setting("grimme", "Entropy (qh-S)", "qh-G(T) Is Always Present (Required)", fixed="Grimme", on=True, choice="entropy"),
         Setting("truhlar", "", "  See G(T) for Uncorrected", fixed="Truhlar", on=False, choice="entropy"),
         Setting("enthalpy", "Enthalpy (qh-H)", "Off: RRHO Enthalpy", fixed="Head-Gordon", on=True),
-        Setting("cutoff", "  └ qh Cutoff", "Softer Modes Are Corrected", "100", "cm⁻¹", under="enthalpy"),
-        Setting("scale", "Vib Scale Factor", "Off: GV Auto-Detect from Method", "1.0", on=True),
+        Setting("cutoff", "  └ qh Cutoff", "Softer Modes Are Corrected", f"{DEFAULT_CUTOFF:g}", "cm⁻¹", under="enthalpy"),
+        Setting("scale", "Vib Scale Factor", "Off: GV Auto-Detect from Method", f"{DEFAULT_SCALE:.1f}", on=True),
         Setting("singlePoint", "Single Point", "", suffix, on=True, accepts=NAME),
         Setting("check", "Check", "Check for Level of Theory Consistency", on=False),
         Setting("extra", "Extra Keys", "Passed Directly to GoodVibes", "", on=False, accepts=TEXT),
@@ -100,8 +102,7 @@ class BuilderScreen(Screen):
         # detects it; None: nothing pairs). A selected SP file counts for its structure
         self.detected = None
         if action == Action.GOODVIBES:
-            selected = {path.stem for path in files} | {path.stem.rsplit("_", 1)[0] for path in files}
-            self.detected = DetectSuffix(Outputs(Path.cwd()), selected)
+            self.detected = SelectionSuffix(files)
 
     def compose(self) -> ComposeResult:
         # One framed form (P2): Files on the top edge, a titled rule per section, Submit on the bottom edge
