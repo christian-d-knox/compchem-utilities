@@ -27,13 +27,18 @@ class Action(Enum):
     STALK            = "stalk"      # -st on its own
     ATTRIBUTIONS     = "attributions"  # -attributions
     NEVA_TOUCH       = "nevatouch"  # --neva-touch: a job's Neva-Touch Scheduler hook (hidden: written into job scripts)
+    INFO             = "info"       # -info: what files say (info.FileFacts), read-only
+    METHODS          = "methods"    # -methods: the Optimization and Benchmark Methods in force here
+    OPTIMIZE         = "opt"        # -opt: the Optimization builder, headless (optimize.py)
+    SI_SCRAPER       = "si"         # -si: the SI Scraper, headless (scrape.py)
+    AGENT            = "agent"      # -agent [TOPIC]: the agent skill, or one of its topics (agentskill.py)
 
 # Actions that submit SLURM jobs, which -st can follow
 JOB_ACTIONS = (Action.RUN, Action.SINGLE_POINT, Action.BENCHMARK, Action.CUBE, Action.RERUN)
 
 # Actions that take a batch of files (IntentDraft.Validate, and the TUI's Continue)
 FILE_ACTIONS = (Action.RUN, Action.SINGLE_POINT, Action.BENCHMARK, Action.CUBE, Action.RERUN, Action.FORM_CHECK,
-                Action.GOODVIBES)
+                Action.GOODVIBES, Action.INFO, Action.OPTIMIZE)
 
 # The Neva-Touch Scheduler's steps: what a job's hook does once the job ends. SP submits the single point (an opt's);
 # DONE ends the chain (the single point's own hook only reports)

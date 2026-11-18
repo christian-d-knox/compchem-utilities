@@ -19,7 +19,7 @@ def NotificationSetup() -> None:
             print(line)
         print("=" * 55)
 
-    choice = AskBool("  Enable notifications?", "Y")
+    choice = AskBool("  Enable notifications?", "Y", key="notifications")
     if not choice:
         StopSetup("  Notifications disabled.", "  Re-run setup or edit notifications.toml to enable later.")
         return
@@ -54,7 +54,7 @@ def NotificationSetup() -> None:
         Defaults.chatID = chatID
         console.print(f"  \u2713 Chat ID detected: {chatID}") #light_green good
 
-        testChoice = AskBool("Send a test message?", "Y")
+        testChoice = AskBool("Send a test message?", "Y", key="test-message")
         if testChoice:
             success = _SendTelegram(botToken, chatID,
                 "Welcome to remote queue notifications with CompUtils!")
@@ -66,7 +66,7 @@ def NotificationSetup() -> None:
         console.print("[error]Detection timed out. This usually means the token is incorrect or Telegram was "
                       "unreachable.[/error]")
 
-        manualID = AskStr("Enter your chat ID manually (or press Enter to skip)").strip()
+        manualID = AskStr("Enter your chat ID manually (or press Enter to skip)", key="chat-id").strip()
         if manualID:
             Defaults.chatID = manualID
         else:
@@ -88,7 +88,7 @@ def ColorSetup() -> None:
                   "in addition to the set-up here.[/info]")
     console.print(Panel("For Windows users, this means high color is unavailable in PuTTY. Consider swapping "
                         "to something that supports truecolor, like Windows Terminal.", style="warning"))
-    hexColor = AskBool("Would you like to operate in high color mode?", "Y")
+    hexColor = AskBool("Would you like to operate in high color mode?", "Y", key="color-mode")
     Defaults.colorMode = "hexCode" if hexColor else "lowColor"
     Defaults._SaveSection("qol.toml")
     if not hexColor:
@@ -112,7 +112,7 @@ def firstTimeSetup(profileFile: Path | None = None) -> bool | None:
     SetupProfile(profileFile)
     clusters = Defaults.Clusters()
     # The lab profile's clusters come first, so a labmate's cluster is the default
-    index = AskChoice("Which HPC cluster are you using?", [cluster.hpcType for cluster in clusters])
+    index = AskChoice("Which HPC cluster are you using?", [cluster.hpcType for cluster in clusters], key="cluster")
     if index is None:
         console.print("[error]CompUtils needs a cluster to write job scripts for. For one not listed, a lab profile can "
                       "add it (see example-profile.toml).[/error]")

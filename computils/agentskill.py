@@ -1,0 +1,467 @@
+"""
+Teaching agents to drive CompUtils: the one registry every agent-facing command declares itself in, the skill it is
+generated into (`cu -agent`: SKILL.md, the format Antigravity and Claude Code both read), the topics an agent fetches
+when it needs them (`cu -agent TOPIC`: always the installed version's), and the check that keeps all of it in step with
+the CLI and the TUI (`python -m computils.agentskill`, like `python -m computils.attributions`).
+
+When a feature is added (a flag, an Action, a TUI item, a question), the check fails until it has an AgentCommand here
+(or is declared human-only, with why), its questions have keys, and any recipe naming it still parses. The skill's
+digest then changes, every --json report carries the new one, and the agent regenerates its skill on its next call.
+"""
+import hashlib, sys
+from dataclasses import dataclass
+from importlib import resources
+from pathlib import Path
+
+from .actions import Action
+
+# Recipes: package data, Markdown, with {cu} for the full cu path (and {host} for the ssh alias)
+RECIPE_FOLDER = "recipes"
+HOST_PLACEHOLDER = "<host>"
+
+
+@dataclass(frozen=True)
+class AgentCommand:
+    """One command as agents see it. flags: the argparse dests it owns (its action flag first). tui: the TUI items it
+    mirrors. agent False: a person's only (why says so); hidden: never typed (written into job scripts)."""
+    key:       str
+    flags:     tuple[str, ...]
+    action:    Action | None
+    purpose:   str
+    example:   str              = ""
+    results:   str              = ""
+    questions: tuple[str, ...]  = ()
+    tui:       tuple[str, ...]  = ()
+    agent:     bool             = True
+    why:       str              = ""
+    hidden:    bool             = False
+
+
+COMMANDS = [
+    AgentCommand("info", ("info",), Action.INFO,
+                 "What outputs and inputs say: status, charge/multiplicity, spin, route, energy, H/G corrections, "
+                 "imaginary frequencies, convergence, stability, <S**2>. Read once each: never read a .out yourself.",
+                 '-info "*.out" --json', "One record per file (info.FileFacts); next: cu -re / cu -sp suggestions."),
+    AgentCommand("methods", ("methods",), Action.METHODS,
+                 "The Optimization and Benchmark Methods in force here (project, else global): pick -opt's --method "
+                 "from these. They differ per project: list them in each folder.",
+                 "-methods --json", "One record per section: its level and each method's name, route, program, problem."),
+    AgentCommand("opt", ("optimize", "method", "route", "charge", "mult", "spin", "name", "cpus", "memory", "modred",
+                         "then_sp", "sp_cpus", "sp_memory"), Action.OPTIMIZE,
+                 "Write and submit an optimization of ONE molecule (an .xyz, or a prior input/output), as the TUI's "
+                 "Optimization builder does; --then-sp has the Neva-Touch Scheduler submit its single point when it "
+                 "ends (and re-run a stage that ran out of optimizer steps).",
+                 "-opt 8a.xyz --method wb97xd --charge 0 --mult 1 --then-sp --dry-run --json",
+                 "The input written, its method, charge, multiplicity, spin, resources and scheduled SP; submitted[].",
+                 ("method", "charge", "mult", "replace-input"), ("builder-opt",)),
+    AgentCommand("sp", ("singlePoint",), Action.SINGLE_POINT,
+                 "Write and submit each output's single point (Benchmark Methods' first entry; -ovr N picks another).",
+                 "-sp 8a.out --dry-run --json", "written[], submitted[], skipped[] with reasons.",
+                 tui=(f"action-{Action.SINGLE_POINT.value}",)),
+    AgentCommand("bench", ("bench",), Action.BENCHMARK,
+                 "Write and submit a benchmark suite: one single point per Benchmark Method.",
+                 "-b 8a.out --dry-run --json", "written[], submitted[], skipped[] per method variant.",
+                 tui=(f"action-{Action.BENCHMARK.value}",)),
+    AgentCommand("rerun", ("rerun",), Action.RERUN,
+                 "Re-run failed jobs from their last geometry, with the route they ran (named 8a_re, 8a_re2...).",
+                 "-re 8a.out --dry-run --json", "written[], submitted[].", tui=(f"action-{Action.RERUN.value}",)),
+    AgentCommand("run", ("run",), Action.RUN,
+                 "Submit inputs exactly as written (each gets a job script; every job is tracked).",
+                 "-r 8a.gjf --json", "submitted[].", tui=(f"action-{Action.RUN.value}",)),
+    AgentCommand("st", ("stalk", "dismiss"), Action.STALK,
+                 "The tracked jobs: with --json one snapshot (a ping: queue state, stage by stage progress, how each "
+                 "ended, the Neva-Touch Scheduler's step). --dismiss stops tracking jobs (IDs, names, or 'ended').",
+                 "-st --json", "One record per job: state, headline, stages (status, convergence, stable), nevaTouch.",
+                 ("dismiss-live", "stalk-loop"), ("screen-stalker",)),
+    AgentCommand("gv", ("goodvibes", "qh", "cutoff", "entropy", "temperature", "concentration", "scale", "spc", "check",
+                        "gv_keys"), Action.GOODVIBES,
+                 "Run GoodVibes on structures (their _SP files found by name) and convert to Excel. Without flags and "
+                 "with nobody to answer, it runs with the GoodVibes Builder's defaults (qh-H, Grimme qh-S, 298.15 K, "
+                 "1 atm, scale 1.0, the detected SP suffix).",
+                 "-gv 8a.out 8b.out --spc SP --json",
+                 "The table as GoodVibes wrote it: rows by structure (E_SPC, H_SPC, qh-H_SPC, G(T)_SPC, qh-G(T)_SPC...), "
+                 "with its temperature and concentration.",
+                 ("gv-qh", "gv-use-cutoff", "gv-cutoff", "gv-use-temperature", "gv-temperature", "gv-use-concentration",
+                  "gv-concentration", "gv-use-scale", "gv-scale", "gv-use-spc", "gv-custom-spc", "gv-spc", "gv-use-extra",
+                  "gv-extra"), (f"action-{Action.GOODVIBES.value}",)),
+    AgentCommand("si", ("si", "opt_label", "sp_label", "phase", "free", "output", "species"), Action.SI_SCRAPER,
+                 "Write SI_coordinates.txt (energies and coordinates for a paper's SI) from this folder, as the TUI's SI "
+                 "Scraper does. Stops (exit 6) when qh-G needs a GoodVibes run first: run report.next, then again.",
+                 '-si --opt-label "B3LYP-D3/6-31G(d)" --sp-label "M06-2X/def2-TZVP" --json',
+                 "One record per species written: opt and SP energies, enthalpies and free energies (Hartree).",
+                 ("si-opt-label", "si-sp-label", "replace-si"), ("scraper-si",)),
+    AgentCommand("cube", ("cube",), Action.CUBE,
+                 "Generate cube files from .chk/.fchk files (cubegen jobs; not tracked).",
+                 '-cu 8a.chk --answer "cube-options=Den Spin" --json', "submitted[].",
+                 ("cube-options", "orbital-range"), (f"action-{Action.CUBE.value}",)),
+    AgentCommand("formcheck", ("formcheck",), Action.FORM_CHECK,
+                 "Run formchk on Gaussian checkpoints (here, not through the queue).", "-form 8a.chk --json",
+                 "written[] (the .fchk files).", tui=(f"action-{Action.FORM_CHECK.value}",)),
+    AgentCommand("excel", ("excel",), Action.EXCEL, "Convert a Goodvibes_output.dat to GoodVibes.xlsx.",
+                 "-ex Goodvibes_output.dat --json", "written[]."),
+    AgentCommand("env", ("environment",), Action.ENVIRONMENT,
+                 "The CompUtils conda environments' status; 'refresh|rebuild|install [NAME]' updates one in the "
+                 "background (ask the human first: it changes what everything runs on).",
+                 "-env --json", "One record per environment: verdict, missing/behind packages, a running job.",
+                 ("env-rebuild",), ("screen-environment",)),
+    AgentCommand("update", ("update", "update_branch"), Action.UPDATE,
+                 "Update CompUtils' own code from GitHub (ask the human first). Afterwards, regenerate this skill.",
+                 "-up --json", "", ("reinstall",), ("screen-update",)),
+    AgentCommand("init", ("init",), Action.INIT_PROJECT,
+                 "Mark this folder as a project root (.computils/: project-level config and keylists).", "-init --json",
+                 "", ("nested-project", "move-*")),
+    AgentCommand("attributions", ("attributions",), Action.ATTRIBUTIONS,
+                 "Licenses and the citations each program, method and library asks for (a paper's methods section).",
+                 "-attributions", "", tui=("screen-attributions",)),
+    AgentCommand("agent", ("agent", "ssh_host"), Action.AGENT,
+                 "This skill (no TOPIC), or one of its topics, always the installed version's.", "-agent opt"),
+    AgentCommand("first", ("first",), Action.FIRST_TIME_SETUP, "First-time setup.", agent=False,
+                 why="it asks a person about their cluster, notifications and lab profile",
+                 questions=("color-mode", "cluster", "notifications", "test-message", "chat-id", "apply-profile",
+                            "profile-file")),
+    AgentCommand("profile", ("profile",), Action.PROFILE, "Apply a lab profile.", agent=False,
+                 why="it changes the lab's shared settings for this account", questions=("apply-changed-profile",)),
+    AgentCommand("refresh", ("refresh",), Action.REFRESH, "Rewrite the config files in the current layout.",
+                 agent=False, why="config is edited by people, in the TUI's Config"),
+    AgentCommand("tui", ("tui",), None, "The TUI.", agent=False, why="it is for a person at a terminal"),
+    AgentCommand("neva-touch", ("neva_touch",), Action.NEVA_TOUCH, "A job's Neva-Touch Scheduler hook.", hidden=True),
+]
+
+# Flags any command takes, and hidden ones (argparse.SUPPRESS: never listed, never checked)
+SHARED_FLAGS = {"help": "", "json": "", "answer": "", "dry_run": "", "checkpoint": "", "nbo7": "", "override": ""}
+# TUI items with no command: why a person does them (the check fails on any other uncovered item)
+HUMAN_ONLY_TUI = {"screen-config": "Config is edited by people (an agent reads it through -methods and its reports)",
+                  "screen-files": "Project Files (spinstates.txt) are a person's declarations about their molecules"}
+
+
+def Command(key: str) -> AgentCommand | None:
+    return next((command for command in COMMANDS if command.key == key), None)
+
+
+def _CuPath() -> str:
+    """cu's full path in this environment: over non-interactive ssh it isn't on PATH (only `con` activates the env)."""
+    scripts = Path(sys.prefix) / ("Scripts" if sys.platform == "win32" else "bin")
+    for name in ("cu.exe", "cu"):
+        if (scripts / name).exists():
+            return str(scripts / name)
+    return f"{Path(sys.executable)} -m computils"
+
+
+def _Flag(parser, dest: str):
+    return next((action for action in parser._actions if action.dest == dest), None)
+
+
+def _Usage(parser, command: AgentCommand) -> str:
+    action = _Flag(parser, command.flags[0])
+    return min(action.option_strings, key=len) if action is not None and action.option_strings else f"-{command.key}"
+
+
+# ─── The skill ────────────────────────────────────────────────────────
+
+def SkillText(host: str = HOST_PLACEHOLDER, digest: str | None = None, commit: str | None = None) -> str:
+    """SKILL.md: what an agent loads when CompUtils is relevant (~1.6k tokens). Everything else is a topic."""
+    from .cli import BuildParser
+    parser, cu = BuildParser(), _CuPath()
+    digest = SkillDigest() if digest is None else digest
+    if commit is None:
+        from .update import InstalledSource
+        sha = InstalledSource().commit[:7]
+        commit = f"@ {sha}" if sha else "(a local install)"
+    lines = [
+        "---",
+        "name: computils",
+        "description: Run, track and analyse Gaussian 16 and ORCA 6 jobs on the cluster through CompUtils (cu) over "
+        "ssh - optimizations (then single points), benchmarks, re-runs of failed jobs, reading outputs (energies, "
+        "frequencies, convergence), GoodVibes thermochemistry and SI coordinates. Use it for any computational "
+        "chemistry job or output on the cluster instead of writing inputs, calling sbatch or parsing outputs yourself.",
+        "---",
+        "",
+        "# CompUtils",
+        "",
+        "CompUtils (`cu`) is the lab's tested engine for writing inputs, submitting and tracking jobs, and reading "
+        "results. Drive it; never reimplement what it does.",
+        "",
+        "## How to Call It",
+        "",
+        "One command per call, over ssh, in the folder the files are in:",
+        "",
+        f"    ssh {host} 'cd FOLDER && {cu} COMMAND --json'",
+        "",
+        f"- Always the full path above: `cu` isn't on PATH in a non-interactive ssh shell.",
+        "- Inside the single quotes, quote values with double quotes (`--method \"From Source\"`).",
+        "- `--json`: one JSON report on stdout (compact; empty fields left out). Messages for people go to stderr.",
+        "- Nothing prompts and nothing loops: a question stops the run before it acts (exit 3).",
+        "",
+        "## The Loop",
+        "",
+        "Run, read `exit`, act, then follow `next` (commands to run next, each with why):",
+        "",
+        "| exit | status | what to do |",
+        "|---|---|---|",
+        "| 0 | done | Report to the human. |",
+        "| 1 | crashed | A CompUtils bug: tell the human, with `error`. Don't work around it. |",
+        "| 2 | usage | Fix the command (`error` says what was wrong). |",
+        "| 3 | question | Nothing was done. Answer `question` (decide if mechanical, else ask the human), then re-run "
+        "with `--answer KEY=VALUE`. |",
+        "| 4 | partial | Some items done; `skipped` says why for the rest. |",
+        "| 5 | nothing | Nothing could be done; `skipped` says why. |",
+        "| 6 | stopped | A precondition isn't met: run `next[0]`, then retry. |",
+        "| 7 | human | Only a person can do this: tell them exactly what `next` says. |",
+        "",
+        "## Rules",
+        "",
+        "- Preview first: job commands take `--dry-run` (inputs and scripts written, nothing submitted). Show the human "
+        "the route(s) and what will be submitted; submit on their go-ahead (`next` has the command).",
+        "- Chemistry is the human's: method, charge, multiplicity, spin (`--spin css|oss` for singlets), basis. Ask; "
+        "never guess. Mechanical answers (replacing an input you just previewed, dismissing ended jobs) are yours.",
+        "- Only `cu` submits (never `sbatch`): every job is then tracked, notified and chained.",
+        "- Read outputs with `-info` (never cat, grep or copy a .out: they're huge). Inputs are small to read.",
+        "- Check jobs with `-st --json` now and then: one snapshot per call. The human gets Telegram messages anyway.",
+        "- Config (methods, basis sets, ORCA blocks, clusters) and setup are the human's: they edit them in `cu -tui`.",
+        "- One molecule per `-opt` call; loop over molecules yourself.",
+        "",
+        "## Commands",
+        "",
+    ]
+    for command in COMMANDS:
+        if command.agent and not command.hidden:
+            lines.append(f"- `{_Usage(parser, command)}` ({command.key}): {command.purpose}")
+    human = [command for command in COMMANDS if not command.agent and not command.hidden]
+    lines += ["", "A person's only: " + "; ".join(f"`{_Usage(parser, command)}` ({command.why})" for command in human)
+              + ".", "",
+              "## Recipes", "",
+              f"Step-by-step workflows, with where the human decides. Before a task one covers, load it with "
+              f"`{cu} -agent NAME`:", ""]
+    lines += [f"- `{name}`: {RecipeTitle(name)}" for name in RecipeNames()]
+    lines += ["", "## More, When You Need It", "",
+              f"`{cu} -agent TOPIC` prints a topic, always the installed version's: {', '.join(TopicNames(False))}. "
+              "Each command's topic lists all its flags, its questions and what its report holds.", "",
+              "## Keeping This Skill Current", "",
+              f"Generated by CompUtils {commit}; skill {digest}. Every --json report carries `computils.skill`. If it "
+              f"isn't `{digest}`, CompUtils has changed: run `ssh {host} '{cu} -agent --ssh-host {host}'` and replace "
+              "this SKILL.md with its output before going on.", ""]
+    return "\n".join(lines)
+
+
+def SkillDigest() -> str:
+    """A hash of everything the skill says (the host left out: the cluster can't know the PC's alias for it; the
+    commit too), so it changes only when agent-facing behaviour does."""
+    return hashlib.sha256(SkillText(HOST_PLACEHOLDER, "", "").encode()).hexdigest()[:10]
+
+
+# ─── Topics (cu -agent TOPIC) ─────────────────────────────────────────
+
+def RecipeNames() -> list[str]:
+    folder = resources.files("computils") / RECIPE_FOLDER
+    return sorted(entry.name.removesuffix(".md") for entry in folder.iterdir() if entry.name.endswith(".md"))
+
+
+def RawRecipe(name: str) -> str:
+    return (resources.files("computils") / RECIPE_FOLDER / f"{name}.md").read_text(encoding="utf-8")
+
+
+def Recipe(name: str, host: str = HOST_PLACEHOLDER) -> str:
+    return RawRecipe(name).replace("{cu}", _CuPath()).replace("{host}", host)
+
+
+# A recipe's first line, which SKILL.md lists it by (the check requires it)
+RECIPE_TITLE = "# Recipe: "
+
+
+def RecipeTitle(name: str) -> str:
+    """What a recipe is for, from its first line ('' without a title)."""
+    first = RawRecipe(name).split("\n", 1)[0].strip()
+    return first.removeprefix(RECIPE_TITLE) if first.startswith(RECIPE_TITLE) else ""
+
+
+SPECIAL_TOPICS = ("report", "routes", "ssh")
+
+
+def TopicNames(recipes: bool = True) -> list[str]:
+    """Every topic `cu -agent TOPIC` prints (recipes=False: without the recipes, which SKILL.md lists apart)."""
+    return ([command.key for command in COMMANDS if command.agent and not command.hidden]
+            + (RecipeNames() if recipes else []) + list(SPECIAL_TOPICS))
+
+
+def CommandTopic(command: AgentCommand) -> str:
+    """A command's full reference, from argparse itself (so it is the installed version's)."""
+    from .cli import BuildParser
+    parser = BuildParser()
+    lines = [f"# {_Usage(parser, command)} ({command.key})", "", command.purpose, ""]
+    if command.example:
+        lines += ["Example:", "", f"    {_CuPath()} {command.example}", ""]
+    lines.append("Flags:")
+    for dest in command.flags:
+        action = _Flag(parser, dest)
+        if action is None or action.help == "==SUPPRESS==":
+            continue
+        metavar = (action.metavar if isinstance(action.metavar, str) else " ".join(action.metavar) if action.metavar
+                   else action.dest.upper() if action.nargs != 0 else "")
+        flag = ", ".join(action.option_strings) + (f" {metavar}" if metavar and action.nargs != 0 else "")
+        lines.append(f"- `{flag}`: {action.help or ''}")
+    lines.append("- Any command: `--json`, `--answer KEY=VALUE`; job commands: `--dry-run`, `-ch` (checkpoint), "
+                 "`-nbo` (NBO keylist), `-st` (snapshot of the submitted jobs).")
+    if command.results:
+        lines += ["", f"Report `results`: {command.results}"]
+    if command.questions:
+        lines += ["", "Questions it can ask (answer with --answer KEY=VALUE): "
+                  + ", ".join(f"`{key}`" for key in command.questions)]
+    return "\n".join(lines) + "\n"
+
+
+def Topic(name: str, host: str = HOST_PLACEHOLDER) -> str | None:
+    command = Command(name)
+    if command is not None and command.agent and not command.hidden:
+        return CommandTopic(command)
+    if name in RecipeNames():
+        return Recipe(name, host)
+    if name == "report":
+        return REPORT_TOPIC
+    if name == "routes":
+        return ROUTES_TOPIC
+    if name == "ssh":
+        return SSH_TOPIC.replace("{host}", host)
+    return None
+
+
+REPORT_TOPIC = """# The Report (--json)
+
+One JSON object on stdout, at the end of every run. Empty fields are left out.
+
+- `computils`: {commit, skill}: the installed version, and the skill digest (regenerate the skill when it changes).
+- `command`, `exit`, `status`: what ran and how it ended (0 done, 1 crashed, 2 usage, 3 question, 4 partial,
+  5 nothing, 6 stopped, 7 human).
+- `submitted`: [{name, jobId, cluster, output, nevaTouch}]: jobs sent to the queue (tracked).
+- `written`: absolute paths of the files written (inputs, job scripts, SI files...).
+- `skipped`: [{item, reason}]: what wasn't done, and why.
+- `results`: the command's own records (see its topic).
+- `warnings`: worth telling the human; nothing was stopped by them.
+- `question`: {key, text, type (bool|str|float|choice), options, default}: answer with --answer KEY=VALUE. A choice
+  takes the option's text or its index.
+- `next`: [{command, why}]: what to run next.
+- `notices`: things that happened outside this command (an environment update that finished...).
+- `error`: a usage error's message, or a crash's last traceback line.
+"""
+
+ROUTES_TOPIC = """# Route Templates (Optimization and Benchmark Methods)
+
+People write these in the TUI (Config > Job Keylists); an agent passes one to `-opt --route` only when the human asks.
+
+- A route is a program's route line: Gaussian `wB97XD def2SVP opt freq`, ORCA `B3LYP def2-SVP Opt Freq`. The method
+  (its first known token) picks the program.
+- `[selectors: keywords]` add keywords for some molecules only: `css`, `oss` (broken-symmetry singlet), `open`
+  (OSS or multiplicity > 1), `doublet`..`septet`, `mN`. E.g. `[oss: guess=mix stable=opt]`.
+- `{tag}` adds an ORCA Blocks block by its tag.
+- Stages: `route -> route` (later stages read the earlier one's geometry and orbitals through the checkpoint).
+  `%newchk` starts a new checkpoint.
+- The U/RO reference (open shells) is added by CompUtils: never write it yourself.
+- `opt=modredundant` stages take ModRed lines: `-opt --modred 1='B 1 2 F;A 1 2 3 F'`.
+"""
+
+SSH_TOPIC = """# Faster ssh
+
+Every cu call is one ssh connection. Share one connection between calls (and log in once, 2FA included) with this in
+the PC's ~/.ssh/config (Windows: %USERPROFILE%\\.ssh\\config; ControlMaster needs the OpenSSH that ships with Git for
+Windows or WSL, not Windows' own):
+
+    Host {host}
+        ControlMaster auto
+        ControlPath ~/.ssh/cm-%r@%h:%p
+        ControlPersist 4h
+
+Files: send small inputs (.xyz) up with scp; read results with `cu -info --json`, never by copying outputs down.
+"""
+
+
+# ─── The check (python -m computils.agentskill) ───────────────────────
+
+def _QuestionKeys(root: Path) -> tuple[dict[str, set[str]], list[str]]:
+    """Every Ask* call's key in the package ({key: prompts}), and the calls without one."""
+    import ast
+    keys, missing = {}, []
+    for path in sorted(root.rglob("*.py")):
+        if path.name == "prompts.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id in ("AskBool", "AskStr", "AskFloat", "AskChoice")):
+                where = f"{path.relative_to(root.parent)}:{node.lineno}"
+                key = next((keyword.value for keyword in node.keywords if keyword.arg == "key"), None)
+                if key is None:
+                    missing.append(where)
+                    continue
+                if isinstance(key, ast.Constant):
+                    name = key.value
+                elif isinstance(key, ast.JoinedStr) and key.values and isinstance(key.values[0], ast.Constant):
+                    name = key.values[0].value + "*"
+                else:
+                    missing.append(f"{where} (its key must be a string)")
+                    continue
+                prompt = ast.unparse(node.args[0]) if node.args else ""
+                keys.setdefault(name, set()).add(prompt)
+    return keys, missing
+
+
+def Problems() -> list[str]:
+    """Everything that would leave agents behind the CLI or the TUI."""
+    import shlex
+    from .cli import BuildParser
+    from .tui.home import ACTION_LABELS, BUILDER_ITEMS, SCRAPER_ITEMS, SCREEN_ITEMS, SUBMENUS
+    problems, parser = [], BuildParser()
+    owned = {dest for command in COMMANDS for dest in command.flags}
+    # 1. Every flag and Action belongs to a command (or is shared, or hidden)
+    for action in parser._actions:
+        if action.help == "==SUPPRESS==" and action.dest != "help":
+            continue
+        if action.dest not in owned and action.dest not in SHARED_FLAGS:
+            problems.append(f"Flag {'/'.join(action.option_strings)} has no AgentCommand (add it to one's flags).")
+    for dest in sorted(owned):
+        if _Flag(parser, dest) is None:
+            problems.append(f"An AgentCommand names flag '{dest}', which the parser doesn't have.")
+    for action in Action:
+        if not any(command.action == action for command in COMMANDS):
+            problems.append(f"Action.{action.name} has no AgentCommand.")
+    # 2. Every TUI item has a command, or a reason a person does it
+    mirrored = {item for command in COMMANDS for item in command.tui}
+    items = ({f"action-{action.value}" for action in ACTION_LABELS} | set(BUILDER_ITEMS) | set(SCRAPER_ITEMS)
+             | set(SCREEN_ITEMS)) - set(SUBMENUS)
+    for item in sorted(items - mirrored - set(HUMAN_ONLY_TUI)):
+        problems.append(f"TUI item '{item}' has no command: give it one (and an AgentCommand with tui=('{item}',)), "
+                        f"or say why it's a person's in HUMAN_ONLY_TUI.")
+    # 3. Every question has a key, one question per key, and each command's listed keys exist
+    keys, missing = _QuestionKeys(Path(__file__).parent)
+    problems += [f"A question at {where} has no key=." for where in missing]
+    problems += [f"Question key '{key}' is used for different questions: {' / '.join(sorted(prompts))}."
+                 for key, prompts in keys.items() if len(prompts) > 1]
+    for command in COMMANDS:
+        problems += [f"{command.key} lists question '{key}', which no Ask* call uses."
+                     for key in command.questions if key not in keys]
+    listed = {key for command in COMMANDS for key in command.questions}
+    problems += [f"Question '{key}' isn't listed in any AgentCommand's questions." for key in keys if key not in listed]
+    # 4. Recipes: every command line in them still parses, and names a command agents may run
+    import regex
+    for name in RecipeNames():
+        if not RecipeTitle(name):
+            problems.append(f"Recipe {name} has no title: its first line must be '{RECIPE_TITLE}What It's For'.")
+        for line in regex.findall(r"\{cu\} ([^`\n]+)", RawRecipe(name)):
+            try:
+                arguments = shlex.split(line.split(" | ")[0])
+                parser.parse_args(arguments)
+            except (ValueError, SystemExit, Exception) as error:
+                problems.append(f"Recipe {name}: `cu {line}` no longer parses ({error}).")
+    return problems
+
+
+def Main() -> int:
+    problems = Problems()
+    for problem in problems:
+        print(f"  - {problem}")
+    print("Every flag, Action, TUI item, question and recipe is covered." if not problems
+          else f"{len(problems)} problem{'s' if len(problems) != 1 else ''}.")
+    print(f"Skill digest: {SkillDigest()} ({len(SkillText())} characters)")
+    return 1 if problems else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(Main())

@@ -12,20 +12,16 @@ from ..actions  import Action
 from ..console  import console
 from ..catalog  import Catalog, RouteTemplate
 from ..defaults import Defaults
-from ..fileops  import (MapFile, FindInMap, HasContent, ExtractFrom, ExtractTermination, ExtractResources, IdentifyMethod,
-                        InputRoutes, JobChecks, SplitRoute, MoleculeElements, extensionGetter, ReadMolecule,
-                        ReRunTemplate, OrcaBlockName, ExtractProgram, ATOMIC_SYMBOLS, PROGRAMS, TERMINATION_TAIL)
+from ..fileops  import (MapFile, HasContent, ExtractFrom, ExtractTermination, IdentifyMethod, MoleculeElements,
+                        extensionGetter, ReRunTemplate, OrcaBlockName, ExtractProgram, PROGRAMS,
+                        TERMINATION_TAIL, Formula)
 from ..jobs     import RenderStages, StagesProblem
 from ..molecule import Molecule
-from ..spin     import ClassifySpin
+from ..info     import FileFacts, OutputExtensions, PreviewMolecule, SourceProgramName, Status
 
 def Styled(text: str, styleName: str) -> Text:
     """Text in one of the CLI's semantic styles (error, good, ...). ApplyTheme has already chosen lowColor or hexCode."""
     return Text(text, style=console.get_style(styleName) if styleName else "")
-
-
-def OutputExtensions() -> tuple[str, ...]:
-    return ".log", Defaults.outputExtension
 
 
 def ActionExtensions(action: Action) -> tuple[str, ...]:
@@ -49,14 +45,7 @@ def FileStatus(path: Path) -> str:
     """Normal / Error / Unknown for output files, and '—' for anything else."""
     if path.suffix not in OutputExtensions():
         return "—"
-    return _Status(_Termination(path))
-
-
-def _Status(termination: str) -> str:
-    # An output without a termination line in its tail is running or was killed
-    if not termination:
-        return "Unknown"
-    return "Error" if termination == Defaults.terminationVariants[2] else "Normal"
+    return Status(_Termination(path))
 
 
 def JobSummary(path: Path) -> tuple[str, str]:
@@ -65,8 +54,8 @@ def JobSummary(path: Path) -> tuple[str, str]:
         return "", "Empty"
     with MapFile(path) as data:
         program = ExtractProgram(data, path.suffix)
-        status = "Input" if path.suffix == program else _Status(ExtractTermination(data, -TERMINATION_TAIL))
-    return _SourceProgramName(program), status
+        status = "Input" if path.suffix == program else Status(ExtractTermination(data, -TERMINATION_TAIL))
+    return SourceProgramName(program), status
 
 
 def ProgramName(method: str, programOf: dict | None = None) -> str:
@@ -75,40 +64,30 @@ def ProgramName(method: str, programOf: dict | None = None) -> str:
     return program[0] if program else ""
 
 
-def _SourceProgramName(program: str) -> str:
-    """Display name of the program that wrote a file (ReadMolecule's sourceProgram, an input extension), or ''."""
-    return next((name for name, extensionKey in PROGRAMS.values() if program and getattr(Defaults, extensionKey) == program), "")
-
-
 def FileDetails(path: Path) -> dict[str, str]:
-    """The Details pane fields for one file. Missing values are '—'. The file is mapped once for all of them. An
-    input shows only what it says itself: its Stages (what each one runs) in place of an output's Status."""
+    """The Details pane fields for one file: info.FileFacts (the same reading as `cu -info`), formatted. Missing
+    values are '—'. An input shows only what it says itself: its Stages (what each one runs) in place of an output's
+    Status."""
     details = {"Status": "—", "Stages": "—", "Charge": "—", "Mult": "—", "Spin": "—", "Method": "—", "Program": "—",
                "CPU": "—", "Mem": "—", "Keys": "—"}
-    if not HasContent(path):
+    facts = FileFacts(path, full=False)
+    if facts["kind"] == "empty":
         return details
-    with MapFile(path) as data:
-        if path.suffix in OutputExtensions():
-            details["Status"] = ExtractTermination(data, -TERMINATION_TAIL).title() or "Unknown (No Termination Line)"
-        molecule = ReadMolecule(data, path)
-        if path.suffix == molecule.sourceProgram:
-            kinds = [JobChecks(route, molecule.sourceProgram, molecule.sourceInput).kinds
-                     for route in InputRoutes(data, molecule.sourceProgram)]
-            details["Stages"] = f"{len(kinds)} ({' → '.join(kinds)})"
-        if molecule.multiplicity:
-            details["Charge"], details["Mult"] = molecule.charge, molecule.multiplicity
-            spinState, reason = ClassifySpin(molecule, data)
-            details["Spin"] = f"{spinState.name} ({reason})"
-        method, basis, keys = SplitRoute(molecule.sourceRoute)
-        if method:
-            details["Method"] = f"{method}/{basis}" if basis else method
-        # The program that wrote the file; for a file of neither program's, the one its method runs in
-        details["Program"] = _SourceProgramName(molecule.sourceProgram) or (ProgramName(method) if method else "") or "—"
-        details["Keys"] = keys or "—"
-        # ExtractResources silently falls back to Defaults, which would show made-up values for this file
-        if molecule.sourceProgram and FindInMap(data, r"%nproc|nprocs", ignoreCase=True):
-            cpus, jobRam = ExtractResources(data, molecule.sourceProgram)
-            details["CPU"], details["Mem"] = str(cpus), f"{jobRam} GB"
+    if facts["kind"] == "output":
+        details["Status"] = facts.get("termination", "").title() or "Unknown (No Termination Line)"
+    if "stages" in facts:
+        details["Stages"] = f"{len(facts['stages'])} ({' → '.join(facts['stages'])})"
+    if "multiplicity" in facts:
+        details["Charge"], details["Mult"] = str(facts["charge"]), str(facts["multiplicity"])
+        details["Spin"] = f"{facts['spin']} ({facts['spinReason']})"
+    method, basis = facts.get("method", ""), facts.get("basis", "")
+    if method:
+        details["Method"] = f"{method}/{basis}" if basis else method
+    # The program that wrote the file; for a file of neither program's, the one its method runs in
+    details["Program"] = facts.get("program") or (ProgramName(method) if method else "") or "—"
+    details["Keys"] = facts.get("keys") or "—"
+    if "cpus" in facts:
+        details["CPU"], details["Mem"] = str(facts["cpus"]), f"{facts['memoryGB']} GB"
     return details
 
 
@@ -116,53 +95,11 @@ def FileDetails(path: Path) -> dict[str, str]:
 
 @dataclass
 class PreviewRow:
-    fileName: str
     spin: str = ""
     spans: list[tuple[str, str]] = field(default_factory=list)   # (text, origin): origin is method / base / added
     tags: list[str] = field(default_factory=list)
     carried: list[str] = field(default_factory=list)                # names of the template's own %blocks (re-run)
     problem: str = ""                                               # non-empty -> this job would be skipped
-
-
-def PreviewMolecule(path: Path) -> tuple[Molecule, str]:
-    """A Molecule for previewing, read the way dispatch reads one (one map), but without writing the .xyz file, and
-    why its spin state is what it is."""
-    if not HasContent(path):
-        return Molecule(path, path.stem, "", "", [], path.suffix, path.stem), ""
-    with MapFile(path) as data:
-        molecule = ReadMolecule(data, path)
-        molecule.spinState, reason = ClassifySpin(molecule, data)
-    return molecule, reason
-
-
-# Element symbol -> atomic number
-ATOMIC_NUMBERS = {symbol: number for number, symbol in ATOMIC_SYMBOLS.items()}
-
-
-def Symbols(coordinateList: list[str]) -> list[str]:
-    # A coordinate line's element (fileops.CoordinateLines writes the symbol first)
-    return [line.split()[0] for line in coordinateList if line.split()]
-
-
-def Formula(coordinateList: list[str]) -> str:
-    """The molecular formula in Hill order (C, then H, then alphabetical; alphabetical without carbon): C12H10N2."""
-    counts = {}
-    for symbol in Symbols(coordinateList):
-        counts[symbol] = counts.get(symbol, 0) + 1
-    order = sorted(counts, key=lambda symbol: (("C", "H").index(symbol) if "C" in counts and symbol in ("C", "H")
-                                               else 2, symbol))
-    return "".join(f"{symbol}{counts[symbol] if counts[symbol] > 1 else ''}" for symbol in order)
-
-
-def ElectronProblem(coordinateList: list[str], charge: int, multiplicity: int) -> str:
-    """Why this charge and multiplicity can't describe the molecule ('' if they can): Gaussian and ORCA stop at once."""
-    electrons = sum(ATOMIC_NUMBERS.get(symbol, 0) for symbol in Symbols(coordinateList)) - charge
-    if electrons < 1:
-        return f"Charge {charge} Leaves No Electrons"
-    # Multiplicity 2S + 1: an even electron count has odd multiplicities, at most one more than the electrons
-    if multiplicity < 1 or multiplicity > electrons + 1 or (electrons + multiplicity) % 2 == 0:
-        return f"Multiplicity {multiplicity} Can't Fit {electrons} Electrons"
-    return ""
 
 
 def RouteSpans(route: str, base: str) -> list[tuple[str, str]]:
@@ -229,7 +166,7 @@ def RowText(row: PreviewRow) -> Text:
 def PreviewRowFor(action: Action, molecule: Molecule, index: int) -> PreviewRow:
     """The route one job would get, from the template its workflow would choose (Re-run shares genReRun's ReRunTemplate).
     The template is rendered directly: the preview never sets molecule.template, nor mutates the Catalog."""
-    row = PreviewRow(molecule.rootName, spin=molecule.spinState.name)
+    row = PreviewRow(spin=molecule.spinState.name)
     if action == Action.RERUN:
         # No matching entry: the route verbatim (only the U/RO reference can be added), with an ORCA job's own blocks
         template, row.problem = ReRunTemplate(molecule)

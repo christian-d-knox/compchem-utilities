@@ -727,7 +727,7 @@ class ConfigScreen(Screen):
         lines, problems, notes = [], [], []
         for label, multiplicity, spin in STAND_INS:
             molecule = Molecule(Path("preview"), "preview", 0, multiplicity, 0, extension, "preview", spin)
-            row = RenderedRow(PreviewRow(label, spin.name), template, molecule, set(), self.PendingTexts(), stage,
+            row = RenderedRow(PreviewRow(spin.name), template, molecule, set(), self.PendingTexts(), stage,
                               programOf)
             if stage is not None and not notes:
                 notes = RenderStages(template, molecule)[stage - 1].notes

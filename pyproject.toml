@@ -25,3 +25,7 @@ cu = "computils.__main__:Main"
 
 [tool.setuptools.packages.find]
 include = ["computils*"]
+
+# The agent skill's recipes (agentskill.py reads them with importlib.resources)
+[tool.setuptools.package-data]
+computils = ["recipes/*.md"]

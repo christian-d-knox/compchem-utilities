@@ -232,14 +232,18 @@ def SetupProfile(profileFile: Path | None = None) -> None:
         profile = ReadProfile(copy.body, str(_CopyPath()))
         name = escape(profile.name) if profile is not None else "profile"
         source = f" (from {escape(copy.source)})" if copy.source else ""
-        if AskBool(f"Apply your lab profile {name}{source}?", "y") and ApplyProfile():
+        if AskBool(f"Apply your lab profile {name}{source}?", "y", key="apply-profile") and ApplyProfile():
             return
     console.print("[info]If your lab gave you a CompUtils lab profile (its clusters and shared settings), "
                   "enter its file now.[/info]")
     while True:
-        answer = AskStr("Lab profile file (Enter to skip)", "")
+        answer = AskStr("Lab profile file (Enter to skip)", "", key="profile-file")
         if not answer or ApplyProfile(Path(answer)):
             return
+        # An answer given in advance (--answer) would be given again: stop rather than ask forever
+        from . import agent
+        if "profile-file" in agent.answers:
+            raise agent.UsageError(f"--answer profile-file={answer}: that lab profile couldn't be applied (see above).")
 
 
 def CheckProfileSource() -> None:
@@ -253,7 +257,7 @@ def CheckProfileSource() -> None:
         return  # e.g. on another cluster, where the lab's shared folder doesn't exist
     if text == copy.body or _Digest(text) == copy.declined:
         return
-    if AskBool("Your lab profile has changed. Apply it now?", "y"):
+    if AskBool("Your lab profile has changed. Apply it now?", "y", key="apply-changed-profile"):
         ApplyProfile()
         return
     copy.declined = _Digest(text)
