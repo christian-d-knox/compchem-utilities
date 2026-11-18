@@ -7,12 +7,14 @@ packages are read from its conda-meta folder and compared with the yml's specs.
 
 The work is never done here. An environment can't be replaced by a process running from it, so cu hands it to
 conda-installer.py (the one environment builder, from the same commit as this code), run detached on conda's own
-Python in its background mode: it builds `<name>-next` alongside, installs the CompUtils already installed into it,
-checks it with `python -m computils --self-test`, waits until nothing on this machine runs from the old environment,
-then swaps the new one in (the old one is renamed aside first, so a failed swap is rolled back). Its progress is a
-state file in <binDirectory>/environments/, which cu reads; a finished job is reported once (Reports).
+Python in its background mode: it builds `<name>-next` alongside, installs CompUtils from the installed branch into it
+(the branch's latest, as the yml is: the code is brought up to date with the environment), checks it with
+`python -m computils --self-test`, waits until nothing on this machine runs from the old environment, then swaps the new
+one in (the old one is renamed aside first, so a failed swap is rolled back). Its progress is a state file in
+<binDirectory>/environments/, which cu reads; a finished job is reported once (Reports), with the code update if there
+was one.
 
-Update CompUtils (code) and this stay separate actions; CodeUpdateProblem keeps them safe together."""
+Update CompUtils (code only) and this stay separate actions; CodeUpdateProblem keeps them safe together."""
 import importlib.metadata
 import json
 import os
@@ -488,14 +490,15 @@ def _InstallerText(source: update.Source) -> tuple[bool, str]:
 
 
 def _PackageArguments(source: update.Source) -> list[str]:
-    """What the new environment gets as CompUtils: always the code installed now, so an environment job never changes
-    the code (Update CompUtils does that)."""
+    """What the new environment gets as CompUtils: the installed branch's latest (the code brought up to date with the
+    environment, whose yml is the branch's latest too), or a local install's own code. Never a commit: pip records what
+    follows the @ as the branch, which Update CompUtils then follows (a commit would pin it there for good)."""
     if not source.pipRecord:
         # A checkout pip doesn't know: nothing to install, the self-test runs on the checkout
         return ["--pythonpath", source.localPath]
     if source.localPath:
         return ["--package", source.localPath] + (["--editable"] if source.editable else [])
-    return ["--package", update.PackageUrl(source.commit or source.branch)]
+    return ["--package", update.PackageUrl(source.branch)]
 
 
 def Start(status: Status, mode: str, source: update.Source) -> tuple[bool, str]:
@@ -573,7 +576,8 @@ def Start(status: Status, mode: str, source: update.Source) -> tuple[bool, str]:
     if not current.get("pid"):
         current["pid"] = process.pid
         _WriteState(StatePath(variant.name), current)
-    return True, (f"{DOING[mode]} {variant.name} in the background. It needs nothing from you"
+    withCode = "" if source.localPath else ", CompUtils with it (the branch's latest)"
+    return True, (f"{DOING[mode]} {variant.name} in the background{withCode}. It needs nothing from you"
                   f"{'; it swaps in once CompUtils closes' if mode != 'install' else ''}. Log: {log}")
 
 
@@ -608,7 +612,11 @@ def Reports() -> list[tuple[str, str]]:
         named = f"the {state['label']} environment ({name})" if state.get("label") else name
         if state["phase"] == DONE:
             summary = state.get("summary", "")
-            message = f"{named} was {DONE_VERBS.get(mode, 'updated')}{': ' + summary if summary else ''}."
+            # The installer records the commit the environment had and the one it has now (its code update)
+            before, after = state.get("codeBefore") or "", state.get("codeCommit") or ""
+            updated = before and after and before != after
+            code = f"; CompUtils was updated too ({before[:7]} → {after[:7]})" if updated else ""
+            message = f"{named} was {DONE_VERBS.get(mode, 'updated')}{': ' + summary if summary else ''}{code}."
             reports.append(("good", message[0].upper() + message[1:]))
         else:
             kept = "nothing was installed" if mode == "install" else f"{name} is unchanged"
@@ -640,7 +648,8 @@ def CodeUpdateProblem(source: update.Source, ref: str) -> list[str]:
     job = RunningJob(name)
     if job is not None:
         return [f"A {job['mode']} of {name} is running in the background ({job.get('phase', '')}).",
-                "Update CompUtils once it's done: it reinstalls the code you have now."]
+                f"It brings CompUtils up to date on branch {source.branch} too; update CompUtils once it's done if you "
+                f"still need to."]
     variants = ReadVariants(source, ref)
     if isinstance(variants, str):
         return []
@@ -651,8 +660,10 @@ def CodeUpdateProblem(source: update.Source, ref: str) -> list[str]:
     if status.current:
         return []
     # The lines after "In Use: …" and "<where> asks for:"
+    # The environment job installs the installed branch's latest code, so on that branch it finishes this update too
+    then = " and updates CompUtils too" if ref == source.branch else ""
     return ["The new version needs an updated environment:", *StatusLines(status, variants.where)[2:],
-            "Update the environment first (it runs in the background)."]
+            f"Update the environment first (it runs in the background{then})."]
 
 
 # ─── Neva-Touch Scheduler hooks ───────────────────────────────────────

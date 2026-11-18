@@ -555,7 +555,8 @@ def _DispatchUpdate(intent: UpdateIntent) -> None:
     problem = environment.CodeUpdateProblem(source, intent.branch or source.branch)
     if problem:
         agent.Stop(chr(10).join(problem), "cu -env refresh",
-                   "The new version needs the environment updated first (run `cu -env` to see it).")
+                   "The new version needs the environment updated first (run `cu -env` to see it); the refresh "
+                   "brings CompUtils up to date on its branch too.")
         return
     if update.Install(intent.branch or source.branch):
         console.print("[good]The next cu run uses the new version.[/good]")

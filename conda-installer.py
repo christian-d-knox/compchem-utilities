@@ -318,6 +318,9 @@ def RemoveLegacyCuAlias() -> None:
 #            add what the env file asks for, CompUtils, self-test, swap
 #   rebuild  create <prefix>-next fresh from the env file, CompUtils, self-test,
 #            swap
+# CompUtils is --package: the installed branch (its latest, so the code comes
+# up to date with the environment; pip records the branch, which cu --update
+# follows) or a local install's folder.
 # The swap waits until nothing on this machine runs from the environment, then
 # renames it aside (instant, reversible), clones -next into its place and
 # checks that; a failure renames the old one back. While it swaps, a guard file
@@ -402,9 +405,23 @@ class JobFailed(Exception):
     pass
 
 
-def Install(conda: Path, prefix: Path, args) -> None:
-    """CompUtils (the code CompUtils had installed: --package, or nothing for a checkout on --pythonpath), then the
-    self-test: every module imports and GoodVibes runs."""
+def InstalledCommit(prefix: Path):
+    """The commit pip recorded for CompUtils in the environment at prefix (its direct_url.json), or None (not
+    installed from GitHub, or no record)."""
+    for pattern in ("lib/python*/site-packages/compchem_utilities-*.dist-info/direct_url.json",
+                    "Lib/site-packages/compchem_utilities-*.dist-info/direct_url.json"):
+        for path in prefix.glob(pattern):
+            try:
+                return json.loads(path.read_text()).get("vcs_info", {}).get("commit_id") or None
+            except (OSError, ValueError, AttributeError):
+                return None
+    return None
+
+
+def Install(conda: Path, prefix: Path, args, state: State) -> None:
+    """CompUtils (--package: the installed branch, so the code is brought up to date with the environment, or a local
+    install's folder; nothing for a checkout on --pythonpath), then the self-test: every module imports and GoodVibes
+    runs. The commit installed goes in the state, for CompUtils' report."""
     if args.package:
         if Run(InPrefix(conda, prefix, *PipInstall(args.package, args.editable)), check=False) != 0:
             raise JobFailed("pip couldn't install CompUtils")
@@ -414,6 +431,9 @@ def Install(conda: Path, prefix: Path, args) -> None:
         env["PYTHONPATH"] = args.pythonpath
     if Run(InPrefix(conda, prefix, *SELF_TEST), check=False, env=env) != 0:
         raise JobFailed("the self-test failed (see the log)")
+    commit = InstalledCommit(prefix)
+    if commit:
+        state.Set(codeCommit=commit)
 
 
 def SwapIn(conda: Path, prefix: Path, built: Path, args, state: State) -> None:
@@ -442,7 +462,7 @@ def SwapIn(conda: Path, prefix: Path, built: Path, args, state: State) -> None:
         if Run([conda, "create", "-y", "--offline", "-p", prefix, "--clone", built], check=False) != 0:
             raise JobFailed("conda couldn't copy the new environment into place")
         # The clone moved CompUtils' own files: install it again, so its command points at the final place
-        Install(conda, prefix, args)
+        Install(conda, prefix, args, state)
     except Exception:
         print("\nThe swap failed: putting the old environment back.", flush=True)
         shutil.rmtree(str(prefix), ignore_errors=True)
@@ -476,6 +496,9 @@ def Background(args) -> None:
         if conda is None:
             raise JobFailed("conda wasn't found")
         name, channels, specs = ReadYml(args.yml)
+        if args.mode != "install":
+            # The code the environment has now, so CompUtils can report the update (Install records the new one)
+            state.Set(codeBefore=InstalledCommit(prefix))
         state.Phase("Building")
         if args.mode == "install" and prefix.exists():
             raise JobFailed("{} already exists".format(prefix))
@@ -493,7 +516,7 @@ def Background(args) -> None:
         elif Run([conda, "create", "-y", "-p", built, *ChannelArgs(channels), *specs], check=False) != 0:
             raise JobFailed("conda couldn't create the environment")
         state.Phase("Installing CompUtils")
-        Install(conda, built, args)
+        Install(conda, built, args, state)
         if args.mode != "install":
             SwapIn(conda, prefix, built, args, state)
         state.Set(phase=DONE, finished=time.time())
