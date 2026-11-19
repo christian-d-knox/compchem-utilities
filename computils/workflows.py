@@ -66,8 +66,8 @@ def gimmeCubes(molecule: Molecule, intent: CubeIntent) -> None:
         outputName = fileCreation(molecule.baseName, Defaults.cubeExtension, label)
         queueName = fileCreation(molecule.baseName, Defaults.queueExtension, label)
 
-        slurmHandler(molecule, queueName, outputName, Defaults.CPU,
-                     int(Defaults.CPU * Defaults.memoryRatio + Defaults.memoryBuffer))
+        # cubegen runs on one core ('cubegen 1'): the job asks for one, and one core's memory
+        slurmHandler(molecule, queueName, outputName, 1, int(Defaults.memoryRatio + Defaults.memoryBuffer))
 
         with open(queueName,"a") as queueFile:
             queueFile.writelines(Defaults.gaussianNonVariant)
