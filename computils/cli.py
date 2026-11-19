@@ -80,6 +80,9 @@ def BuildParser() -> argparse.ArgumentParser:
                         help="Stalk the submitted jobs. On its own, stalk every tracked job (any directory).")
     parser.add_argument('--dismiss', nargs='+', metavar="JOB",
                         help="With -st: stop tracking these jobs (IDs or names; 'ended': every ended one).")
+    parser.add_argument('--wait', nargs='*', metavar="JOB",
+                        help="With -st: wait until one of these jobs (IDs or names; none: every running one) ends, then "
+                             "report it and exit. For agents: run it as a background command instead of polling.")
     parser.add_argument('-ch', '--checkpoint', action='store_true', help="Enable Gaussian checkpoint files.")
     parser.add_argument('-nbo', '--nbo7', action='store_true', help="Enable NBO7 keylist.")
     parser.add_argument('-ovr', '--override', type=int, default=0, help="Index override for benchmark methods (zero-indexed).")
@@ -170,9 +173,9 @@ def ParseCLI(argv: list[str]) -> Intent:
     # Set the action from whichever action flag was given
     # Given, not truthy: a bare -gv parses as []
     flag = next((dest for dest in ACTION_FLAGS if getattr(args, dest) not in (None, False)), None)
-    if flag is None and not args.stalk and not args.dismiss:
+    if flag is None and not args.stalk and not args.dismiss and args.wait is None:
         raise agent.UsageError("No action specified. Run `cu --help` for usage.")
-    # -st on its own stalks every tracked job (--dismiss is -st's too)
+    # -st on its own stalks every tracked job (--dismiss and --wait are -st's too)
     draft.action = ACTION_FLAGS[flag] if flag else Action.STALK
 
     # File-bearing actions: expand globs if the shell didn't, collect all files
@@ -243,6 +246,7 @@ def ParseCLI(argv: list[str]) -> Intent:
 
     # Modifiers
     draft.dismiss       = args.dismiss or []
+    draft.wait          = args.wait
     draft.stalk         = args.stalk
     draft.checkpoint    = args.checkpoint
     draft.nbo7          = args.nbo7
@@ -250,9 +254,9 @@ def ParseCLI(argv: list[str]) -> Intent:
     draft.updateBranch  = args.update_branch
 
     # Sub-prompts — preserved from current CLI behavior. With --json, or with nobody at a terminal to answer (an agent's
-    # ssh call), -st is one snapshot: never a loop, so never the loop question
+    # ssh call), -st is one snapshot: never a loop, so never the loop question (nor with --dismiss or --wait)
     from . import prompts
-    if draft.stalk and prompts.interactive and not agent.jsonOutput and not draft.dismiss:
+    if draft.stalk and prompts.interactive and not agent.jsonOutput and not draft.dismiss and draft.wait is None:
         draft.stalkLoop = AskBool("Enable stalk looping (i.e. re-initialize until all jobs terminate)?", "Y", key="stalk-loop")
 
     if draft.action == Action.CUBE:

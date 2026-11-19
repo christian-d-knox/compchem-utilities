@@ -68,10 +68,16 @@ COMMANDS = [
     AgentCommand("run", ("run",), Action.RUN,
                  "Submit inputs exactly as written (each gets a job script; every job is tracked).",
                  "-r 8a.gjf --json", "submitted[].", tui=(f"action-{Action.RUN.value}",)),
-    AgentCommand("st", ("stalk", "dismiss"), Action.STALK,
+    AgentCommand("st", ("stalk", "dismiss", "wait"), Action.STALK,
                  "The tracked jobs: with --json (or with nobody at a terminal) one snapshot, never a loop (a ping: "
-                 "queue state, stage by stage progress, how each ended, the Neva-Touch Scheduler's step). --dismiss stops tracking jobs (IDs, names, or 'ended').",
-                 "-st --json", "One record per job: state, headline, stages (status, convergence, stable), nevaTouch.",
+                 "queue state, stage by stage progress, how each ended, the Neva-Touch Scheduler's step). --wait JOB... "
+                 "waits until one of those jobs ends (run it as a background command, then end your turn). --dismiss "
+                 "stops tracking jobs (IDs, names, or 'ended').",
+                 "-st --wait 24769828 --json",
+                 "One record per job: state, headline, stages (status, convergence, stable), nevaTouch. With --wait, "
+                 "first {wait: {reason (ended, time limit, dismissed), ended: [{name, jobId, message}], waiting: [job "
+                 "IDs still running, the Neva-Touch Scheduler's new jobs included]}}, and next: the command to wait "
+                 "again, and -info for a job that didn't end normally.",
                  ("dismiss-live", "stalk-loop"), ("screen-stalker",)),
     AgentCommand("gv", ("goodvibes", "qh", "cutoff", "entropy", "temperature", "concentration", "scale", "spc", "check",
                         "gv_keys"), Action.GOODVIBES,
@@ -218,7 +224,9 @@ def SkillText(host: str = HOST_PLACEHOLDER, digest: str | None = None, commit: s
         "never guess. Mechanical answers (replacing an input you just previewed, dismissing ended jobs) are yours.",
         "- Only `cu` submits (never `sbatch`): every job is then tracked, notified and chained.",
         "- Read outputs with `-info` (never cat, grep or copy a .out: they're huge). Inputs are small to read.",
-        "- Check jobs with `-st --json` now and then: one snapshot per call. The human gets Telegram messages anyway.",
+        "- Waiting for jobs: never poll `-st` or sleep in a loop. Run the `-st --wait JOB... --json` that a submission's "
+        "`next` gives as a background command and end your turn: it exits (waking you) when one of them ends. Read "
+        "its report, act, and run its `next` to wait again. `-st --json` is one snapshot, any time.",
         "- Config (methods, basis sets, ORCA blocks, clusters) and setup are the human's: they edit them in `cu -tui`.",
         "- One molecule per `-opt` call; loop over molecules yourself.",
         "",
@@ -391,6 +399,19 @@ Every cluster command runs as one ssh call. These rules hold from PowerShell (5.
 
 - Small inputs (.xyz) go up with `scp`. Read results with `{cu} -info --json`, never by copying outputs down.
 
+## Waiting for Jobs (Long Commands)
+
+`{cu} -st --wait JOB... --json` runs until one of the jobs ends, minutes to days. Run it as a background command
+(your harness wakes you when it exits) and end your turn:
+
+    ssh -n -o ServerAliveInterval=60 {host} "{cu} -st --wait 24769828 24769829 --json"
+
+- `-n` keeps ssh off your console's input; `ServerAliveInterval` notices a dead connection.
+- Exit 255 is ssh's own: the connection dropped (your computer slept, the network changed). Nothing was lost: run
+  `{cu} -st --json` once to see what happened meanwhile, then wait again on the jobs still running.
+- The wait stops by itself when its connection is gone, and after a day at most, so nothing is left running on the
+  login node.
+
 ## The ssh Config (Your Computer's)
 
 `{host}` is a Host entry in `~/.ssh/config` (Windows: `%USERPROFILE%\.ssh\config`). That file is the human's: show
@@ -400,6 +421,7 @@ touch keys or known_hosts, and never turn host key checking off.
     Host {host}
         HostName CLUSTER_LOGIN_HOST
         User USER_NAME
+        ServerAliveInterval 60
 
 **A shared connection** (faster, and one login for 2FA) adds these lines, but only when your `ssh` supports it:
 check `(Get-Command ssh).Source` in PowerShell (or `ssh -V`). Windows' own OpenSSH (`C:\Windows\System32\OpenSSH`)

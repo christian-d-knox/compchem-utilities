@@ -190,9 +190,11 @@ class NevaTouchIntent(Intent):
 @dataclass
 class StalkIntent(Intent):
     """`cu -st` on its own — stalk every tracked job, whichever directory it was submitted from. With --json, one
-    snapshot (stalk.Snapshot). dismiss: job IDs or names to stop tracking ('ended': every ended one), and nothing else."""
-    loop:    bool      = False
-    dismiss: list[str] = field(default_factory=list)
+    snapshot (stalk.Snapshot). dismiss: job IDs or names to stop tracking ('ended': every ended one), and nothing else.
+    wait: job IDs or names to wait for ([]: every running one; stalk.Wait), None when not waiting."""
+    loop:    bool                = False
+    dismiss: list[str]           = field(default_factory=list)
+    wait:    Optional[list[str]] = None
 
 
 @dataclass
@@ -332,8 +334,9 @@ class IntentDraft:
     # REFRESH: '' (global files) or 'project' (also the nearest project.toml)
     refreshScope: str = ""
 
-    # STALK: tracked jobs to dismiss (IDs, names, or 'ended')
-    dismiss: list[str] = field(default_factory=list)
+    # STALK: tracked jobs to dismiss (IDs, names, or 'ended'), or to wait for (None: not waiting; []: every running one)
+    dismiss: list[str]           = field(default_factory=list)
+    wait:    Optional[list[str]] = None
 
     # AGENT
     agentTopic:   str = ""
@@ -418,6 +421,10 @@ class IntentDraft:
 
         if self.dismiss and self.action != Action.STALK:
             errors.append("--dismiss goes with -st on its own (e.g. 'cu -st --dismiss 123456').")
+        if self.wait is not None and self.action != Action.STALK:
+            errors.append("--wait goes with -st on its own (e.g. 'cu -st --wait 123456 --json').")
+        if self.wait is not None and self.dismiss:
+            errors.append("--wait and --dismiss are separate runs: dismiss first, then wait.")
 
         if self.action == Action.REFRESH and self.refreshScope not in ("", "project"):
             errors.append(f"-refresh takes no argument, or 'project' (got '{self.refreshScope}').")
@@ -441,7 +448,8 @@ class IntentDraft:
             case Action.REFRESH:
                 return RefreshIntent(project=self.refreshScope == "project")
             case Action.STALK:
-                return StalkIntent(loop=self.stalkLoop, dismiss=list(self.dismiss))
+                return StalkIntent(loop=self.stalkLoop, dismiss=list(self.dismiss),
+                                   wait=None if self.wait is None else list(self.wait))
             case Action.AGENT:
                 return AgentIntent(topic=self.agentTopic, sshHost=self.agentSshHost)
             case Action.SI_SCRAPER:
