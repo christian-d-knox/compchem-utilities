@@ -5,7 +5,7 @@ to be (a minimum, a transition state, a closed- or open-shell singlet) is the hu
 
 1. Read every output at once:
 
-       {cu} -info "*.out" --json
+       {cu} -info '*.out' --json
 
 2. Per output, in `results`:
    - `status` and `termination`: Normal, Error, or Unknown (still running, or killed). An optimization that ran out
@@ -27,4 +27,4 @@ to be (a minimum, a transition state, a closed- or open-shell singlet) is the hu
    - A singlet read as CSS with `stability` false, or a high `s2`: it may be open shell. Re-optimizing it as an
      open-shell singlet is the human's call; on their word, preview with a new name:
 
-         {cu} -opt 8a.out --method "From Source" --spin oss --name 8a_oss --dry-run --json
+         {cu} -opt 8a.out --method 'From Source' --spin oss --name 8a_oss --dry-run --json

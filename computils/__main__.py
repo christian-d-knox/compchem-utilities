@@ -146,10 +146,11 @@ def _Run(argv: list[str]) -> None:
     if agent.dryRun and agent.report.written and not agent.report.next:
         agent.Next(agent.CommandLine(arg for arg in argv if arg != "--dry-run"), "Submit what was previewed.",
                    show=False)
-    # Every submitted job is tracked; -st stalks them right away (with --json: one snapshot, never a loop)
+    # Every submitted job is tracked; -st stalks them right away (with --json, or with nobody at a terminal: one
+    # snapshot, never a loop that would hold an agent's shell)
     if getattr(intent, "stalk", False):
         from .stalk import jobStalking, Snapshot
-        if agent.jsonOutput:
+        if agent.jsonOutput or not prompts.interactive:
             Snapshot(submitted)
         else:
             jobStalking(submitted, Defaults.stalkDuration, Defaults.stalkFrequency, intent.stalkLoop)

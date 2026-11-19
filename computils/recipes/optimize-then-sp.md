@@ -1,7 +1,7 @@
 # Recipe: Optimize, Then the Single Point
 
 Optimize molecules, and have each one's single point submitted on its own when its optimization ends (the Neva-Touch
-Scheduler). Every command below runs as `ssh {host} 'cd FOLDER && COMMAND'`.
+Scheduler). Every command below runs as `ssh {host} "cd FOLDER && COMMAND"`.
 
 1. See which methods this project has, and agree on one with the human (the method is their call):
 

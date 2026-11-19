@@ -41,7 +41,7 @@ COMMANDS = [
     AgentCommand("info", ("info",), Action.INFO,
                  "What outputs and inputs say: status, charge/multiplicity, spin, route, energy, H/G corrections, "
                  "imaginary frequencies, convergence, stability, <S**2>. Read once each: never read a .out yourself.",
-                 '-info "*.out" --json', "One record per file (info.FileFacts); next: cu -re / cu -sp suggestions."),
+                 "-info '*.out' --json", "One record per file (info.FileFacts); next: cu -re / cu -sp suggestions."),
     AgentCommand("methods", ("methods",), Action.METHODS,
                  "The Optimization and Benchmark Methods in force here (project, else global): pick -opt's --method "
                  "from these. They differ per project: list them in each folder.",
@@ -69,8 +69,8 @@ COMMANDS = [
                  "Submit inputs exactly as written (each gets a job script; every job is tracked).",
                  "-r 8a.gjf --json", "submitted[].", tui=(f"action-{Action.RUN.value}",)),
     AgentCommand("st", ("stalk", "dismiss"), Action.STALK,
-                 "The tracked jobs: with --json one snapshot (a ping: queue state, stage by stage progress, how each "
-                 "ended, the Neva-Touch Scheduler's step). --dismiss stops tracking jobs (IDs, names, or 'ended').",
+                 "The tracked jobs: with --json (or with nobody at a terminal) one snapshot, never a loop (a ping: "
+                 "queue state, stage by stage progress, how each ended, the Neva-Touch Scheduler's step). --dismiss stops tracking jobs (IDs, names, or 'ended').",
                  "-st --json", "One record per job: state, headline, stages (status, convergence, stable), nevaTouch.",
                  ("dismiss-live", "stalk-loop"), ("screen-stalker",)),
     AgentCommand("gv", ("goodvibes", "qh", "cutoff", "entropy", "temperature", "concentration", "scale", "spc", "check",
@@ -87,12 +87,12 @@ COMMANDS = [
     AgentCommand("si", ("si", "opt_label", "sp_label", "phase", "free", "output", "species"), Action.SI_SCRAPER,
                  "Write SI_coordinates.txt (energies and coordinates for a paper's SI) from this folder, as the TUI's SI "
                  "Scraper does. Stops (exit 6) when qh-G needs a GoodVibes run first: run report.next, then again.",
-                 '-si --opt-label "B3LYP-D3/6-31G(d)" --sp-label "M06-2X/def2-TZVP" --json',
+                 "-si --opt-label 'B3LYP-D3/6-31G(d)' --sp-label 'M06-2X/def2-TZVP' --json",
                  "One record per species written: opt and SP energies, enthalpies and free energies (Hartree).",
                  ("si-opt-label", "si-sp-label", "replace-si"), ("scraper-si",)),
     AgentCommand("cube", ("cube",), Action.CUBE,
                  "Generate cube files from .chk/.fchk files (cubegen jobs; not tracked).",
-                 '-cu 8a.chk --answer "cube-options=Den Spin" --json', "submitted[].",
+                 "-cu 8a.chk --answer 'cube-options=Den Spin' --json", "submitted[].",
                  ("cube-options", "orbital-range"), (f"action-{Action.CUBE.value}",)),
     AgentCommand("formcheck", ("formcheck",), Action.FORM_CHECK,
                  "Run formchk on Gaussian checkpoints (here, not through the queue).", "-form 8a.chk --json",
@@ -185,10 +185,12 @@ def SkillText(host: str = HOST_PLACEHOLDER, digest: str | None = None, commit: s
         "",
         "One command per call, over ssh, in the folder the files are in:",
         "",
-        f"    ssh {host} 'cd FOLDER && {cu} COMMAND --json'",
+        f"    ssh {host} \"cd FOLDER && {cu} COMMAND --json\"",
         "",
         f"- Always the full path above: `cu` isn't on PATH in a non-interactive ssh shell.",
-        "- Inside the single quotes, quote values with double quotes (`--method \"From Source\"`).",
+        "- Double quotes outside, single quotes inside: quote values with single quotes (`--method 'From Source'`). "
+        "Never put `$`, backticks or double quotes inside (your own shell would expand them); a value that needs them "
+        "goes in a file. This form works the same from PowerShell, cmd, bash and zsh. More: `-agent ssh`.",
         "- `--json`: one JSON report on stdout (compact; empty fields left out). Messages for people go to stderr.",
         "- Nothing prompts and nothing loops: a question stops the run before it acts (exit 3).",
         "",
@@ -239,7 +241,8 @@ def SkillText(host: str = HOST_PLACEHOLDER, digest: str | None = None, commit: s
               "## Keeping This Skill Current", "",
               "Every --json report carries `computils.commit` and `computils.skill`. If either differs from the "
               "line below (a local install's commit is always `local`: compare the skill only), CompUtils has "
-              f"changed: run `ssh {host} '{cu} -agent --ssh-host {host}'` and replace this SKILL.md with its output "
+              f"changed: regenerate it (`ssh {host} \"{cu} -agent --ssh-host {host}\"`; see `-agent ssh` for saving it) "
+              "and replace this SKILL.md with it "
               "before going on.", "",
               f"Generated by CompUtils {commit}; skill {digest}.", ""]
     return "\n".join(lines)
@@ -322,7 +325,7 @@ def Topic(name: str, host: str = HOST_PLACEHOLDER) -> str | None:
     if name == "routes":
         return ROUTES_TOPIC
     if name == "ssh":
-        return SSH_TOPIC.replace("{host}", host)
+        return SSH_TOPIC.replace("{host}", host).replace("{cu}", _CuPath())
     return None
 
 
@@ -360,18 +363,51 @@ People write these in the TUI (Config > Job Keylists); an agent passes one to `-
 - `opt=modredundant` stages take ModRed lines: `-opt --modred 1='B 1 2 F;A 1 2 3 F'`.
 """
 
-SSH_TOPIC = """# Faster ssh
+SSH_TOPIC = """# Calling the Cluster From Your Computer
 
-Every cu call is one ssh connection. Share one connection between calls (and log in once, 2FA included) with this in
-the PC's ~/.ssh/config (Windows: %USERPROFILE%\\.ssh\\config; ControlMaster needs the OpenSSH that ships with Git for
-Windows or WSL, not Windows' own):
+Every cluster command runs as one ssh call. These rules hold from PowerShell (5.1 and 7), cmd, bash and zsh alike.
+
+## Quoting
+
+    ssh {host} "cd FOLDER && {cu} -opt 8a.out --method 'From Source' --dry-run --json"
+
+- Double quotes around the whole remote command; single quotes around any value inside it.
+- Never double quotes inside: Windows PowerShell 5.1 strips them from a program's argument, so `"From Source"`
+  arrives as two words and `"B3LYP-D3/6-31G(d)"` as a bash syntax error.
+- Never `$` or backticks inside: your own shell expands them before ssh sends the command (PowerShell and bash both).
+  For your user name on the cluster, use `squeue --me`, or run `ssh {host} whoami` once and write the name.
+- A value that needs `$`, a backtick or a double quote goes in a file (send it with `scp`).
+- `next[].command` in a report is already quoted this way: put it inside the double quotes as it is.
+
+## Exit Codes and Output
+
+- ssh returns the remote command's exit code: `$LASTEXITCODE` in PowerShell, `$?` in bash and zsh.
+- The `--json` report is plain ASCII, so it reads the same in every console. Messages for people go to stderr.
+- **Saving a file from the cluster** (your computils skill): copy it byte for byte, never through your shell's
+  redirection (PowerShell 5.1's `>` writes UTF-16, and its console can garble non-ASCII text):
+
+      ssh {host} "{cu} -agent --ssh-host {host} > ~/.computils-SKILL.md"
+      scp {host}:.computils-SKILL.md PATH_ON_YOUR_COMPUTER
+
+- Small inputs (.xyz) go up with `scp`. Read results with `{cu} -info --json`, never by copying outputs down.
+
+## The ssh Config (Your Computer's)
+
+`{host}` is a Host entry in `~/.ssh/config` (Windows: `%USERPROFILE%\.ssh\config`). That file is the human's: show
+them the exact lines and add them only on their OK. Only ever add a block; never edit or remove existing lines, never
+touch keys or known_hosts, and never turn host key checking off.
 
     Host {host}
+        HostName CLUSTER_LOGIN_HOST
+        User USER_NAME
+
+**A shared connection** (faster, and one login for 2FA) adds these lines, but only when your `ssh` supports it:
+check `(Get-Command ssh).Source` in PowerShell (or `ssh -V`). Windows' own OpenSSH (`C:\Windows\System32\OpenSSH`)
+doesn't, and with these lines every connection fails; the OpenSSH of Git for Windows, WSL, macOS and Linux does.
+
         ControlMaster auto
         ControlPath ~/.ssh/cm-%r@%h:%p
         ControlPersist 4h
-
-Files: send small inputs (.xyz) up with scp; read results with `cu -info --json`, never by copying outputs down.
 """
 
 
@@ -452,6 +488,18 @@ def Problems() -> list[str]:
                 parser.parse_args(arguments)
             except (ValueError, SystemExit, Exception) as error:
                 problems.append(f"Recipe {name}: `cu {line}` no longer parses ({error}).")
+            if regex.search(r'["$`]', line):
+                problems.append(f"Recipe {name}: `cu {line}` has a double quote, $ or backtick: commands run inside "
+                                f'ssh host "…", so quote values with single quotes.')
+    # 5. Commands run inside ssh host "…" from any shell: examples quote with single quotes, never ", $ or `
+    for command in COMMANDS:
+        if regex.search(r'["$`]', command.example):
+            problems.append(f"The {command.key} example has a double quote, $ or backtick: quote with single quotes.")
+    # 6. SKILL.md is saved on the agent's computer, through consoles that may garble anything but ASCII
+    nonAscii = sorted({character for character in SkillText() if ord(character) > 127})
+    if nonAscii:
+        problems.append(f"SKILL.md must be plain ASCII; it has {' '.join(nonAscii)} (recipe titles and command "
+                        f"purposes appear in it).")
     return problems
 
 

@@ -249,8 +249,10 @@ def ParseCLI(argv: list[str]) -> Intent:
     draft.indexOverride = args.override
     draft.updateBranch  = args.update_branch
 
-    # Sub-prompts — preserved from current CLI behavior. With --json, -st is one snapshot: never a loop
-    if draft.stalk and not agent.jsonOutput and not draft.dismiss:
+    # Sub-prompts — preserved from current CLI behavior. With --json, or with nobody at a terminal to answer (an agent's
+    # ssh call), -st is one snapshot: never a loop, so never the loop question
+    from . import prompts
+    if draft.stalk and prompts.interactive and not agent.jsonOutput and not draft.dismiss:
         draft.stalkLoop = AskBool("Enable stalk looping (i.e. re-initialize until all jobs terminate)?", "Y", key="stalk-loop")
 
     if draft.action == Action.CUBE:

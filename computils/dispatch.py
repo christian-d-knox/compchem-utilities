@@ -341,9 +341,11 @@ def _DispatchGoodVibes(intent: GoodVibesIntent) -> None:
 
 def _DispatchStalk(intent: StalkIntent) -> None:
     from .stalk import Dismiss, Snapshot
+    from . import prompts
     if intent.dismiss:
         Dismiss(intent.dismiss)
-    elif agent.jsonOutput:
+    # With --json, or with nobody at a terminal (an agent's ssh call): one snapshot, never a loop that holds the shell
+    elif agent.jsonOutput or not prompts.interactive:
         Snapshot(LoadTracked())
     else:
         jobStalking(LoadTracked(), Defaults.stalkDuration, Defaults.stalkFrequency, intent.loop)

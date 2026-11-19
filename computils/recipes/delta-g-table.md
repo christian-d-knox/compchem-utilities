@@ -1,4 +1,4 @@
-# Recipe: A Free Energy (ΔG) Table
+# Recipe: A Free Energy (Delta G) Table
 
 Free energies come from GoodVibes, as GoodVibes wrote them. Never compute corrections or shifts yourself. **Never do
 arithmetic in your head:** every difference, sum and unit conversion (kcal/mol: × 627.5095) goes through a calculator
