@@ -106,6 +106,11 @@ def _FileMolecules(files: list):
 def _AfterSubmission(trackedJobs: list[TrackedJob]) -> list[TrackedJob]:
     # Every job went through jobs.SubmitJob, so this is the total
     CheckAndBroadcast(jobs.submittedJobs)
+    # An agent waits for them without polling: one background command that exits when one of them ends
+    if agent.jsonOutput and trackedJobs:
+        agent.Next(agent.CommandLine(["-st", "--wait", *(job.jobID for job in trackedJobs), "--json"]),
+                   "Run it as a background command and end your turn: it exits (waking you) when one of them ends.",
+                   show=False)
     return trackedJobs
 
 
@@ -340,10 +345,13 @@ def _DispatchGoodVibes(intent: GoodVibesIntent) -> None:
 
 
 def _DispatchStalk(intent: StalkIntent) -> None:
-    from .stalk import Dismiss, Snapshot
+    from .stalk import Dismiss, Snapshot, Wait
     from . import prompts
     if intent.dismiss:
         Dismiss(intent.dismiss)
+    # An agent's background command: returns once a job it waits for has ended
+    elif intent.wait is not None:
+        Wait(intent.wait)
     # With --json, or with nobody at a terminal (an agent's ssh call): one snapshot, never a loop that holds the shell
     elif agent.jsonOutput or not prompts.interactive:
         Snapshot(LoadTracked())

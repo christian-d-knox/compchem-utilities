@@ -5,7 +5,7 @@ prints the lines, the TUI shows them.
 Outputs are read the bookmarked way: a termination line is a bookmark. Reporting data is always the LAST instance, so
 it is searched backwards from EOF and never further back than the latest bookmark; reading forward only happens at a
 step's start, to learn what that step reports (its route)."""
-import copy, json, os, subprocess, time
+import copy, json, os, subprocess, sys, time
 from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict, fields
 from pathlib import Path
@@ -678,18 +678,26 @@ def Snapshot(jobs: list[TrackedJob]) -> list[TrackedJob]:
     return jobs
 
 
-def Dismiss(names: list[str]) -> None:
-    """Stops tracking the named jobs (IDs, names, or 'ended': every ended one), as the TUI's d / D. A live job is asked
-    about first (key dismiss-live)."""
+def MatchJobs(names: list[str], jobs: list[TrackedJob]) -> dict[str, TrackedJob]:
+    """The tracked jobs the names pick (each an ID, a name, 'cluster:ID', or 'ended': every ended one), by key, in
+    submission order. A name that picks nothing is skipped (agent.Skip). Shared by --dismiss and --wait."""
     from . import agent
-    from .prompts import AskBool
-    jobs, chosen = LoadTracked(), {}
+    chosen = {}
     for name in names:
         matches = ([job for job in jobs if job.ended] if name.lower() == "ended"
                    else [job for job in jobs if name in (job.jobID, job.name, job.key)])
         if not matches and name.lower() != "ended":
             agent.Skip(name, "No tracked job has that ID or name")
         chosen.update({job.key: job for job in matches})
+    return chosen
+
+
+def Dismiss(names: list[str]) -> None:
+    """Stops tracking the named jobs (IDs, names, or 'ended': every ended one), as the TUI's d / D. A live job is asked
+    about first (key dismiss-live)."""
+    from . import agent
+    from .prompts import AskBool
+    chosen = MatchJobs(names, LoadTracked())
     live = [job.name for job in chosen.values() if Watched(job)]
     if live and not AskBool(f"{', '.join(live)} {'is' if len(live) == 1 else 'are'} still in the queue. Stop tracking "
                             f"{'it' if len(live) == 1 else 'them'} anyway?", "n", key="dismiss-live"):
@@ -702,6 +710,106 @@ def Dismiss(names: list[str]) -> None:
         agent.Result({"dismissed": [job.name for job in chosen.values()]})
     elif not names or all(name.lower() == "ended" for name in names):
         console.print("[info]Nothing to dismiss.[/info]")
+
+
+# ─── Waiting (cu -st --wait): an agent sleeps until a job ends ────────
+#
+# An agent runs `cu -st --wait JOB… --json` as a background command and ends its turn: its harness (Antigravity, Claude
+# Code) wakes it when the command exits, so it spends nothing while jobs run. The wait is an ordinary stalker (PollQueue:
+# Telegram, the Neva-Touch Scheduler's fallbacks), that exits at the first ping where a waited job has ended.
+
+WAIT_CHECK = 10   # seconds between checks, while sleeping, that the agent is still connected
+
+def FollowUps(job: TrackedJob, jobs: list[TrackedJob]) -> list[TrackedJob]:
+    """The tracked job a job's Neva-Touch Scheduler step submitted (its SP, or a re-run), if any: the one whose
+    'name (ID id)' is the job's nextJob."""
+    return [other for other in jobs if job.nextJob and job.nextJob == f"{other.name} (ID {other.jobID})"]
+
+def _OutputClosed() -> bool:
+    """Whether whoever reads this run's stdout has gone (the agent's ssh connection closed). sshd sends a command run
+    without a terminal no hangup signal, so a wait would otherwise sleep on, orphaned, on the login node. The read end
+    of a closed pipe or socket shows as POLLERR / POLLHUP on ours. Linux only (Windows has no poll): never closed."""
+    try:
+        import select
+        poller = select.poll()
+        poller.register(sys.stdout.fileno(), 0)
+        return any(events & (select.POLLERR | select.POLLHUP) for _, events in poller.poll(0))
+    except (AttributeError, ValueError, OSError):
+        return False
+
+def _Sleep(seconds: float) -> bool:
+    """Sleeps between pings, checking the agent is still there. False once it has gone (stop waiting)."""
+    end = time.monotonic() + seconds
+    while (left := end - time.monotonic()) > 0:
+        if _OutputClosed():
+            return False
+        time.sleep(min(WAIT_CHECK, left))
+    return not _OutputClosed()
+
+def Wait(names: list[str]) -> list[TrackedJob]:
+    """`cu -st --wait [JOB…]`: pings now and every stalkFrequency minutes until one of the jobs (the named ones; none
+    named: every job still watched) has ended, then reports the jobs that ended, each one's ending message, and the
+    command to wait again for the rest (with any job the Neva-Touch Scheduler submitted). Gives up after
+    trackedJobHours (a backstop), or quietly once nobody reads its output."""
+    from . import agent
+    jobs = LoadTracked()
+    waited = set(MatchJobs(names, jobs)) if names else {job.key for job in jobs if Watched(job)}
+    if not waited:
+        agent.Fail("Nothing to wait for: no tracked job is still in the queue." if not names
+                   else "Nothing to wait for: none of those jobs is tracked.")
+        return []
+    console.print(f"[operation]Waiting for {len(waited)} job{'s' if len(waited) != 1 else ''} to end (a ping every "
+                  f"{Defaults.stalkFrequency} minutes).[/operation]")
+    start, reason, ended = time.monotonic(), "", []
+    while True:
+        # Each ping re-reads the store, so another stalker's, or a hook's, reading counts too
+        jobs = LoadTracked()
+        if PollQueue(jobs) is None:
+            console.print("[warning]Could not read the queue (squeue failed). Trying again at the next ping.[/warning]")
+        byKey = {job.key: job for job in jobs}
+        ended = [byKey[key] for key in byKey if key in waited and not Watched(byKey[key])]
+        if ended:
+            reason = "ended"
+        elif not waited & set(byKey):
+            reason = "dismissed"
+        elif time.monotonic() - start >= Defaults.trackedJobHours * 3600:
+            reason = "time limit"
+        if reason:
+            break
+        if not _Sleep(Defaults.stalkFrequency * 60):
+            # Nobody is left to read the report: say nothing, and let the run end
+            sys.stdout = console.file = open(os.devnull, "w")
+            return []
+
+    shown = [byKey[key] for key in byKey if key in waited]
+    # The jobs a Neva-Touch Scheduler step submitted are recorded by their hook, maybe after this ping's read
+    latest = LoadTracked()
+    followUps = [other for job in ended for other in FollowUps(job, latest) if other.key not in waited]
+    remaining = [job for job in shown + followUps if Watched(job)]
+    if reason == "ended":
+        console.print(f"[operation]{len(ended)} job{'s' if len(ended) != 1 else ''} ended:[/operation]")
+    elif reason == "dismissed":
+        console.print("[warning]The jobs being waited for are no longer tracked (dismissed).[/warning]")
+    else:
+        console.print(f"[warning]Stopped waiting after {Defaults.trackedJobHours} hours; the jobs are still "
+                      f"running.[/warning]")
+    agent.Result({"wait": {key: value for key, value in (
+        ("reason", reason),
+        ("ended", [{"name": job.name, "jobId": job.jobID, "message": EndingMessage(job)} for job in ended]),
+        ("waiting", [job.jobID for job in remaining])) if value}})
+    for job in shown + followUps:
+        _PrintJob(job)
+        agent.Result(JobRecord(job))
+    for job in ended:
+        if job.termination != Defaults.terminationVariants[2] and job.termination:
+            continue
+        agent.Next(agent.CommandLine(["-info", job.outputPath, "--json"]),
+                   f"{job.name} didn't end normally: read what its output says before deciding what to do.")
+    if remaining:
+        agent.Next(agent.CommandLine(["-st", "--wait", *(job.jobID for job in remaining), "--json"]),
+                   f"{len(remaining)} job{'s' if len(remaining) != 1 else ''} still running: run it as a background "
+                   f"command and end your turn to be woken at the next ending.")
+    return ended
 
 
 # ─── The CLI stalker ──────────────────────────────────────────────────
