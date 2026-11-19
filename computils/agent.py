@@ -157,13 +157,14 @@ def Warn(text: str, show: bool = True) -> None:
 
 
 def CommandLine(words) -> str:
-    """`cu WORDS`, quoted to run inside `ssh host '…'` as the skill calls it: double quotes, never single ones (they
-    would end the ssh command's own)."""
+    """`cu WORDS`, quoted to run inside `ssh host "…"` as the skill calls it: single quotes, never double ones (they
+    would end the ssh command's own, and Windows PowerShell 5.1 strips double quotes inside a program's argument). A
+    single quote inside a value is written '\\''."""
     def Quote(word: str) -> str:
         word = str(word)
         if word and regex.fullmatch(r"[\w@%+=:,./-]+", word):
             return word
-        return '"' + regex.sub(r'(["\\$`])', r"\\\1", word) + '"'
+        return "'" + word.replace("'", "'\\''") + "'"
     return " ".join(["cu", *(Quote(word) for word in words)])
 
 

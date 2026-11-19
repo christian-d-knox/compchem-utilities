@@ -101,10 +101,11 @@ To teach your agent, run this on your computer (once; it keeps itself up to date
 your ssh name for the cluster and the path with your environment's:
 
 ```
-ssh cluster '~/miniconda3/envs/compUtils/bin/cu -agent --ssh-host cluster' > SKILL.md
+ssh cluster "~/miniconda3/envs/compUtils/bin/cu -agent --ssh-host cluster > ~/.computils-SKILL.md"
+scp cluster:.computils-SKILL.md SKILL.md
 ```
 
-and put `SKILL.md` in a `computils` folder in your agent's skills folder (Antigravity: `~/.gemini/config/skills/computils/`
+(`scp` copies it byte for byte: Windows PowerShell's `>` would save it as UTF-16), and put `SKILL.md` in a `computils` folder in your agent's skills folder (Antigravity: `~/.gemini/config/skills/computils/`
 for every workspace; Claude Code: `~/.claude/skills/computils/`).
 
 ## Configuration
