@@ -71,7 +71,8 @@ COMMANDS = [
     AgentCommand("st", ("stalk", "dismiss", "wait"), Action.STALK,
                  "The tracked jobs: with --json (or with nobody at a terminal) one snapshot, never a loop (a ping: "
                  "queue state, stage by stage progress, how each ended, the Neva-Touch Scheduler's step). --wait JOB... "
-                 "waits until one of those jobs ends (run it as a background command, then end your turn). --dismiss "
+                 "waits until one of those jobs ends, a Neva-Touch Scheduler step within seconds (run it as a background command, "
+                 "then end your turn). --dismiss "
                  "stops tracking jobs (IDs, names, or 'ended').",
                  "-st --wait 24769828 --json",
                  "One record per job: state, headline, stages (status, convergence, stable), nevaTouch. With --wait, "

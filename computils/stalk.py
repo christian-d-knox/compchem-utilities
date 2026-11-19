@@ -718,12 +718,32 @@ def Dismiss(names: list[str]) -> None:
 # Code) wakes it when the command exits, so it spends nothing while jobs run. The wait is an ordinary stalker (PollQueue:
 # Telegram, the Neva-Touch Scheduler's fallbacks), that exits at the first ping where a waited job has ended.
 
-WAIT_CHECK = 10   # seconds between checks, while sleeping, that the agent is still connected
+WAIT_CHECK = 10   # seconds between looks, while sleeping, at the store and at whether the agent is still connected
+# Why a sleep between pings ended
+WAIT_GONE, WAIT_TIMER, WAIT_STORE = "gone", "timer", "store"
 
 def FollowUps(job: TrackedJob, jobs: list[TrackedJob]) -> list[TrackedJob]:
     """The tracked job a job's Neva-Touch Scheduler step submitted (its SP, or a re-run), if any: the one whose
     'name (ID id)' is the job's nextJob."""
     return [other for other in jobs if job.nextJob and job.nextJob == f"{other.name} (ID {other.jobID})"]
+
+def _StepTaken(job: TrackedJob) -> bool:
+    """Whether a job's Neva-Touch Scheduler step is on record (its hook writes it within seconds of the job's end,
+    while the job is still in the queue). Couldn't Submit doesn't count: a stalker's fallback takes the step again once
+    the job has left the queue, and its result is the one to report."""
+    return job.ended and bool(job.nevaTouch) and job.stepOutcome not in ("", FAILED)
+
+def _WaitDone(job: TrackedJob) -> bool:
+    """Whether a wait is over for a job: it's no longer watched, or its Neva-Touch Scheduler step is already taken."""
+    return not Watched(job) or _StepTaken(job)
+
+def _StoreStamp() -> int:
+    """When the store was last written (0: not there). The Neva-Touch Scheduler's hooks run on compute nodes and share
+    only the filesystem with a wait on the login node, so this is how a wait hears of their steps at once."""
+    try:
+        return _StorePath().stat().st_mtime_ns
+    except OSError:
+        return 0
 
 def _OutputClosed() -> bool:
     """Whether whoever reads this run's stdout has gone (the agent's ssh connection closed). sshd sends a command run
@@ -737,37 +757,52 @@ def _OutputClosed() -> bool:
     except (AttributeError, ValueError, OSError):
         return False
 
-def _Sleep(seconds: float) -> bool:
-    """Sleeps between pings, checking the agent is still there. False once it has gone (stop waiting)."""
+def _Sleep(seconds: float, stamp: int) -> str:
+    """Sleeps until the next ping (WAIT_TIMER), looking every WAIT_CHECK seconds at whether the store has been written
+    since `stamp` (WAIT_STORE: something, maybe a hook, recorded a change) and whether the agent is still there
+    (WAIT_GONE: stop waiting)."""
     end = time.monotonic() + seconds
     while (left := end - time.monotonic()) > 0:
         if _OutputClosed():
-            return False
+            return WAIT_GONE
+        if _StoreStamp() != stamp:
+            return WAIT_STORE
         time.sleep(min(WAIT_CHECK, left))
-    return not _OutputClosed()
+    return WAIT_GONE if _OutputClosed() else WAIT_TIMER
 
 def Wait(names: list[str]) -> list[TrackedJob]:
     """`cu -st --wait [JOB…]`: pings now and every stalkFrequency minutes until one of the jobs (the named ones; none
     named: every job still watched) has ended, then reports the jobs that ended, each one's ending message, and the
-    command to wait again for the rest (with any job the Neva-Touch Scheduler submitted). Gives up after
-    trackedJobHours (a backstop), or quietly once nobody reads its output."""
+    command to wait again for the rest (with any job the Neva-Touch Scheduler submitted). A Neva-Touch Scheduler step
+    ends the wait as soon as its hook records it (a look at the store every WAIT_CHECK seconds; the queue is read only
+    when one is found, for the report). Gives up after trackedJobHours (a backstop), or quietly once nobody reads its
+    output."""
     from . import agent
     jobs = LoadTracked()
-    waited = set(MatchJobs(names, jobs)) if names else {job.key for job in jobs if Watched(job)}
+    waited = set(MatchJobs(names, jobs)) if names else {job.key for job in jobs if not _WaitDone(job)}
     if not waited:
         agent.Fail("Nothing to wait for: no tracked job is still in the queue." if not names
                    else "Nothing to wait for: none of those jobs is tracked.")
         return []
     console.print(f"[operation]Waiting for {len(waited)} job{'s' if len(waited) != 1 else ''} to end (a ping every "
-                  f"{Defaults.stalkFrequency} minutes).[/operation]")
-    start, reason, ended = time.monotonic(), "", []
+                  f"{Defaults.stalkFrequency} minutes; a Neva-Touch Scheduler step as soon as it is "
+                  f"recorded).[/operation]")
+    start, nextPing, reason, ended = time.monotonic(), 0.0, "", []
     while True:
-        # Each ping re-reads the store, so another stalker's, or a hook's, reading counts too
+        # Each look re-reads the store, so another stalker's, or a hook's, reading counts too
         jobs = LoadTracked()
-        if PollQueue(jobs) is None:
-            console.print("[warning]Could not read the queue (squeue failed). Trying again at the next ping.[/warning]")
+        pinged = time.monotonic() >= nextPing
+        if pinged:
+            if PollQueue(jobs) is None:
+                console.print("[warning]Could not read the queue (squeue failed). Trying again at the next "
+                              "ping.[/warning]")
+            nextPing = time.monotonic() + Defaults.stalkFrequency * 60
         byKey = {job.key: job for job in jobs}
-        ended = [byKey[key] for key in byKey if key in waited and not Watched(byKey[key])]
+        ended = [byKey[key] for key in byKey if key in waited and _WaitDone(byKey[key])]
+        if ended and not pinged:
+            # Seen in the store (a hook's step): one ping first, so the report's queue states are current
+            nextPing = 0.0
+            continue
         if ended:
             reason = "ended"
         elif not waited & set(byKey):
@@ -776,16 +811,23 @@ def Wait(names: list[str]) -> list[TrackedJob]:
             reason = "time limit"
         if reason:
             break
-        if not _Sleep(Defaults.stalkFrequency * 60):
+        # Taken after this look's own write (a ping saves the store), so only someone else's write wakes the sleep. The
+        # next ping keeps its time whatever wakes the sleep, so other stalkers' writes never put it off
+        woke = _Sleep(nextPing - time.monotonic(), _StoreStamp())
+        if woke == WAIT_GONE:
             # Nobody is left to read the report: say nothing, and let the run end
             sys.stdout = console.file = open(os.devnull, "w")
             return []
+        if woke == WAIT_TIMER:
+            # The ping is due (a sleep can end a hair early)
+            nextPing = 0.0
 
     shown = [byKey[key] for key in byKey if key in waited]
     # The jobs a Neva-Touch Scheduler step submitted are recorded by their hook, maybe after this ping's read
     latest = LoadTracked()
     followUps = [other for job in ended for other in FollowUps(job, latest) if other.key not in waited]
-    remaining = [job for job in shown + followUps if Watched(job)]
+    # A job whose hook has taken its step is done here even while it's still in the queue (its hook finishing)
+    remaining = [job for job in shown + followUps if not _WaitDone(job)]
     if reason == "ended":
         console.print(f"[operation]{len(ended)} job{'s' if len(ended) != 1 else ''} ended:[/operation]")
     elif reason == "dismissed":
