@@ -105,7 +105,37 @@ def _NamesBasis(tokens: list[str]) -> bool:
     """Whether a Gaussian route names a basis: 'method/basis', or a basis token (Gen and GenECP included)."""
     return any("/" in token or regex.match(BASIS_PATTERN, token) for token in tokens)
 
-def ChainStage(route: str, genInCheckpoint: bool) -> tuple[str, str, bool, list[str]]:
+def _ReadsChkBasis(tokens: list[str]) -> bool:
+    """Whether a Gaussian route reads its basis from the checkpoint: ChkBasis (or Gaussian's short ChkBas) bare or as
+    the basis half of 'method/ChkBas'."""
+    return any(regex.fullmatch(r"(?i)(?:[^/\s]+/)?chkbas(?:is?)?", token) for token in tokens)
+
+def _ReleaseFrozen(tokens: list[str]) -> bool:
+    """Add 'nofreeze' to an optimization's options ('opt' -> 'opt=nofreeze', 'opt=(ts,calcfc)' ->
+    'opt=(ts,calcfc,nofreeze)'). False when there's nothing to do: no opt keyword, or nofreeze already written."""
+    opt = _KeywordAt(tokens, "opt")
+    if opt is None:
+        return False
+    options = _KeywordOptions(tokens[opt])
+    if "nofreeze" in options:
+        return False
+    options.append("nofreeze")
+    tokens[opt] = f"opt={options[0]}" if len(options) == 1 else f"opt=({','.join(options)})"
+    return True
+
+def NboReadRoute(route: str) -> str:
+    """A Gaussian route that reads the $NBO keylist written after its input (-nbo): pop=nbo7read, joined to its own pop
+    options (pop=full -> pop=(full,nbo7read)). An NBO option it already has (pop=nbo, pop=nbo6read) is replaced, since
+    -nbo asks for NBO 7 with the keylist."""
+    tokens = route.split()
+    pop = _KeywordAt(tokens, "pop(?:ulation)?")
+    if pop is None:
+        return route + " pop=nbo7read"
+    options = [option for option in _KeywordOptions(tokens[pop]) if not option.startswith("nbo")] + ["nbo7read"]
+    tokens[pop] = f"pop={options[0]}" if len(options) == 1 else f"pop=({','.join(options)})"
+    return " ".join(tokens)
+
+def ChainStage(route: str, genInCheckpoint: bool, frozenBy: int = 0) -> tuple[str, str, bool, list[str]]:
     """A Gaussian stage after the first, read from the checkpoint the stages share: (route, molecule section, ChkBasis,
     notes). Explicit on purpose: every rule is said in the notes where a preview shows the stage.
     1. Geometry: Geom=AllCheck (geometry, charge and multiplicity from the checkpoint), unless the stage writes its own
@@ -114,7 +144,12 @@ def ChainStage(route: str, genInCheckpoint: bool) -> tuple[str, str, bool, list[
        generator (GENERATED_GUESSES).
     3. ChkBasis, from the user's own route, never assumed: one the stage writes is honoured (no Gen sections); a stage
        naming no basis at all after a Gen/GenECP stage gets one (Gaussian would otherwise fall back to STO-3G); a stage
-       writing Gen/GenECP itself gets its sections again."""
+       writing Gen/GenECP itself gets its sections again. ChkBas (Gaussian's short form, e.g. 'ub3lyp/chkbas') counts.
+    4. Frozen coordinates: a ModRed stage's frozen coordinates are saved in the checkpoint, and a later stage reading
+       its geometry from it keeps them frozen. frozenBy: the last ModRed stage (0: none). An optimization after it
+       that reads the checkpoint's geometry (Geom=AllCheck or geom=check) and isn't ModRed itself gets 'nofreeze'
+       (opt=(ts,calcfc) -> opt=(ts,calcfc,nofreeze)). A stage writing its own coordinates, a later ModRed stage (its
+       own constraints are intended) and stable=opt (not an optimization) are left alone."""
     tokens, notes = route.split(), []
     geom = _KeywordAt(tokens, "geom")
     if geom is None:
@@ -124,6 +159,10 @@ def ChainStage(route: str, genInCheckpoint: bool) -> tuple[str, str, bool, list[
     else:
         options = _KeywordOptions(tokens[geom])
         molecule = NONE if "allcheck" in options else CHARGE if "check" in options else FULL
+    if frozenBy and molecule != FULL:
+        checks = JobChecks(" ".join(tokens), Defaults.gaussianExtension)
+        if checks.optimizes and checks.optKind != "ModRed" and _ReleaseFrozen(tokens):
+            notes.append(f"NoFreeze: Releases the Coordinates Frozen by Stage {frozenBy}")
     guess = _KeywordAt(tokens, "guess")
     if guess is None:
         tokens.append("guess=read")
@@ -134,7 +173,7 @@ def ChainStage(route: str, genInCheckpoint: bool) -> tuple[str, str, bool, list[
             tokens[guess] = f"guess=({','.join(['read', *options])})"
             notes.append(f"Guess=(Read,{','.join(option.capitalize() for option in options)}): Orbitals From the "
                          f"Checkpoint")
-    chkBasis = any(token.lower() == "chkbasis" for token in tokens)
+    chkBasis = _ReadsChkBasis(tokens)
     if not chkBasis and genInCheckpoint and not _NamesBasis(tokens):
         tokens.append("ChkBasis")
         chkBasis = True
@@ -143,18 +182,23 @@ def ChainStage(route: str, genInCheckpoint: bool) -> tuple[str, str, bool, list[
 
 def RenderStages(template: RouteTemplate, molecule: Molecule) -> list[RenderedStage]:
     """Every stage of a molecule's job, rendered (RenderRoute: spin groups, U/RO) and, for Gaussian, chained through
-    the checkpoint (ChainStage). One stage for a method without stages."""
-    stages, genInCheckpoint = [], False
+    the checkpoint (ChainStage). One stage for a method without stages. What a checkpoint holds is followed from stage
+    to stage (%newchk copies it, so it carries over): whether its basis is a Gen one, and the last ModRed stage, whose
+    frozen coordinates it keeps."""
+    stages, genInCheckpoint, frozenBy = [], False, 0
+    gaussian = molecule.extensionType == Defaults.gaussianExtension
     for number, stage in enumerate(template.stages, 1):
         route, tags = RenderRoute(stage, molecule)
-        if number == 1 or molecule.extensionType != Defaults.gaussianExtension:
+        if number == 1 or not gaussian:
             rendered = RenderedStage(route, tags)
         else:
-            route, section, chkBasis, notes = ChainStage(route, genInCheckpoint)
+            route, section, chkBasis, notes = ChainStage(route, genInCheckpoint, frozenBy)
             if stage.newChk:
                 notes.insert(0, "%newchk: a New Checkpoint, Copied From the One So Far (%OldChk)")
             rendered = RenderedStage(route, tags, section, chkBasis, stage.newChk, notes)
         genInCheckpoint = _UsesMixedBasis(rendered.route) or (rendered.chkBasis and genInCheckpoint)
+        if gaussian and JobChecks(rendered.route, Defaults.gaussianExtension).optKind == "ModRed":
+            frozenBy = number
         stages.append(rendered)
     return stages
 
@@ -224,6 +268,9 @@ def JobInputText(molecule: Molecule, checkpoint: bool = False, nbo7: bool = Fals
             sections = []
             for number, stage in enumerate(stages, 1):
                 route = stage.route
+                # The $NBO keylist goes after the last stage, which is the one told to read it
+                if nbo7 and number == len(stages):
+                    route = NboReadRoute(route)
                 # Link 0 commands don't carry across --Link1--: every stage writes its own
                 link0 = [f"%nprocshared={cpus}", f"%mem={int(cpus * memoryRatio)}GB"]
                 if stage.newChk:
@@ -264,8 +311,8 @@ def JobInputText(molecule: Molecule, checkpoint: bool = False, nbo7: bool = Fals
                         parts.append(ecpSection)
                 sections.append("\n".join(link0) + "\n" + "\n".join(parts) + "\n")
             text = "--Link1--\n".join(sections)
-            # New NBO7 section (the last stage's)
-            text += f"{Defaults.nboKeylist} FILE={molecule.baseName} ARCHIVE $END" if nbo7 else "\n"
+            # New NBO7 section (the last stage's, whose route reads it: pop=nbo7read)
+            text += f"{Defaults.nboKeylist} FILE={molecule.baseName} ARCHIVE $END\n\n" if nbo7 else "\n"
             return text
 
         case Defaults.orcaExtension:

@@ -25,6 +25,11 @@ NEW_CHECKPOINT = r"(?i)(?:^|\s)%newchk(?=\s|$)"
 _MULTIPLICITY_NAMES = {"doublet": 2, "triplet": 3, "quartet": 4, "quintet": 5, "sextet": 6, "septet": 7}
 # ORCA reference keywords. If the route already has one, CompUtils never adds another
 _ORCA_REFERENCES = {"RKS", "UKS", "ROKS", "RHF", "UHF", "ROHF"}
+# Gaussian's compound (composite) methods, with any reference prefix written: CBS-QB3, ROCBS-QB3, G4, G3MP2B3, W1BD...
+# They pick their own reference (unrestricted for open shells), and a U prefix makes no keyword (UCBS-QB3)
+_COMPOUND_METHOD = r"(?i)(RO|U|R)?(CBS-(?:QB3|4M|APNO|Q|Lq|4)|G[1-4](?:MP2)?(?:B3)?|W1(?:U|BD|RO)?)(?:\(.*\))?"
+# The compound methods Gaussian has a restricted open-shell form of, written with an RO prefix
+_RO_COMPOUNDS = {"CBS-QB3"}
 
 
 def SplitRouteTags(routeLine: str) -> tuple[str, list[str]]:
@@ -141,6 +146,17 @@ def _ApplyReference(tokens: list[str], spinState: SpinState, extensionType: str)
         method = found[1] if found else MethodKey(tokens[0])
         isHartreeFock = method == "HF" or any(key in method for key in ("MP2", "CC", "CAS", "NEVPT"))
         return tokens + [reference + ("HF" if isHartreeFock else "KS")]
+
+    # Gaussian's compound methods are never U-prefixed: they run unrestricted for an open shell on their own. RO (a
+    # high-spin species, openShellReference = "RO") takes their RO form where Gaussian has one (ROCBS-QB3); otherwise
+    # the route is left as written
+    compound = next(((index, match) for index, token in enumerate(tokens)
+                     if (match := regex.fullmatch(_COMPOUND_METHOD, token))), None)
+    if compound:
+        index, match = compound
+        if match.group(1) or reference != "RO" or match.group(2).upper() not in _RO_COMPOUNDS:
+            return tokens
+        return tokens[:index] + ["RO" + tokens[index]] + tokens[index + 1:]
 
     # Gaussian: prefix the method token, the first known one (a route Gaussian echoes often leads with its keywords:
     # 'opt freq B3LYP 6-31G(d)'), else the first token. Only the part before any '/' is the method
