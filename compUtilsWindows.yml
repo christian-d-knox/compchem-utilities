@@ -1,8 +1,6 @@
-# compUtils.yml for Windows (conda-installer.py's first install is Linux only). Build it by hand:
-#   conda env create -f compUtilsWindows.yml
-#   conda activate compUtilsWindows
-#   pip install -e .    (from a clone, or the git URL conda-installer.py uses)
-# then keep it current with cu -env (or the TUI's Update Environment).
+# compUtils.yml for Windows. conda-installer.py picks it on Windows and builds it for you
+# (python conda-installer.py), then writes the 'cu' command (cu.cmd on your user PATH).
+# Keep it current with cu -env (or the TUI's Update Environment).
 # If conda asks you to accept Anaconda's Terms of Service, it is checking the channels your conda is set up with
 # (not this file's): remove them with 'conda config --remove channels defaults', or accept them if you use them.
 # @platform windows
@@ -19,6 +17,8 @@ dependencies:
   - pandas
   - regex
   - xlsxwriter
+  # Excel workbooks with formulas, for agents' calculations; imported by nothing yet
+  - openpyxl
   - git
   - pip
   - cclib
