@@ -3,9 +3,14 @@
 The branch is remembered by pip itself: every install from GitHub records the branch it asked for (direct_url.json), so a
 reinstall from another branch becomes the one later updates use, and the record can't go stale. Before installing, the
 installed commit is compared with the branch's latest on GitHub. A local install (pip install -e ., or running from a
-checkout) is never replaced by GitHub's: it is updated where it lives (git pull)."""
+checkout) is never replaced by GitHub's: it is updated where it lives (git pull).
+
+DailyCheck is the automatic side: the first --json report of a day on a machine says what is newer (an agent relays it
+to its human), so nobody, person or agent, ever has to ask."""
+import datetime
 import importlib.metadata
 import json
+import os
 import subprocess
 import sys
 import urllib.error
@@ -23,6 +28,10 @@ PACKAGE = "compchem-utilities"
 # Until the first release dev is the only branch (then main); used when no install record names one
 FALLBACK_BRANCH = "dev"
 API_TIMEOUT = 10
+# The daily check (DailyCheck) rides on a report someone is waiting for: it gives up on GitHub sooner
+CHECK_TIMEOUT = 4
+CHECK_FILE = "update-check.json"
+_timeout = API_TIMEOUT
 
 
 def PackageUrl(branch: str) -> str:
@@ -67,7 +76,7 @@ def InstalledSource() -> Source:
 def _Get(url: str, accept: str = "") -> str:
     """The text at url. Raises urllib.error.URLError / OSError / ValueError."""
     request = urllib.request.Request(url, headers={"User-Agent": "CompUtils", **({"Accept": accept} if accept else {})})
-    with urllib.request.urlopen(request, timeout=API_TIMEOUT) as response:
+    with urllib.request.urlopen(request, timeout=_timeout) as response:
         return response.read().decode()
 
 
@@ -128,6 +137,74 @@ def SourceLines(source: Source, latest: Commit | str) -> list[str]:
         return lines + ["", f"Couldn't reach GitHub ({latest})."]
     lines += [f"GitHub:    {source.branch} @ {latest.sha[:7]} ({latest.date})", ""]
     return lines + ["Up to date." if UpToDate(source, latest) else "A newer version is available."]
+
+
+def DailyCheck() -> dict | None:
+    """What is newer on GitHub than this install, checked at most once per calendar day on this machine (the date is
+    in <binDirectory>/update-check.json, written before checking, so a slow or failed check still counts): the report's
+    `updates` (Main, --json runs only), or None (checked today already, nothing newer, a local install, a background
+    environment job running, GitHub unreachable). Never acts: updating is the person's call."""
+    from .defaults import Defaults
+    folder = Path(Defaults.binDirectory).expanduser()
+    if not folder.is_dir():
+        return None
+    record, today = folder / CHECK_FILE, datetime.date.today().isoformat()
+    try:
+        if json.loads(record.read_text(encoding="utf-8")).get("date") == today:
+            return None
+    except (OSError, ValueError, AttributeError):
+        pass
+    try:
+        temporary = record.with_name(record.name + ".tmp")
+        temporary.write_text(json.dumps({"date": today}), encoding="utf-8")
+        os.replace(temporary, record)
+    except OSError:
+        # Unrecorded, it would check on every run: better not at all
+        return None
+    source = InstalledSource()
+    if source.localPath:
+        return None
+    global _timeout
+    _timeout = CHECK_TIMEOUT
+    try:
+        return _Updates(source)
+    finally:
+        _timeout = API_TIMEOUT
+
+
+def _Updates(source: Source) -> dict | None:
+    """The code's and the running environment's news on the installed branch, and the one command that brings both
+    (an environment refresh installs the branch's latest code too, so it comes first: environment.CodeUpdateProblem's
+    rule)."""
+    from . import environment
+    name = environment.RunningName()
+    # An environment job brings the code up to date by itself when it's done
+    if name is not None and environment.RunningJob(name) is not None:
+        return None
+    latest = LatestCommit(source.branch)
+    if isinstance(latest, str):
+        return None
+    updates, command, why = {}, "", ""
+    if not UpToDate(source, latest):
+        installed = source.commit[:7] or "unknown"
+        updates["code"] = {"branch": source.branch, "installed": installed, "latest": latest.sha[:7]}
+        command = "cu --update"
+        why = f"Branch {source.branch} has newer CompUtils code on GitHub ({installed} -> {latest.sha[:7]})."
+    if name is not None:
+        # Read at the commit just found (one fewer GitHub call than a branch, and the same files)
+        variants = environment.ReadVariants(source, latest.sha)
+        variant = (None if isinstance(variants, str) else
+                   next((variant for variant in variants.found if variant.name == name), None))
+        status = environment.CheckStatus(variant) if variant is not None else None
+        if status is not None and not status.current:
+            mode = "rebuild" if status.needsRebuild else "refresh"
+            updates["environment"] = {"name": name, "verdict": status.Verdict()}
+            command = f"cu -env {mode}"
+            why = (f"The {name} environment needs a {mode} (status: {status.Verdict()}). It runs in the background "
+                   f"and brings CompUtils' code on branch {source.branch} up to date too.")
+    if not updates:
+        return None
+    return {**updates, "command": command, "why": why}
 
 
 def LocalInstallMessage(source: Source) -> str:

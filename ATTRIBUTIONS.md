@@ -77,7 +77,7 @@ References as GoodVibes itself gives them.
 
 Imported by CompUtils itself.
 
-### Python (3.11.18)
+### Python (3.11.14)
 
 - **Use:** The language CompUtils is written in, and its standard library (tomllib, mmap, argparse, subprocess, urllib, ...).
 - **By:** Python Software Foundation
@@ -93,7 +93,7 @@ Imported by CompUtils itself.
 - **Copyright:** Copyright (c) 2020 Will McGugan
 - **Link:** https://github.com/Textualize/rich
 
-### Textual (8.2.8)
+### Textual (6.4.0)
 
 - **Use:** The TUI.
 - **By:** Will McGugan / Textualize
@@ -101,7 +101,7 @@ Imported by CompUtils itself.
 - **Copyright:** Copyright (c) 2021 Will McGugan
 - **Link:** https://github.com/Textualize/textual
 
-### pandas (3.1.1)
+### pandas (3.0.1)
 
 - **Use:** The GoodVibes table to Excel conversion (-ex, -gv).
 - **By:** The pandas development team
@@ -110,7 +110,7 @@ Imported by CompUtils itself.
 - **Cite:** The pandas development team, pandas-dev/pandas: Pandas, Zenodo, doi:10.5281/zenodo.3509134; W. McKinney, Data Structures for Statistical Computing in Python, Proceedings of the 9th Python in Science Conference, 2010, 56-61, doi:10.25080/Majora-92bf1922-00a.
 - **Link:** https://pandas.pydata.org
 
-### regex (2026.11.15)
+### regex (2026.2.19)
 
 - **Use:** Every search of an output or input file (memory-mapped, including reverse searches).
 - **By:** Matthew Barnett
@@ -130,7 +130,7 @@ Imported by CompUtils itself.
 
 Not imported by CompUtils, but installed because the libraries above need them.
 
-### markdown-it-py (4.3.0)
+### markdown-it-py (4.0.0)
 
 - **Use:** Markdown parsing for Rich and Textual.
 - **By:** ExecutableBookProject (Chris Sewell); port of markdown-it by Vitaly Puzrin and Alex Kocharin
@@ -148,7 +148,7 @@ Not imported by CompUtils, but installed because the libraries above need them.
 - **Needed By:** markdown-it-py
 - **Link:** https://github.com/executablebooks/mdurl
 
-### mdit-py-plugins (0.7.0)
+### mdit-py-plugins (0.6.1)
 
 - **Use:** markdown-it-py plugins.
 - **By:** ExecutableBookProject (Chris Sewell)
@@ -166,7 +166,7 @@ Not imported by CompUtils, but installed because the libraries above need them.
 - **Needed By:** Textual (markdown-it-py[linkify])
 - **Link:** https://github.com/tsutsu3/linkify-it-py
 
-### platformdirs (4.14.5)
+### platformdirs (4.12.2)
 
 - **Use:** Platform-specific directories.
 - **By:** The platformdirs developers
@@ -175,7 +175,7 @@ Not imported by CompUtils, but installed because the libraries above need them.
 - **Needed By:** Textual
 - **Link:** https://github.com/tox-dev/platformdirs
 
-### Pygments (2.21.0)
+### Pygments (2.20.0)
 
 - **Use:** Syntax highlighting.
 - **By:** Georg Brandl and the Pygments authors
@@ -193,7 +193,7 @@ Not imported by CompUtils, but installed because the libraries above need them.
 - **Needed By:** Textual
 - **Link:** https://github.com/python/typing_extensions
 
-### NumPy (2.4.6)
+### NumPy (2.4.2)
 
 - **Use:** Arrays for pandas and GoodVibes.
 - **By:** Travis E. Oliphant et al., the NumPy developers
@@ -203,7 +203,7 @@ Not imported by CompUtils, but installed because the libraries above need them.
 - **Needed By:** pandas, GoodVibes
 - **Link:** https://numpy.org
 
-### python-dateutil (4.0.0)
+### python-dateutil (2.9.0.post0)
 
 - **Use:** Date handling for pandas.
 - **By:** Gustavo Niemeyer, Paul Ganssle and the dateutil contributors
@@ -212,7 +212,7 @@ Not imported by CompUtils, but installed because the libraries above need them.
 - **Needed By:** pandas
 - **Link:** https://github.com/dateutil/dateutil
 
-### six
+### six (1.17.0)
 
 - **Use:** Python 2/3 compatibility for python-dateutil before 4.0 (environments built before it).
 - **By:** Benjamin Peterson
@@ -221,7 +221,7 @@ Not imported by CompUtils, but installed because the libraries above need them.
 - **Needed By:** python-dateutil
 - **Link:** https://github.com/benjaminp/six
 
-### tzdata (2026.6)
+### tzdata (2025.3)
 
 - **Use:** Time zone data for pandas (the IANA tz database, which is public domain).
 - **By:** Paul Ganssle (Python Software Foundation)
@@ -250,7 +250,7 @@ Not imported by CompUtils, but installed because the libraries above need them.
 - **Needed By:** cclib
 - **Link:** https://scipy.org
 
-### periodictable (2.1.0)
+### periodictable (1.7.1)
 
 - **Use:** Element data for cclib.
 - **By:** Paul Kienzle
@@ -259,7 +259,7 @@ Not imported by CompUtils, but installed because the libraries above need them.
 - **Needed By:** cclib
 - **Link:** https://github.com/python-periodictable/periodictable
 
-### pyparsing (3.3.3)
+### pyparsing (3.3.2)
 
 - **Use:** Parsing for periodictable.
 - **By:** Paul McGuire
@@ -268,7 +268,7 @@ Not imported by CompUtils, but installed because the libraries above need them.
 - **Needed By:** periodictable
 - **Link:** https://github.com/pyparsing/pyparsing
 
-### packaging (26.3)
+### packaging (26.0)
 
 - **Use:** Version handling for cclib.
 - **By:** Donald Stufft and individual contributors
@@ -281,7 +281,7 @@ Not imported by CompUtils, but installed because the libraries above need them.
 
 Installed by compUtils.yml for features still to come; CompUtils doesn't use them yet.
 
-### Matplotlib (3.11.2)
+### Matplotlib (3.10.8)
 
 - **Use:** Plotting (planned).
 - **By:** John D. Hunter, Michael Droettboom and the Matplotlib Development Team
@@ -308,7 +308,7 @@ Installed by compUtils.yml for features still to come; CompUtils doesn't use the
 - **Needed By:** Matplotlib
 - **Link:** https://github.com/matplotlib/cycler
 
-### fontTools (4.68.0)
+### fontTools (4.61.1)
 
 - **Use:** Font handling for Matplotlib.
 - **By:** Just van Rossum and contributors
@@ -317,7 +317,7 @@ Installed by compUtils.yml for features still to come; CompUtils doesn't use the
 - **Needed By:** Matplotlib
 - **Link:** https://github.com/fonttools/fonttools
 
-### Kiwi Solver (1.5.1)
+### Kiwi Solver (1.4.9)
 
 - **Use:** Layout constraints for Matplotlib.
 - **By:** The Nucleic Development Team
@@ -326,7 +326,7 @@ Installed by compUtils.yml for features still to come; CompUtils doesn't use the
 - **Needed By:** Matplotlib
 - **Link:** https://github.com/nucleic/kiwi
 
-### Pillow (13.0.0)
+### Pillow (12.1.1)
 
 - **Use:** Images for Matplotlib.
 - **By:** Jeffrey A. Clark and contributors (fork of PIL by Fredrik Lundh)
@@ -335,7 +335,7 @@ Installed by compUtils.yml for features still to come; CompUtils doesn't use the
 - **Needed By:** Matplotlib
 - **Link:** https://python-pillow.github.io
 
-### scikit-learn (1.9.1)
+### scikit-learn (1.8.0)
 
 - **Use:** Machine learning (planned).
 - **By:** The scikit-learn developers
@@ -344,7 +344,7 @@ Installed by compUtils.yml for features still to come; CompUtils doesn't use the
 - **Cite:** F. Pedregosa, G. Varoquaux, A. Gramfort et al., Scikit-learn: Machine Learning in Python, J. Mach. Learn. Res. 2011, 12, 2825-2830.
 - **Link:** https://scikit-learn.org
 
-### joblib (1.6.0)
+### joblib (1.5.3)
 
 - **Use:** Parallel helpers for scikit-learn.
 - **By:** Gael Varoquaux and the joblib developers
@@ -353,7 +353,7 @@ Installed by compUtils.yml for features still to come; CompUtils doesn't use the
 - **Needed By:** scikit-learn
 - **Link:** https://joblib.readthedocs.io
 
-### threadpoolctl (3.8.0)
+### threadpoolctl (3.6.0)
 
 - **Use:** Thread pool control for scikit-learn.
 - **By:** Thomas Moreau and the threadpoolctl contributors
@@ -362,7 +362,7 @@ Installed by compUtils.yml for features still to come; CompUtils doesn't use the
 - **Needed By:** scikit-learn
 - **Link:** https://github.com/joblib/threadpoolctl
 
-### Narwhals (2.28.0)
+### Narwhals
 
 - **Use:** A dataframe compatibility layer for scikit-learn (1.9 and later).
 - **By:** Marco Gorelli and the Narwhals contributors
@@ -371,7 +371,7 @@ Installed by compUtils.yml for features still to come; CompUtils doesn't use the
 - **Needed By:** scikit-learn
 - **Link:** https://github.com/narwhals-dev/narwhals
 
-### cloudpickle (3.1.2)
+### cloudpickle
 
 - **Use:** Pickling of functions for joblib's parallel workers.
 - **By:** The cloudpickle contributors
@@ -397,14 +397,14 @@ Installed by compUtils.yml for features still to come; CompUtils doesn't use the
 - **Needed By:** openpyxl
 - **Link:** https://foss.heptapod.net/openpyxl/et_xmlfile
 
-### PySide6 (Qt for Python) (6.11.3)
+### PySide6 (Qt for Python) (6.10.2)
 
 - **Use:** A graphical interface (planned).
 - **By:** The Qt Company
 - **License:** LGPL-3.0-only (also GPL or commercial)
 - **Link:** https://www.qt.io/qt-for-python
 
-### Shiboken6 (6.11.3)
+### Shiboken6 (6.10.2)
 
 - **Use:** The binding generator runtime behind PySide6.
 - **By:** The Qt Company
@@ -420,7 +420,7 @@ Installed by compUtils.yml for features still to come; CompUtils doesn't use the
 - **Needed By:** PySide6
 - **Link:** https://www.qt.io
 
-### RDKit (2026.9.2)
+### RDKit
 
 - **Use:** Cheminformatics (planned): molecules from SMILES, conformers.
 - **By:** Greg Landrum and the RDKit contributors
@@ -439,7 +439,7 @@ Installed by compUtils.yml for features still to come; CompUtils doesn't use the
 
 ### CREST
 
-- **Use:** Conformer and rotamer searches (planned; Linux, as conda-forge has no Windows build).
+- **Use:** Conformer and rotamer searches (planned; Linux and macOS, as conda-forge has no Windows build).
 - **By:** Philipp Pracht, Stefan Grimme and the CREST contributors
 - **License:** LGPL-3.0-or-later
 - **Cite:** P. Pracht, S. Grimme, C. Bannwarth, F. Bohle, S. Ehlert, G. Feldmann, J. Gorges, M. Müller, T. Neudecker, C. Plett, S. Spicher, P. Steinbach, P. A. Wesołowski, F. Zeller, J. Chem. Phys. 2024, 160, 114110. doi:10.1063/5.0197592; P. Pracht, F. Bohle, S. Grimme, Phys. Chem. Chem. Phys. 2020, 22, 7169-7192. doi:10.1039/C9CP06869D (CREST's README lists the papers behind each of its algorithms)
@@ -499,7 +499,7 @@ What CompUtils is installed with, runs on and talks to.
 - **License:** GitHub Terms of Service (REST API use under GitHub's API terms)
 - **Link:** https://docs.github.com/en/rest
 
-### pip (26.2.2)
+### pip (26.0.1)
 
 - **Use:** Installs CompUtils itself.
 - **By:** The pip developers
@@ -507,14 +507,14 @@ What CompUtils is installed with, runs on and talks to.
 - **Copyright:** Copyright (c) 2008-present The pip developers (see AUTHORS.txt file)
 - **Link:** https://pip.pypa.io
 
-### setuptools (84.2.1)
+### setuptools (82.0.0)
 
 - **Use:** Builds CompUtils (pyproject.toml's build backend).
 - **By:** Python Packaging Authority
 - **License:** MIT
 - **Link:** https://github.com/pypa/setuptools
 
-### wheel (0.48.0)
+### wheel (0.46.3)
 
 - **Use:** Builds wheels for pip.
 - **By:** Daniel Holth and contributors

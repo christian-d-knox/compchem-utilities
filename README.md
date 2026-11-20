@@ -42,15 +42,16 @@ accessed from the command line or from a full-screen terminal interface.
   Stampede3 (TACC) are built in; other clusters are added through a lab profile.
 - Gaussian 16 and/or ORCA 6.1, installed and licensed on that cluster (see [Third-Party Software](#third-party-software)).
 - Python 3.11 or later. The installer builds a conda environment with everything CompUtils needs (it starts on any
-  Python 3.6+). CompUtils also installs on a Windows or Linux computer, e.g. for the files you copy down.
+  Python 3.6+). CompUtils also installs on a Windows, Mac or Linux computer, e.g. for the files you copy down.
 
 ## Installation
 
 Download the `conda-installer.py` file from the repository and run it via `python3 conda-installer.py` (on Windows,
-`python conda-installer.py`). The same file works on Linux (a cluster's login node or a workstation) and Windows. The
-installer will take care of installing miniconda3 if no conda is present on the system (set to use conda-forge only),
-then automatically create the CompUtils conda environment for your system (`compUtils.yml`, or `compUtilsWindows.yml`
-on Windows) and install CompUtils inside of it. It asks nothing, and never accepts any terms on your behalf. If your
+`python conda-installer.py`). The same file works on Linux (a cluster's login node or a workstation), Windows and
+macOS (Apple Silicon or Intel). The installer will take care of installing miniconda3 if no conda is present on the
+system (set to use conda-forge only), then automatically create the CompUtils conda environment for your system
+(`compUtils.yml`; `compUtilsWindows.yml` on Windows, `compUtilsMac.yml` on a Mac) and install CompUtils inside of
+it. It asks nothing, and never accepts any terms on your behalf. If your
 lab already has its own `profile.toml` file, CompUtils asks for it during first-time setup (`cu -profile FILE` applies
 one later).
 
@@ -60,6 +61,12 @@ one later).
 - **A Windows computer with no Python at all:** install Miniconda first (its silent installer, to
   `%USERPROFILE%\miniconda3`), then run the installer with Miniconda's Python and `--conda-forge-only`:
   `& "$HOME\miniconda3\python.exe" conda-installer.py --conda-forge-only` (PowerShell).
+- **Mac:** the installer writes a `cu` command (`~/.local/bin/cu`, put first on your PATH in `~/.zprofile`, ahead of
+  macOS' own, unrelated `/usr/bin/cu`), so `cu` works in any new terminal with nothing to activate. GoodVibes comes
+  from pip there (conda-forge has no Apple Silicon build of 3.2).
+- **A Mac without Python** (no Command Line Tools, so `python3` only offers to install them): install Miniconda first
+  (`bash Miniconda3-latest-MacOSX-$(uname -m).sh -b -p ~/miniconda3`), then run
+  `~/miniconda3/bin/python conda-installer.py --conda-forge-only`.
 
 The environments also carry `openpyxl`, so an AI agent can build Excel workbooks with formulas from `GoodVibes.xlsx`.
 
@@ -119,6 +126,10 @@ scp cluster:.computils-SKILL.md SKILL.md
 
 (`scp` copies it byte for byte: Windows PowerShell's `>` would save it as UTF-16), and put `SKILL.md` in a `computils` folder in your agent's skills folder (Antigravity: `~/.gemini/config/skills/computils/`
 for every workspace; Claude Code: `~/.claude/skills/computils/`).
+
+The skill also records whether CompUtils is installed on your own computer (`--local-cu PATH --local-python PATH`,
+or `--no-local`), so the agent never asks again. Once a day, the first `--json` report on a machine also says
+whether a newer CompUtils (or environment) is on GitHub (`updates`); the agent tells you, and you decide.
 
 ## Configuration
 

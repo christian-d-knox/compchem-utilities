@@ -1,4 +1,6 @@
 import os
+import platform
+import sys
 from pathlib import Path
 
 from .console  import console, Panel
@@ -88,6 +90,9 @@ def ColorSetup() -> None:
                   "in addition to the set-up here.[/info]")
     console.print(Panel("For Windows users, this means high color is unavailable in PuTTY. Consider swapping "
                         "to something that supports truecolor, like Windows Terminal.", style="warning"))
+    if _OldMacTerminal():
+        console.print(Panel("This is macOS' Terminal, which shows high color only from macOS 26 on. Choose low color "
+                            "here, or use a terminal that supports truecolor, like iTerm2.", style="warning"))
     hexColor = AskBool("Would you like to operate in high color mode?", "Y", key="color-mode")
     Defaults.colorMode = "hexCode" if hexColor else "lowColor"
     Defaults._SaveSection("qol.toml")
@@ -96,11 +101,28 @@ def ColorSetup() -> None:
     if os.environ.get("COLORTERM","").lower() in ("truecolor", "24bit"):
         console.print("[good]High color environment variable already detected! Enjoy![/good]")
     else:
-        console.print("[operation]High color environment variable not detected. Adding to bashrc[/operation]")
-        bashPath = Path("~/.bashrc").expanduser()
-        with open(bashPath, "a") as file:
+        startup = _ShellStartupFile()
+        console.print(f"[operation]High color environment variable not detected. Adding to {startup}[/operation]")
+        with open(startup, "a") as file:
             file.write(f"export COLORTERM=truecolor\n")
             console.print("[good]High color environment variable written! Enjoy![/good]")
+
+
+def _ShellStartupFile() -> Path:
+    """Where a shell setting goes: ~/.bashrc, except on a Mac, whose terminals start login shells (zsh by default)
+    that read the profile (the file conda-installer.py puts the 'cu' command on PATH in)."""
+    if sys.platform != "darwin":
+        return Path("~/.bashrc").expanduser()
+    shell = os.path.basename(os.environ.get("SHELL", "")) or "zsh"
+    return Path("~").expanduser() / (".bash_profile" if shell == "bash" else ".zprofile")
+
+
+def _OldMacTerminal() -> bool:
+    """Whether this is macOS' Terminal before macOS 26 (Tahoe), which has no truecolor (256 colours at most)."""
+    if sys.platform != "darwin" or os.environ.get("TERM_PROGRAM") != "Apple_Terminal":
+        return False
+    version = platform.mac_ver()[0]
+    return bool(version) and version.split(".")[0].isdigit() and int(version.split(".")[0]) < 26
 
 
 

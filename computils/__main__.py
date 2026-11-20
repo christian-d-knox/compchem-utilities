@@ -41,12 +41,28 @@ def Main() -> int:
         import traceback
         traceback.print_exc()
         agent.Crashed()
+    # At most once a day, a report also says what is newer on GitHub (never in a hook: no one reads its report)
+    if agent.jsonOutput and argv[:1] != ["--neva-touch"]:
+        _DailyUpdateCheck()
     code = agent.Finish()
     # A Neva-Touch Scheduler hook records its own outcome on the tracked job; its exit code means only "crashed or not"
     # (a stalker's fallback, nevatouch.FireStep, reads it that way)
     if argv[:1] == ["--neva-touch"] and code != agent.Exit.CRASHED:
         return 0
     return code
+
+
+def _DailyUpdateCheck() -> None:
+    """update.DailyCheck into the report, and a line for whoever reads stderr. Never worth failing a report over."""
+    try:
+        from .update import DailyCheck
+        updates = DailyCheck()
+    except Exception:
+        return
+    if updates:
+        agent.report.updates = updates
+        console.print(f"[info]Update available: {updates['why']} Run `{updates['command']}` when you're ready."
+                      "[/info]", highlight=False)
 
 
 def _CommandName(argv: list[str]) -> str:
@@ -85,17 +101,21 @@ def _Run(argv: list[str]) -> None:
     opensTUI = argv in (["-tui"], ["--tui"]) or (not argv and Defaults.bareCommandOpensTUI)
     appliesProfile = argv[:1] in (["-profile"], ["--profile"])
 
+    # The environment's status and updates (-env) concern the installation, not the cluster: a run nobody can answer
+    # reads them before setup too (an agent on a computer used only for workbooks, where nobody set cu up)
+    deferSetup = not prompts.interactive and argv[:1] in (["-env"], ["--environment"])
     # Setup is a conversation with a person: a run nobody can answer stops here, saying who must run what
-    if not prompts.interactive and (Defaults.needsFirstTimeSetup or Defaults.colorMode not in ("lowColor", "hexCode")):
+    if not prompts.interactive and not deferSetup and (Defaults.needsFirstTimeSetup
+                                                       or Defaults.colorMode not in ("lowColor", "hexCode")):
         raise agent.NeedsHuman("CompUtils isn't set up for this account yet: a person must run `cu` once in a terminal "
                                "on this cluster (it asks about the cluster and notifications).", "cu -first")
 
     # If Defaults._Validate determined that first-time setup is needed,
     # run it here rather than from inside Defaults.
-    if Defaults.colorMode not in ("lowColor", "hexCode"):
+    if Defaults.colorMode not in ("lowColor", "hexCode") and not deferSetup:
         from .wizards import ColorSetup
         ColorSetup()
-    if Defaults.needsFirstTimeSetup:
+    if Defaults.needsFirstTimeSetup and not deferSetup:
         from .wizards import firstTimeSetup
         # `cu -profile FILE` on a fresh install: setup applies it, before offering the clusters it adds
         profileFile = Path(argv[1]).expanduser() if appliesProfile and len(argv) == 2 else None
@@ -103,7 +123,8 @@ def _Run(argv: list[str]) -> None:
         # The TUI can't set the cluster (hpcType is setup-only), so it opens only once setup has set one
         if (opensTUI and result is None) or profileFile is not None:
             return
-    else:
+    # Setup deferred (-env before anyone set cu up): the cluster's startup checks below need it, so they wait too
+    elif not Defaults.needsFirstTimeSetup:
         if not appliesProfile and sys.stdin.isatty():
             from .profile import CheckProfileSource
             CheckProfileSource()
