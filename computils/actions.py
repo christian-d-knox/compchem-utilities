@@ -32,13 +32,14 @@ class Action(Enum):
     OPTIMIZE         = "opt"        # -opt: the Optimization builder, headless (optimize.py)
     SI_SCRAPER       = "si"         # -si: the SI Scraper, headless (scrape.py)
     AGENT            = "agent"      # -agent [TOPIC]: the agent skill, or one of its topics (agentskill.py)
+    XYZ              = "xyz"        # -xyz: each file's last geometry as NAME.xyz
 
 # Actions that submit SLURM jobs, which -st can follow
 JOB_ACTIONS = (Action.RUN, Action.SINGLE_POINT, Action.BENCHMARK, Action.CUBE, Action.RERUN)
 
 # Actions that take a batch of files (IntentDraft.Validate, and the TUI's Continue)
 FILE_ACTIONS = (Action.RUN, Action.SINGLE_POINT, Action.BENCHMARK, Action.CUBE, Action.RERUN, Action.FORM_CHECK,
-                Action.GOODVIBES, Action.INFO, Action.OPTIMIZE)
+                Action.GOODVIBES, Action.INFO, Action.OPTIMIZE, Action.XYZ)
 
 # The Neva-Touch Scheduler's steps: what a job's hook does once the job ends. SP submits the single point (an opt's);
 # DONE ends the chain (the single point's own hook only reports)

@@ -62,20 +62,28 @@ COMMANDS = [
                  "What outputs and inputs say: status, charge/multiplicity, spin, route, energy, H/G corrections, "
                  "imaginary frequencies, convergence, stability, <S**2>. Read once each: never read a .out yourself.",
                  "-info '*.out' --json", "One record per file (info.FileFacts); next: cu -re / cu -sp suggestions."),
+    AgentCommand("xyz", ("xyz",), Action.XYZ,
+                 "Write each file's last geometry (an output's; an input's own; Gaussian or ORCA) as NAME.xyz here, "
+                 "e.g. for figures or another program.",
+                 "-xyz 8a.out TS1.out --json", "written: the .xyz files.", tui=(f"action-{Action.XYZ.value}",)),
     AgentCommand("methods", ("methods",), Action.METHODS,
                  "The Optimization and Benchmark Methods in force here (project, else global): pick -opt's --method "
                  "from these. They differ per project: list them in each folder.",
                  "-methods --json", "One record per section: its level and each method's name, route, program, problem."),
     AgentCommand("opt", ("optimize", "method", "route", "charge", "mult", "spin", "name", "cpus", "memory", "modred",
-                         "then_sp", "sp_cpus", "sp_memory"), Action.OPTIMIZE,
+                         "then_sp", "sp_cpus", "sp_memory", "sp_method", "sp_route", "sp_wall_time", "sp_partition",
+                         "sp_cluster", "sp_nbo", "sp_checkpoint"), Action.OPTIMIZE,
                  "Write and submit an optimization of ONE molecule (an .xyz, or a prior input/output), as the TUI's "
                  "Optimization builder does; --then-sp has the Neva-Touch Scheduler submit its single point when it "
-                 "ends (and re-run a stage that ran out of optimizer steps).",
+                 "ends (and re-run a stage that ran out of optimizer steps). The SP: --sp-method NAME (a Benchmark "
+                 "Methods entry, cu -methods; default the first) or --sp-route, and its own --sp-* resources; its "
+                 "partition and cluster follow the optimization's unless given. The chain is written to NAME.chain.json.",
                  "-opt 8a.xyz --method wb97xd --charge 0 --mult 1 --then-sp --dry-run --json",
                  "The input written, its method, charge, multiplicity, spin, resources and scheduled SP; submitted[].",
                  ("method", "charge", "mult", "replace-input"), ("builder-opt",)),
     AgentCommand("sp", ("singlePoint",), Action.SINGLE_POINT,
-                 "Write and submit each output's single point (Benchmark Methods' first entry; -ovr N picks another).",
+                 "Write and submit each output's single point (Benchmark Methods' first entry; -ovr N picks another, "
+                 "--route gives a route of your own).",
                  "-sp 8a.out --dry-run --json", "written[], submitted[], skipped[] with reasons.",
                  tui=(f"action-{Action.SINGLE_POINT.value}",)),
     AgentCommand("bench", ("bench",), Action.BENCHMARK,
@@ -100,11 +108,13 @@ COMMANDS = [
                  "IDs still running, the Neva-Touch Scheduler's new jobs included]}}, and next: the command to wait "
                  "again, and -info for a job that didn't end normally.",
                  ("dismiss-live", "stalk-loop"), ("screen-stalker",)),
-    AgentCommand("gv", ("goodvibes", "qh", "cutoff", "entropy", "temperature", "concentration", "scale", "spc", "check",
-                        "gv_keys"), Action.GOODVIBES,
+    AgentCommand("gv", ("goodvibes", "qh", "cutoff", "entropy", "temperature", "concentration", "scale", "spc",
+                        "gv_allow", "gv_keys"), Action.GOODVIBES,
                  "Run GoodVibes on structures (their _SP files found by name) and convert to Excel. Without flags and "
                  "with nobody to answer, it runs with the GoodVibes Builder's defaults (qh-H, Grimme qh-S, 298.15 K, "
-                 "1 atm, scale 1.0, the detected SP suffix).",
+                 "1 atm, scale 1.0, the detected SP suffix). A consistency check runs first: mismatched methods, "
+                 "solvation, dispersion or SP geometries stop it (exit 7); waiving them (--gv-allow, as next gives it) "
+                 "is the human's call, e.g. for a benchmark set.",
                  "-gv 8a.out 8b.out --spc SP --json",
                  "The table as GoodVibes wrote it: rows by structure (E_SPC, H_SPC, qh-H_SPC, G(T)_SPC, qh-G(T)_SPC...), "
                  "with its temperature and concentration.",
@@ -155,7 +165,8 @@ COMMANDS = [
 ]
 
 # Flags any command takes, and hidden ones (argparse.SUPPRESS: never listed, never checked)
-SHARED_FLAGS = {"help": "", "json": "", "answer": "", "dry_run": "", "checkpoint": "", "nbo7": "", "override": ""}
+SHARED_FLAGS = {"help": "", "json": "", "answer": "", "dry_run": "", "checkpoint": "", "nbo7": "", "override": "",
+                "wall_time": "", "partition": "", "cluster": ""}
 # TUI items with no command: why a person does them (the check fails on any other uncovered item)
 HUMAN_ONLY_TUI = {"screen-config": "Config is edited by people (an agent reads it through -methods and its reports)",
                   "screen-files": "Project Files (spinstates.txt) are a person's declarations about their molecules"}
@@ -362,7 +373,8 @@ def CommandTopic(command: AgentCommand) -> str:
         flag = ", ".join(action.option_strings) + (f" {metavar}" if metavar and action.nargs != 0 else "")
         lines.append(f"- `{flag}`: {action.help or ''}")
     lines.append("- Any command: `--json`, `--answer KEY=VALUE`; job commands: `--dry-run`, `-ch` (checkpoint), "
-                 "`-nbo` (NBO keylist), `-st` (snapshot of the submitted jobs).")
+                 "`-nbo` (NBO keylist), `-st` (snapshot of the submitted jobs), `--wall-time HOURS`, `--partition "
+                 "NAME`, `--cluster NAME` (the jobs' SLURM settings; default: the config's; only the human picks them).")
     if command.results:
         lines += ["", f"Report `results`: {command.results}"]
     if command.questions:

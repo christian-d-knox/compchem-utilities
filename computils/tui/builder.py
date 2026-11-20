@@ -9,8 +9,8 @@ from textual.screen import Screen
 from textual.widgets import Checkbox, Input, OptionList, Static
 
 from ..actions  import Action, CubeOption
-from ..analysis import (DEFAULT_CONCENTRATION, DEFAULT_CUTOFF, DEFAULT_SCALE, DEFAULT_TEMPERATURE,
-                         GoodVibesArguments, SelectionSuffix, SpcPartners)
+from ..analysis import (ALLOW_ALL, CHECK_CATEGORIES, DEFAULT_CONCENTRATION, DEFAULT_CUTOFF, DEFAULT_SCALE,
+                         DEFAULT_TEMPERATURE, CheckArguments, GoodVibesArguments, SelectionSuffix, SpcPartners)
 from ..catalog  import Catalog
 from ..defaults import Defaults
 from ..intent   import IntentDraft
@@ -33,6 +33,10 @@ def NameList(paths: list[Path]) -> str:
 
 # ─── GoodVibes settings ──────────────────────
 
+# What each Allow row lets differ (analysis.CHECK_CATEGORIES)
+ALLOW_MEANINGS = {"theory": "Levels of Theory May Differ", "solvation": "Solvation Models May Differ",
+                  "dispersion": "Dispersion May Differ", "geometry": "Opt/SP Geometries May Differ"}
+
 def GoodVibesSettings(suffix: str) -> list[Setting]:
     """Defaults match the CLI wizard's, and Single Point is on (suffix: detected, preset, or the default): GoodVibes
     runs once both the opt and the SP are done.
@@ -48,7 +52,12 @@ def GoodVibesSettings(suffix: str) -> list[Setting]:
         Setting("cutoff", "  └ qh Cutoff", "Softer Modes Are Corrected", f"{DEFAULT_CUTOFF:g}", "cm⁻¹", under="enthalpy"),
         Setting("scale", "Vib Scale Factor", "Off: GV Auto-Detect from Method", f"{DEFAULT_SCALE:.1f}", on=True),
         Setting("singlePoint", "Single Point", "", suffix, on=True, accepts=NAME),
-        Setting("check", "Check", "Check for Level of Theory Consistency", on=False),
+        # The consistency check: a first pass, no corrections; off waives everything. Each row under it
+        # waives one category of its stops where the difference is intended (a benchmark set never shares a method).
+        # Labels without "Allow": the shared label column is 19 cells
+        Setting("check", "Consistency Check", "First Pass, No Corrections · Ticked Below: Allowed", on=True),
+        *(Setting(f"allow-{category}", f"  └ {label}", ALLOW_MEANINGS[category], on=False, under="check")
+          for category, (label, _) in CHECK_CATEGORIES.items()),
         Setting("extra", "Extra Keys", "Passed Directly to GoodVibes", "", on=False, accepts=TEXT),
     ]
 
@@ -258,7 +267,8 @@ class BuilderScreen(Screen):
         draft.vibeScale = Number("scale")
         draft.truhlarEntropy = settings.Row("truhlar").on
         draft.headGordonEnthalpy = settings.Row("enthalpy").on
-        draft.checkConsistency = settings.Row("check").on
+        draft.allowDifferences = ([category for category in CHECK_CATEGORIES if settings.Row(f"allow-{category}").on]
+                                  if settings.Row("check").on else [ALLOW_ALL])
         singlePoint = settings.Row("singlePoint")
         draft.singlePointPattern = singlePoint.value.strip().lstrip("_") or None if singlePoint.on else None
         if singlePoint.on and draft.singlePointPattern is None:
@@ -277,7 +287,11 @@ class BuilderScreen(Screen):
         settings.Row("singlePoint").SetMeaning(f"{detected}{len(structures) - len(missing)} of {len(structures)} "
                                                "Structures Have One")
         inputs, _, missing = self.Structures()
-        command = " ".join(["goodvibes", *GoodVibesArguments(draft)]) + " " + NameList(inputs).replace(", ", " ")
+        names = NameList(inputs).replace(", ", " ")
+        command = " ".join(["goodvibes", *GoodVibesArguments(draft)]) + " " + names
+        # The check pass runs first, unless Consistency Check is off
+        if ALLOW_ALL not in draft.allowDifferences:
+            command = " ".join(["goodvibes", *CheckArguments(draft)]) + f" {names}   (Check Pass)\n{command}"
         self.query_one("#command", Static).update(command)
         self.selectionErrors = []
         if missing:

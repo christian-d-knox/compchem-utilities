@@ -418,15 +418,34 @@ def RestartInputText(inputPath: Path, program: str, stage: int, molecule: Molecu
         sections.append("\n".join(link0) + "\n" + route + after.rstrip("\n") + "\n\n")
     return "--Link1--\n".join(sections), ""
 
-# Reorganized! Now handles SLURM commands independently because of HPC cluster agnosticism
-def slurmHandler(molecule: Molecule, queueName: Path, outputName: Path, cpus: int, jobRam: int) -> None:
-    # What each header line gets filled with, by the flag it contains. Checked in this order; first match wins
-    fills = [("-J", f" {molecule.baseName}"), ("-o", f" {outputName}"), ("--ntasks", f"{cpus}"), ("--mem", f"{jobRam}GB"),
-             ("-t", f" {Defaults.wallTime}:00:00"), ("-p", f" {Defaults.partition}"), ("-M", f" {Defaults.cluster}")]
+# What each submission header line is filled with, by the flag it contains. Checked in this order, first match wins
+# (so a --ntasks-per-node line is a --ntasks one, never -p)
+HEADER_FLAGS = [("-J", "name"), ("-o", "output"), ("--ntasks", "cpus"), ("--mem", "memory"), ("-t", "wallTime"),
+                ("-p", "partition"), ("-M", "cluster")]
+
+def HeaderKey(line: str) -> str:
+    """What a submission header line holds (HEADER_FLAGS), '' for a line filled with nothing."""
+    return next((key for flag, key in HEADER_FLAGS if flag in line), "")
+
+def HeaderSends(key: str) -> bool:
+    """Whether the active cluster's submission header has a line for this setting (Bridges2's sends no -M), so the
+    builders show its row and the job commands take its flag only where it applies."""
+    return any(HeaderKey(line) == key for line in Defaults.submissionList)
+
+def WallTimeProblem(value: str) -> str:
+    """Why a wall time (whole hours, as wallTime is kept: slurmHandler writes it as H:00:00) can't be used, or ''."""
+    return "" if value.isdigit() and int(value) > 0 else "Wall Time Must Be Whole Hours Above 0"
+
+# Reorganized! Now handles SLURM commands independently because of HPC cluster agnosticism. wallTime/partition/cluster:
+# this job's own (a builder's rows, the job commands' --wall-time/--partition/--cluster), None for the config's
+def slurmHandler(molecule: Molecule, queueName: Path, outputName: Path, cpus: int, jobRam: int,
+                 wallTime: str | None = None, partition: str | None = None, cluster: str | None = None) -> None:
+    fills = {"name": f" {molecule.baseName}", "output": f" {outputName}", "cpus": f"{cpus}", "memory": f"{jobRam}GB",
+             "wallTime": f" {wallTime or Defaults.wallTime}:00:00", "partition": f" {partition or Defaults.partition}",
+             "cluster": f" {cluster or Defaults.cluster}"}
     with open(queueName, 'w') as outputFile:
         for line in Defaults.submissionList:
-            fill = next((value for flag, value in fills if flag in line), "")
-            outputFile.write(f"{line}{fill}\n")
+            outputFile.write(f"{line}{fills.get(HeaderKey(line), '')}\n")
 
 # An ORCA job's plumbing, after orcaNonVariant's environment: run in node scratch, then copy the result files into
 # <job name>-scratch/ however the job ends. At the wall time SLURM sends SIGTERM (then SIGKILL ~30 s later), so the TERM
@@ -497,7 +516,8 @@ def runJob(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
     # The Neva-Touch Scheduler's hook: the step this job takes once it ends, with the next job's resources
     outputPath = Path(outputName).resolve()
     hookCommand = (HookCommand(intent.nevaTouch, outputPath, intent.nextCpus, intent.nextMemoryRatio, intent.reRuns,
-                               intent.firstStage) if intent.nevaTouch else [])
+                               intent.firstStage, intent.wallTime, intent.partition, intent.cluster, intent.chain)
+                   if intent.nevaTouch else [])
     hook = (HookLines(hookCommand, outputPath.parent, outputPath.parent / fileCreation(molecule.baseName, NTS_LOG))
             if hookCommand else "")
 
@@ -514,7 +534,7 @@ def runJob(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
         stageCount = StageCount(data, molecule.extensionType)
         planned = PlannedKinds(data, molecule.extensionType)
 
-    slurmHandler(molecule, queueName, outputName, cpus, jobRam)
+    slurmHandler(molecule, queueName, outputName, cpus, jobRam, intent.wallTime, intent.partition, intent.cluster)
 
     match molecule.extensionType:
         case Defaults.gaussianExtension:
@@ -550,7 +570,8 @@ def runJob(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
     jobID, cluster = submitted
     console.print(f"[good]Submitted job {molecule.baseName} to {program} (ID {jobID})[/good]")
     agent.Submitted(molecule.baseName, jobID, cluster, str(outputPath), intent.nevaTouch)
-    tracked = TrackedJob(jobID, cluster, molecule.baseName, str(outputPath), jobLocation(), molecule.extensionType,
+    tracked = TrackedJob(jobID, cluster, molecule.baseName, str(outputPath),
+                         jobLocation(intent.partition, intent.cluster), molecule.extensionType,
                          time.time(), [Stage(planned=planned[index] if index < len(planned) else "")
                                        for index in range(stageCount)],
                          nevaTouch=intent.nevaTouch, reRuns=intent.reRuns, firstStage=intent.firstStage,

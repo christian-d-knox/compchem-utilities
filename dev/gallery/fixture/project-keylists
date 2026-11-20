@@ -1,0 +1,17 @@
+# The screen gallery's project-level keylists (copied to <project>/.computils/jobRelatedKeylists): one section of its
+# own, so Config's Job Keylists show a Project level in force beside the Global ones.
+
+=== Optimization Methods ===
+# @intermediate
+B3LYP/6-31G(d) EmpiricalDispersion=GD3BJ SCRF=(SMD,Solvent=Toluene) opt freq [oss: guess=mix]
+
+# @ts
+B3LYP/6-31G(d) EmpiricalDispersion=GD3BJ SCRF=(SMD,Solvent=Toluene) opt=(ts,calcfc,noeigentest) freq [oss: guess=mix]
+
+# @ts-oss-hard
+M06/SDD opt=modredundant [oss: guess=mix]
+> M06/SDD stable=opt
+> M06/SDD opt=(ts,calcfc) freq
+
+# @orca-opt
+r2SCAN-3c Opt Freq {cpcm}

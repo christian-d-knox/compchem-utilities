@@ -1,5 +1,8 @@
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
+
+import regex
 
 import pandas
 
@@ -16,13 +19,75 @@ DEFAULT_TEMPERATURE = 298.15
 # quasi-harmonic enthalpy with its cutoff, Grimme's entropy, a scale factor of 1.0, no concentration correction
 DEFAULT_CUTOFF, DEFAULT_SCALE, DEFAULT_CONCENTRATION = 100.0, 1.0, 1.0
 
+# The consistency check: a first GoodVibes pass, --check with no corrections (only the SP pairing), before the
+# real run. Its 'x' lines in these categories stop the real run unless waived (-gv --gv-allow, the Builder's Allow rows):
+# they mean the numbers wouldn't be comparable. Every other 'x' line (charge and multiplicity, which differ in any
+# reaction; program versions; duplicates; GoodVibes' TS/GS guess; linear molecules; concentration notes) is a warning.
+# category -> (label, what its line says in GoodVibes 3.2)
+CHECK_CATEGORIES = {
+    "theory":     ("Methods", r"Different levels of theory"),
+    "solvation":  ("Solvation", r"Different solvation models|combination of gas and solvent phases|Different solvents used"),
+    "dispersion": ("Dispersion", r"Different dispersion models"),
+    "geometry":   ("SP Geometries", r"differences found between frequency and single-point geometries"
+                                    r"|geometries from single-point corrections are missing"),
+}
+ALLOW_ALL = "all"
+# Where GoodVibes' checks start (the table above them can carry 'x' rows of its own)
+CHECKS_HEADER = "Checks for thermochemistry calculations"
+
+
+@dataclass
+class CheckFinding:
+    """One 'x' line of GoodVibes' check, with its continuation lines (each group's files). category: a key of
+    CHECK_CATEGORIES (stops the run unless waived), or '' (a warning)."""
+    category: str
+    text:     str
+
+
+def CheckArguments(intent) -> list[str]:
+    """The check pass's goodvibes flags: --check, and the SP suffix it pairs files by. No corrections (the first pass is
+    only a safety layer; the real one carries them)."""
+    return ["--check", *(["--spc", intent.singlePointPattern] if intent.singlePointPattern else [])]
+
+
+def ReadCheck(output: str) -> list[CheckFinding]:
+    """The findings in a check pass's printout: each 'x' line after the checks header, joined with the indented lines
+    that follow it, classified by CHECK_CATEGORIES."""
+    if CHECKS_HEADER not in output:
+        return []
+    findings, current = [], None
+    for line in output.split(CHECKS_HEADER, 1)[1].splitlines():
+        if line.startswith("x  "):
+            text = regex.sub(r"^Caution[!:]\s*", "", line[3:].strip())
+            category = next((key for key, (_, pattern) in CHECK_CATEGORIES.items() if regex.search(pattern, text)), "")
+            current = CheckFinding(category, text)
+            findings.append(current)
+        elif current is not None and line.startswith("  ") and line.strip() and not line.strip().startswith("*"):
+            # A group of files ('-B3LYP/6-31G(d): a.out, b.out'), or the next names of a long line
+            group = line.strip().lstrip("-")
+            current.text += (" " if current.text.endswith(":") else "; ") + group
+        elif line.strip():
+            # An 'o' or '-' line, a section header or the stars: the finding above it is complete
+            current = None
+    return findings
+
+
+def AllowArgument(text: str) -> list[str]:
+    """--gv-allow's categories (comma separated), checked: [ALLOW_ALL] skips the check pass."""
+    allowed = [word.strip().lower() for word in text.split(",") if word.strip()]
+    unknown = [word for word in allowed if word not in CHECK_CATEGORIES and word != ALLOW_ALL]
+    if unknown or not allowed:
+        raise agent.UsageError(f"--gv-allow takes {', '.join(CHECK_CATEGORIES)} or {ALLOW_ALL}, separated by commas "
+                               f"(got '{text}').")
+    return [ALLOW_ALL] if ALLOW_ALL in allowed else allowed
+
 
 def GoodVibesDefaults(draft, suffix: str | None) -> None:
     """Fill a draft with the Builder's starting values (and the single point suffix it would detect), for a run
     without the wizard: an agent's, or any run given a GoodVibes flag."""
     draft.headGordonEnthalpy, draft.freqCutoff, draft.truhlarEntropy = True, DEFAULT_CUTOFF, False
     draft.tempCorrection, draft.concCorrection, draft.vibeScale = DEFAULT_TEMPERATURE, None, DEFAULT_SCALE
-    draft.checkConsistency, draft.singlePointPattern, draft.extraKeys = False, suffix, None
+    draft.allowDifferences, draft.singlePointPattern, draft.extraKeys = [], suffix, None
 
 
 # Because everyone hates remembering manuals. Walks through the most common use-cases with catch-all final custom keylist.
@@ -61,7 +126,6 @@ def GoodVibesArguments(intent) -> list[str]:
         arguments += ["-t", f"{intent.tempCorrection:g}"]
     if intent.concCorrection is not None:   arguments += ["-c", f"{intent.concCorrection:g}"]
     if intent.truhlarEntropy:               arguments += ["--qs", "truhlar"]
-    if intent.checkConsistency:             arguments.append("--check")
     if intent.singlePointPattern:           arguments += ["--spc", intent.singlePointPattern]
     if intent.extraKeys:                    arguments += intent.extraKeys.split()
     return arguments

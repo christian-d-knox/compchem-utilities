@@ -14,7 +14,7 @@ from textual.widgets.selection_list import Selection
 from textual.worker import get_current_worker
 
 from ..actions  import Action, FILE_ACTIONS
-from ..intent   import FormCheckIntent
+from ..intent   import FormCheckIntent, XyzIntent
 from ..project  import ChangeDirectory, FindProjectRoot
 from .common    import NAV_BINDINGS, NavFooter, Notice, SwapItems
 from .inspect   import ActionExtensions, FileDetails, FileStatus, Styled
@@ -22,6 +22,7 @@ from .inspect   import ActionExtensions, FileDetails, FileStatus, Styled
 ACTION_LABELS = {
     Action.RUN: "Run as Written", Action.SINGLE_POINT: "Single Point", Action.BENCHMARK: "Benchmark",
     Action.RERUN: "Re-Run", Action.CUBE: "Cube Files", Action.FORM_CHECK: "FormChk", Action.GOODVIBES: "GoodVibes",
+    Action.XYZ: "Write XYZ",
 }
 # Screens below the divider, opened with ␣, ⏎ or a click (HomeScreen.OpenScreenItem): item id -> label
 SCREEN_ITEMS = {"screen-scrapers": "Scrapers ›", "screen-stalker": "Job Stalker", "screen-config": "Config",
@@ -493,6 +494,10 @@ class HomeScreen(Screen):
         # FormChk has no options, so it skips the builder
         if self.action == Action.FORM_CHECK:
             self.app.exit(FormCheckIntent(files=files))
+            return
+        # Nor has Write XYZ: it runs in the app, and the files it wrote are listed when its pop-up closes
+        if self.action == Action.XYZ:
+            self.app.WriteXyz(XyzIntent(files=files))
             return
         from .builder import BuilderScreen
         self.app.push_screen(BuilderScreen(self.action, files))

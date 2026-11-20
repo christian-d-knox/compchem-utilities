@@ -10,7 +10,8 @@ ntsReRunLimit times per stage, its hook the same SP step. Whoever takes a step s
 The hook is the job's own; a stalker only steps in after the job has left the queue (the hook is over by then) for a
 step it didn't take: refused (e.g. no sbatch on compute nodes), killed, or never run. It runs the same command
 (FireStep), as a run of its own in the job's folder, so a stalker's own CWD and config are never touched."""
-import os, shlex, subprocess, time, traceback
+import json, os, shlex, subprocess, time, traceback
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 from rich.markup import escape
@@ -33,13 +34,65 @@ JOB_ID = "$SLURM_JOB_ID"
 FIRE_TIMEOUT = 600
 # How long a hook waits for its job's record, which the submitting run saves just after sbatch (seconds)
 RECORD_WAIT = 10
+# The chain's steps, written next to the job's input at submission (<name>.chain.json) and named by its hook
+CHAIN_SUFFIX = ".chain.json"
+CHAIN_VERSION = 1
+# A chain step's kinds: a single point of the job's last geometry (later: Freq, ...)
+STEP_SP = "SP"
+
+
+@dataclass
+class ChainStep:
+    """One step of a Neva-Touch Scheduler chain: the next job, written once the job before it ends (an SP as `cu -sp`
+    writes one: its geometry, charge, multiplicity and spin read from that job's output). name: the method's label;
+    route: its entry as written (tags, [spin groups] and '->' stages kept). wallTime/partition/cluster: None for the
+    config's. Saved as JSON, so a person or an agent can read what is coming."""
+    kind:        str
+    name:        str
+    route:       str
+    cpus:        int | None   = None
+    memoryRatio: float | None = None
+    wallTime:    str | None   = None
+    partition:   str | None   = None
+    cluster:     str | None   = None
+    nbo:         bool         = False
+    checkpoint:  bool         = False
+
+    @classmethod
+    def FromRecord(cls, record: dict) -> "ChainStep":
+        # Known fields only, so a chain a newer CompUtils wrote still loads
+        known = {entry.name for entry in fields(cls)}
+        return cls(**{name: value for name, value in record.items() if name in known})
+
+
+def ChainPath(inputPath: Path) -> Path:
+    """Where a job's chain is kept: beside its input, named after it (8a.gjf -> 8a.chain.json)."""
+    return inputPath.with_name(inputPath.stem + CHAIN_SUFFIX)
+
+def WriteChain(path: Path, steps: list[ChainStep]) -> None:
+    from . import agent
+    path.write_text(json.dumps({"version": CHAIN_VERSION, "steps": [asdict(step) for step in steps]}, indent=1) + "\n")
+    agent.Written(path)
+
+def ReadChain(path: Path) -> tuple[list[ChainStep], str]:
+    """(the chain's steps, '') or ([], why it can't be read)."""
+    try:
+        record = json.loads(Path(path).read_text())
+        steps = [ChainStep.FromRecord(step) for step in record.get("steps", [])]
+    except (OSError, ValueError, TypeError, AttributeError) as error:
+        return [], f"the chain file {Path(path).name} can't be read ({error})"
+    return (steps, "") if steps else ([], f"the chain file {Path(path).name} has no steps")
 
 
 def HookCommand(step: str, output: Path, cpus: int | None = None, memoryRatio: float | None = None, reRuns: int = 0,
-                firstStage: int = 1) -> list[str]:
+                firstStage: int = 1, wallTime: str | None = None, partition: str | None = None,
+                cluster: str | None = None, chain: str | None = None) -> list[str]:
     """The hook's command: this CompUtils (its own interpreter, so neither PATH nor `module purge` matters), the step,
     the job's output, its ID, the resources of the job the step submits (None: the config's) and, for a re-run, its
-    count and the original stage it starts at (so a hook without its record still counts right)."""
+    count and the original stage it starts at (so a hook without its record still counts right). wallTime/partition/
+    cluster are the job's own SLURM settings (None: the config's), which a re-run of it repeats. chain: the job's chain
+    file (ChainPath), whose next step is what this step submits; without one (a hook written before chains), the SP is
+    Benchmark Methods' first entry with --cpus/--memory and the config's SLURM settings."""
     # <env>/bin/python, not python3.11: a queued job's hook still runs after its environment is rebuilt on a new Python
     command = [StablePython(), "-m", "computils", "--neva-touch", step, str(output), JOB_ID]
     if cpus is not None:
@@ -50,6 +103,10 @@ def HookCommand(step: str, output: Path, cpus: int | None = None, memoryRatio: f
         command += ["--reruns", str(reRuns)]
     if firstStage != 1:
         command += ["--first-stage", str(firstStage)]
+    for flag, value in (("--wall-time", wallTime), ("--partition", partition), ("--cluster", cluster),
+                        ("--chain", chain)):
+        if value:
+            command += [flag, value]
     return command
 
 def HookLines(command: list[str], folder: Path, log: Path) -> str:
@@ -81,10 +138,24 @@ def _FindJob(jobID: str, output: Path, wait: bool) -> TrackedJob | None:
     return None
 
 def _SubmitSinglePoint(intent: NevaTouchIntent, output: Path) -> TrackedJob | None:
-    """The single point of a finished opt, through the one execution path (what `cu -sp OUTPUT` runs), with the
-    resources the hook carries; its own hook ends the chain. None if it wasn't submitted (genFile or sbatch said why)."""
+    """The single point of a finished opt, through the one execution path (what `cu -sp OUTPUT` runs): the chain's next
+    step (its method, resources and SLURM settings), else (a hook from before chains) Benchmark Methods' first entry
+    with the resources the hook carries. Its own hook ends the chain. None if it wasn't submitted (the chain file,
+    genFile or sbatch said why)."""
     from .dispatch import Dispatch
-    spIntent = SinglePointIntent(files=[output], nevaTouch=NTS_DONE, cpus=intent.cpus, memoryRatio=intent.memoryRatio)
+    if intent.chain:
+        steps, problem = ReadChain(Path(intent.chain))
+        if problem:
+            console.print(f"[error]Nothing was submitted: {escape(problem)}.[/error]")
+            return None
+        step = steps[0]
+        spIntent = SinglePointIntent(files=[output], nevaTouch=NTS_DONE, route=step.route, cpus=step.cpus,
+                                     memoryRatio=step.memoryRatio, nbo7=step.nbo, checkpoint=step.checkpoint,
+                                     wallTime=step.wallTime, partition=step.partition, cluster=step.cluster)
+        console.print(f"[info]The chain's next step: {step.kind}, {escape(step.name)} ({escape(step.route)}).[/info]")
+    else:
+        spIntent = SinglePointIntent(files=[output], nevaTouch=NTS_DONE, cpus=intent.cpus,
+                                     memoryRatio=intent.memoryRatio)
     try:
         submitted = Dispatch(spIntent)
     except Exception:
@@ -120,8 +191,10 @@ def _SubmitReRun(intent: NevaTouchIntent, output: Path, stage: int, originalStag
     inputPath.write_text(text)
     console.print(f"[info]Wrote {inputPath}: stage {originalStage} onward, from the last geometry of {output.name}."
                   f"[/info]")
+    # The re-run is the same job continued: it repeats the job's own SLURM settings (carried in the hook)
     reRun = RunIntent(files=[inputPath], nevaTouch=NTS_SP, nextCpus=intent.cpus, nextMemoryRatio=intent.memoryRatio,
-                      reRuns=count, firstStage=originalStage)
+                      reRuns=count, firstStage=originalStage, wallTime=intent.wallTime, partition=intent.partition,
+                      cluster=intent.cluster, chain=intent.chain)
     try:
         submitted = Dispatch(reRun)
     except Exception:
