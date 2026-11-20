@@ -41,7 +41,7 @@ class Species:
     @property
     def needsGoodVibes(self) -> bool:
         # GoodVibes' table gives what it corrects (qh, concentration, temperature) for every Gaussian-optimized species,
-        # lone atoms included (no --check, so no frequency analysis to fail)
+        # lone atoms included (the consistency check pass handles them too)
         return self.program == Defaults.gaussianExtension
 
     def Flags(self, quasiHarmonic: bool) -> list[tuple[str, bool]]:

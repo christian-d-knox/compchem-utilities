@@ -345,7 +345,9 @@ class SettingRow(Horizontal, can_focus=False):
         else:
             yield Static(classes="setting-box")
             yield Static(self.setting.label, classes="setting-label")
-        with Horizontal(classes="setting-value"):
+        # Stacked, a plain checkbox (no value, no fixed text) is its head line alone: no empty line under it
+        bare = self.stacked and self.setting.value is None and not self.setting.fixed
+        with Horizontal(classes="setting-value" + (" -empty" if bare else "")):
             if self.setting.value is not None:
                 yield self.inputClass(self, self.setting.value, self.widest)
                 yield Static(self.setting.unit, classes="setting-unit")

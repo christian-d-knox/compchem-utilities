@@ -78,12 +78,12 @@ The environments also carry `openpyxl`, so an AI agent can build Excel workbooks
 | Command | Purpose |
 |---|---|
 | `cu -r FILE…` | Submits input files directly |
-| `cu -sp FILE…` | Generates and submits single point files based on completed jobs |
+| `cu -sp FILE…` | Generates and submits single point files based on completed jobs (`--route ROUTE` for a route of your own) |
 | `cu -b FILE…` | Generates and submits multiple single point files per file, according to benchmarking list |
 | `cu -re FILE…` | Regenerates and resubmits a failed job |
 | `cu -cu FILE…` | Generates cube files from Gaussian .chk or .fchk via cubegen |
 | `cu -form FILE…` | Runs formchk on Gaussian checkpoint files |
-| `cu -gv [FILE…]` | Runs GoodVibes (default: every output in cwd), then writes output to Excel |
+| `cu -gv [FILE…]` | Runs GoodVibes (default: every output in cwd), then writes output to Excel. A consistency check runs first and stops on mismatched methods, solvation, dispersion or SP geometries; `--gv-allow` waives them where intended (e.g. benchmarks) |
 | `cu -ex FILE` | Converts a GoodVibes output to Excel |
 | `cu -st` | Follows tracked jobs via squeue, reporting on statuses such as convergence criteria. Can be included in a submission command to tag submitted jobs, or called independently |
 | `cu -init` | Makes the current folder a project root. Useful for project-based overrides to global defaults |
@@ -92,9 +92,10 @@ The environments also carry `openpyxl`, so an AI agent can build Excel workbooks
 | `cu -refresh [project]` | Rewrites the config files in the current layout, keeping your values |
 | `cu --update` | Updates CompUtils from GitHub |
 | `cu -attributions` | Shows the disclaimer and credits |
-| `cu -opt FILE` | Writes and submits an optimization of one molecule (an .xyz or a prior job), as the Optimization builder does |
+| `cu -opt FILE` | Writes and submits an optimization of one molecule (an .xyz or a prior job), as the Optimization builder does; `--then-sp` with `--sp-method NAME` (or `--sp-route`) and `--sp-*` resources has the Neva-Touch Scheduler submit that single point when it ends |
 | `cu -si` | Writes SI_coordinates.txt from the folder's outputs, as the SI Scraper does |
 | `cu -info FILE…` | Shows what outputs and inputs say: status, energies, frequencies, convergence |
+| `cu -xyz FILE…` | Writes each file's last geometry (an output's, or an input's own) as `NAME.xyz` |
 | `cu -methods` | Lists the Optimization and Benchmark Methods in force in this folder |
 | `cu -agent [TOPIC]` | Prints the skill that teaches an AI agent to use CompUtils (see below) |
 
@@ -103,6 +104,7 @@ The environments also carry `openpyxl`, so an AI agent can build Excel workbooks
 | `-ch` | Causes generated Gaussian inputs to create .chk files |
 | `-nbo` | Appends an NBO7-styled section to generated input (tested only for Gaussian at time of writing) |
 | `-ovr N` | Starts single points or benchmarking from entry N in the benchmarking list |
+| `--wall-time HOURS`, `--partition NAME`, `--cluster NAME` | The jobs' own SLURM settings, for any job command (default: the config's; `--cluster` only where the cluster's header sends `-M`) |
 | `--dry-run` | Writes the inputs and job scripts without submitting them |
 | `--json` | Prints one machine-readable report (for scripts and AI agents) |
 | `--help` | Lists flags and their usage |

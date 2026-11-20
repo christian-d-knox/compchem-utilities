@@ -15,7 +15,7 @@ ACTION_FLAGS = {
     "init": Action.INIT_PROJECT,
     "profile": Action.PROFILE, "refresh": Action.REFRESH, "attributions": Action.ATTRIBUTIONS,
     "neva_touch": Action.NEVA_TOUCH, "info": Action.INFO, "methods": Action.METHODS, "optimize": Action.OPTIMIZE,
-    "si": Action.SI_SCRAPER, "agent": Action.AGENT,
+    "si": Action.SI_SCRAPER, "agent": Action.AGENT, "xyz": Action.XYZ,
 }
 
 
@@ -68,6 +68,9 @@ def BuildParser() -> argparse.ArgumentParser:
     actionGroup.add_argument('-info', '--info', nargs='+', metavar="FILE",
                              help="Show what each file says (status, charge, method, energy, thermal corrections, "
                                   "frequencies, convergence...), read once each. Read-only.")
+    actionGroup.add_argument('-xyz', '--xyz', nargs='+', metavar="FILE",
+                             help="Write each file's last geometry (an output's, or an input's own) as NAME.xyz, Gaussian "
+                                  "or ORCA.")
     actionGroup.add_argument('-methods', '--methods', action='store_true',
                              help="List the Optimization and Benchmark Methods in force here (project, else global).")
     # Handled in Main() before parsing; listed here for --help and so argparse rejects it alongside another action
@@ -86,13 +89,23 @@ def BuildParser() -> argparse.ArgumentParser:
     parser.add_argument('-ch', '--checkpoint', action='store_true', help="Enable Gaussian checkpoint files.")
     parser.add_argument('-nbo', '--nbo7', action='store_true', help="Enable NBO7 keylist.")
     parser.add_argument('-ovr', '--override', type=int, default=0, help="Index override for benchmark methods (zero-indexed).")
+    # A job's own SLURM settings (the builders' rows), for any job command; where the cluster's header has the line
+    parser.add_argument('--wall-time', default=None, metavar="HOURS",
+                        help="With a job command: the jobs' wall time in whole hours (default: the config's wallTime).")
+    parser.add_argument('--partition', default=None, metavar="NAME",
+                        help="With a job command: the jobs' partition (default: the config's).")
+    parser.add_argument('--cluster', default=None, metavar="NAME",
+                        help="With a job command: the jobs' cluster, SLURM's -M (default: the config's; only where the "
+                             "submission header sends -M).")
     # -opt's settings (the Optimization builder's rows). --cpus/--memory are also the resources of the job a
     # Neva-Touch Scheduler hook generates (written into the hook)
     optGroup = parser.add_argument_group("optimization (-opt)")
     optGroup.add_argument('--method', metavar="NAME",
                           help="An Optimization Method by name (cu -methods lists them), or \"From Source\" for a prior "
                                "job's own route. Asked when not given.")
-    optGroup.add_argument('--route', metavar="ROUTE", help="A route of your own instead (as in Config › Job Keylists).")
+    optGroup.add_argument('--route', metavar="ROUTE",
+                          help="A route of your own instead (as in Config › Job Keylists). With -sp: instead of "
+                               "Benchmark Methods' entry.")
     optGroup.add_argument('--charge', type=int, default=None, help="Default: the prior job's; asked for an .xyz.")
     optGroup.add_argument('--mult', type=int, default=None, metavar="MULTIPLICITY",
                           help="Default: the prior job's; asked for an .xyz.")
@@ -110,6 +123,19 @@ def BuildParser() -> argparse.ArgumentParser:
     optGroup.add_argument('--sp-cpus', type=int, default=None, help="The single point's CPUs (default: the config's).")
     optGroup.add_argument('--sp-memory', type=float, default=None, metavar="GB",
                           help="The single point's memory per core in GB (default: as its method needs).")
+    optGroup.add_argument('--sp-method', default=None, metavar="NAME",
+                          help="The single point's method: a Benchmark Methods entry by name (cu -methods; default: "
+                               "the first).")
+    optGroup.add_argument('--sp-route', default=None, metavar="ROUTE",
+                          help="The single point's route of your own instead.")
+    optGroup.add_argument('--sp-wall-time', default=None, metavar="HOURS",
+                          help="The single point's wall time in whole hours (default: the config's).")
+    optGroup.add_argument('--sp-partition', default=None, metavar="NAME",
+                          help="The single point's partition (default: the optimization's).")
+    optGroup.add_argument('--sp-cluster', default=None, metavar="NAME",
+                          help="The single point's cluster, SLURM's -M (default: the optimization's).")
+    optGroup.add_argument('--sp-nbo', action='store_true', help="The single point writes the NBO keylist (Gaussian).")
+    optGroup.add_argument('--sp-checkpoint', action='store_true', help="The single point writes a checkpoint (Gaussian).")
     # -gv's settings (the GoodVibes Builder's rows): any of them, or a run nobody can answer, skips the wizard
     gvGroup = parser.add_argument_group("goodvibes (-gv; without these the wizard asks, unless nobody can answer)")
     gvGroup.add_argument('--qh', action=argparse.BooleanOptionalAction, default=None,
@@ -124,7 +150,9 @@ def BuildParser() -> argparse.ArgumentParser:
     gvGroup.add_argument('--spc', default=None, metavar="SUFFIX|none",
                          help="The single point files' suffix (default: detected, else the config's; none: no single "
                               "point corrections). -si takes a suffix only.")
-    gvGroup.add_argument('--check', action='store_true', default=None, help="GoodVibes' level of theory consistency check.")
+    gvGroup.add_argument('--gv-allow', default=None, metavar="CATEGORIES",
+                         help="Waive the consistency check's stops where differences are intended (e.g. a benchmark): "
+                              "theory, solvation, dispersion, geometry, comma separated, or all (no check pass).")
     gvGroup.add_argument('--gv-keys', default=None, metavar="KEYS", help="More keys, passed to GoodVibes as written.")
 
     # -si's settings (the SI Scraper's rows)
@@ -142,6 +170,8 @@ def BuildParser() -> argparse.ArgumentParser:
     # A Neva-Touch Scheduler re-run's count and the original stage it starts at (written into its hook; not listed)
     parser.add_argument('--reruns', type=int, default=0, help=argparse.SUPPRESS)
     parser.add_argument('--first-stage', type=int, default=1, help=argparse.SUPPRESS)
+    # A Neva-Touch Scheduler hook's chain file (nevatouch.ChainPath; written into the hook, not listed)
+    parser.add_argument('--chain', default=None, help=argparse.SUPPRESS)
     parser.add_argument('--update-branch', type=str, default=None, help="With --update, install from this branch (default: the one CompUtils was installed from, else dev).")
 
     # For agents and scripts (agent.py): any action
@@ -225,11 +255,11 @@ def ParseCLI(argv: list[str]) -> Intent:
             raise agent.UsageError("-env takes at most a job and an environment, e.g. '-env install debug'.")
         job, draft.environmentVariant = (args.environment + ["", ""])[:2]
         draft.environmentJob = job.lower()
-    gvFlags = [args.qh, args.cutoff, args.entropy, args.temperature, args.concentration, args.scale, args.check,
+    gvFlags = [args.qh, args.cutoff, args.entropy, args.temperature, args.concentration, args.scale, args.gv_allow,
                args.gv_keys]
     siFlags = [args.opt_label, args.sp_label, args.phase, args.free, args.output, args.species]
     if any(value is not None for value in gvFlags) and draft.action != Action.GOODVIBES:
-        raise agent.UsageError("--qh, --cutoff, --entropy, --temperature, --concentration, --scale, --check and "
+        raise agent.UsageError("--qh, --cutoff, --entropy, --temperature, --concentration, --scale, --gv-allow and "
                                "--gv-keys go with -gv.")
     if any(value is not None for value in siFlags) and draft.action != Action.SI_SCRAPER:
         raise agent.UsageError("--opt-label, --sp-label, --phase, --free, --output and --species go with -si.")
@@ -254,6 +284,9 @@ def ParseCLI(argv: list[str]) -> Intent:
         draft.optMethod, draft.optRoute, draft.optName = args.method, args.route, args.name
         draft.optCharge, draft.optMultiplicity, draft.optSpin = args.charge, args.mult, args.spin
         draft.optThenSP, draft.optSpCpus, draft.optSpMemory = args.then_sp, args.sp_cpus, args.sp_memory
+        draft.optSpMethod, draft.optSpRoute, draft.optSpWallTime = args.sp_method, args.sp_route, args.sp_wall_time
+        draft.optSpPartition, draft.optSpCluster = args.sp_partition, args.sp_cluster
+        draft.optSpNbo, draft.optSpCheckpoint = args.sp_nbo, args.sp_checkpoint
         for entry in args.modred:
             stage, separator, lines = entry.partition("=")
             if not separator or not stage.strip().isdigit():
@@ -261,16 +294,26 @@ def ParseCLI(argv: list[str]) -> Intent:
             path = Path(lines.strip()).expanduser()
             draft.optModRed[int(stage)] = (path.read_text() if path.is_file()
                                            else "\n".join(line.strip() for line in lines.split(";") if line.strip()))
-    elif any(value is not None for value in (args.method, args.route, args.charge, args.mult, args.spin, args.name,
-                                             args.then_sp, args.sp_cpus, args.sp_memory)) or args.modred:
+    elif any(value is not None for value in (args.method, args.charge, args.mult, args.spin, args.name,
+                                             args.then_sp, args.sp_cpus, args.sp_memory, args.sp_method, args.sp_route,
+                                             args.sp_wall_time, args.sp_partition, args.sp_cluster)) \
+            or args.modred or args.sp_nbo or args.sp_checkpoint:
         if not args.neva_touch:
-            raise agent.UsageError("--method, --route, --charge, --mult, --spin, --name, --modred, --then-sp and "
-                                   "--sp-* go with -opt.")
+            raise agent.UsageError("--method, --charge, --mult, --spin, --name, --modred, --then-sp and --sp-* go with "
+                                   "-opt.")
+    # -sp's route of your own (a Neva-Touch Scheduler chain step's too)
+    if args.route is not None and not args.optimize:
+        from .catalog import UnknownSelectors
+        unknown = UnknownSelectors(args.route)
+        if unknown:
+            raise agent.UsageError(f"--route: unknown selector {', '.join(unknown)}.")
+        draft.route = args.route
     if args.neva_touch:
         draft.nevaTouchStep, output, draft.nevaTouchJob = args.neva_touch
         draft.files = [Path(output)]
         draft.cpus, draft.memoryRatio = args.cpus, args.memory
         draft.reRuns, draft.firstStage = args.reruns, args.first_stage
+        draft.chain = args.chain
 
     # Modifiers
     draft.dismiss       = args.dismiss or []
@@ -279,6 +322,16 @@ def ParseCLI(argv: list[str]) -> Intent:
     draft.checkpoint    = args.checkpoint
     draft.nbo7          = args.nbo7
     draft.indexOverride = args.override
+    draft.wallTime, draft.partition, draft.cluster = args.wall_time, args.partition, args.cluster
+    # Only a line the cluster's submission header has can take one (Bridges2's sends no -M)
+    from .jobs import HeaderSends
+    for flag, key, value in (("--wall-time", "wallTime", args.wall_time), ("--partition", "partition", args.partition),
+                             ("--cluster", "cluster", args.cluster), ("--sp-wall-time", "wallTime", args.sp_wall_time),
+                             ("--sp-partition", "partition", args.sp_partition),
+                             ("--sp-cluster", "cluster", args.sp_cluster)):
+        if value is not None and not HeaderSends(key):
+            raise agent.UsageError(f"{flag} has nothing to set: {Defaults.hpcType}'s submission header has no line for "
+                                   f"it (slurm.toml's submissionList).")
     draft.updateBranch  = args.update_branch
 
     # Sub-prompts — preserved from current CLI behavior. With --json, or with nobody at a terminal to answer (an agent's
@@ -306,7 +359,7 @@ def ParseCLI(argv: list[str]) -> Intent:
 
     if draft.action == Action.GOODVIBES:
         from . import prompts
-        from .analysis import goodVibesInteractive, GoodVibesDefaults, SelectionSuffix
+        from .analysis import AllowArgument, goodVibesInteractive, GoodVibesDefaults, SelectionSuffix
         if prompts.interactive and all(value is None for value in gvFlags) and args.spc is None:
             goodVibesInteractive(draft)
         else:
@@ -332,7 +385,8 @@ def ParseCLI(argv: list[str]) -> Intent:
                     raise agent.UsageError(f"--scale takes a number or auto (got '{args.scale}').") from None
             if args.spc is not None:
                 draft.singlePointPattern = None if args.spc.lower() == "none" else args.spc.lstrip("_")
-            draft.checkConsistency = bool(args.check)
+            if args.gv_allow is not None:
+                draft.allowDifferences = AllowArgument(args.gv_allow)
             draft.extraKeys = args.gv_keys
 
     # Validate

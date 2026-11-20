@@ -84,7 +84,7 @@ class CompUtilsApp(App):
     #methods { height: auto; max-height: 12; }
     #range { width: 24; height: 1; border: none; }
     /* GoodVibes settings: [X] label, value + unit, meaning; the current row is highlighted while the list has focus */
-    #settings { height: auto; }
+    #settings, #sp-settings { height: auto; }
     .setting { height: 1; }
     .setting-box { width: 4; }
     .setting-label { width: 19; }
@@ -97,7 +97,7 @@ class CompUtilsApp(App):
     /* Rows that won't apply (off, an unselected choice, a sub-option of an off row) are greyed out whole */
     .setting.-off Static, .setting.-off Input { text-opacity: 45%; }
     .setting.-off.-choice .setting-meaning { text-opacity: 100%; }
-    #settings:focus-within .setting.-current { background: $boost; }
+    #settings:focus-within .setting.-current, #sp-settings:focus-within .setting.-current { background: $boost; }
     /* Stacked (a narrow column, the SI Scraper): the label, then the value, then the note, each on its own line */
     .setting.-stacked { layout: vertical; height: auto; }
     .setting.-stacked .setting-head { height: 1; }
@@ -119,9 +119,10 @@ class CompUtilsApp(App):
     #source-files, #source-files:focus { height: 1fr; border: none; }
     /* :focus too, or TextArea's own focus border (more specific) comes back */
     #paste, #paste:focus, #input-preview, #input-preview:focus { height: 1fr; border: none; padding: 0 1; }
-    /* The Optimization builder's method rows: each route in full, wrapped (a cut line can hide the one difference
-       between two routes, e.g. a trailing [oss: guess=mix]); a long keyword folds onto the next line */
-    .setting.-route .setting-meaning { text-overflow: fold; }
+    /* The Optimization builder's Stages view: the stage table as tall as its rows (up to 10), then the highlighted
+       stage's Renders As under a titled rule (as the TextEditor's Check and Example), taking the rest and scrolling */
+    #stage-table, #stage-table:focus { height: auto; max-height: 10; border: none; padding: 0 1; }
+    #renders-as { height: 1fr; border-top: solid $secondary; border-title-align: left; padding: 0 1; }
 
     /* The config editor: the table takes the height the details strip leaves */
     #config-table { height: 1fr; }
@@ -193,6 +194,15 @@ class CompUtilsApp(App):
         count = len(SpcPartners(intent.files, intent.singlePointPattern)[0])
         self.RunInApp(intent, ("GoodVibes", f"Running GoodVibes on {count} structure{'s' if count != 1 else ''}..."),
                       lambda tracked, log: self._GoodVibesRan(builder, started, log))
+
+    def WriteXyz(self, intent: Intent) -> None:
+        """Write XYZ, run in the app (it reads and writes a few files); what it wrote shows in a Results pop-up, then
+        Home re-lists its files."""
+        count = len(intent.files)
+        self.RunInApp(intent, ("Write XYZ", f"Writing {count} XYZ File{'s' if count != 1 else ''}..."),
+                      lambda tracked, log: self.push_screen(
+                          Popup("XYZ Files Written", log, cancel="Home", ok="Home"),
+                          lambda _: self._AfterResults("home")))
 
     def _GoodVibesRan(self, builder, started: float, log) -> None:
         # A run that stopped (a missing SP file, a crash) leaves no new table: the old one was deleted, or is older

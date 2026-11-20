@@ -2,7 +2,7 @@ import time, regex
 
 from .console  import console
 from .defaults import Defaults
-from .catalog  import Catalog
+from .catalog  import Catalog, ParseRouteTemplate
 from .fileops import fileCreation, IncrementSuffix, Retarget, ReRunTemplate
 from .actions  import CubeOption
 from .intent import JobIntent, BenchmarkIntent, ReRunIntent, CubeIntent
@@ -15,8 +15,11 @@ from .prompts import AskStr
 def genSinglePoint(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
     startTime = time.monotonic()
 
-    # The job's name, route template and program, from the method chosen by -ovr
-    Retarget(molecule, molecule.baseName + Defaults.singlePointExtra, Catalog.templates[intent.indexOverride])
+    # The job's name, route template and program: a route given (--route, a Neva-Touch Scheduler chain step's), else
+    # Benchmark Methods' entry chosen by -ovr
+    template = (ParseRouteTemplate(intent.route) if getattr(intent, "route", None)
+                else Catalog.templates[intent.indexOverride])
+    Retarget(molecule, molecule.baseName + Defaults.singlePointExtra, template)
 
     # Calls the separate file generation method, feeds directly into runJob. Skip this job if generation failed
     if genFile(molecule, intent):
@@ -67,7 +70,8 @@ def gimmeCubes(molecule: Molecule, intent: CubeIntent) -> None:
         queueName = fileCreation(molecule.baseName, Defaults.queueExtension, label)
 
         # cubegen runs on one core ('cubegen 1'): the job asks for one, and one core's memory
-        slurmHandler(molecule, queueName, outputName, 1, int(Defaults.memoryRatio + Defaults.memoryBuffer))
+        slurmHandler(molecule, queueName, outputName, 1, int(Defaults.memoryRatio + Defaults.memoryBuffer),
+                     intent.wallTime, intent.partition, intent.cluster)
 
         with open(queueName,"a") as queueFile:
             queueFile.writelines(Defaults.gaussianNonVariant)

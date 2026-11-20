@@ -46,6 +46,9 @@ class JobIntent(Intent):
     the resources of the inputs generated here (None: the config's; the scheduled single point's come from its hook).
     reRuns/firstStage: a Neva-Touch Scheduler re-run's count, so far, of re-runs of the stage it starts at, and that
     stage's number in the original job (an opt that ran out of steps in stage 2 of 3 is re-run as stages 2-3).
+    wallTime/partition/cluster: the jobs' own SLURM settings (--wall-time/--partition/--cluster, a builder's rows;
+    None: the config's), carried in a Neva-Touch Scheduler hook for a re-run. chain: the job's chain file
+    (nevatouch.ChainPath), whose next step the hook submits (None: Benchmark Methods' first entry, nextCpus/...).
     """
     files:           list[Path]
     stalk:           bool            = False
@@ -60,6 +63,10 @@ class JobIntent(Intent):
     memoryRatio:     Optional[float] = None
     reRuns:          int             = 0
     firstStage:      int             = 1
+    wallTime:        Optional[str]   = None
+    partition:       Optional[str]   = None
+    cluster:         Optional[str]   = None
+    chain:           Optional[str]   = None
 
 # Subclass of JobIntent, specific for runJob() by Action()
 @dataclass
@@ -70,8 +77,9 @@ class RunIntent(JobIntent):
 
 @dataclass
 class SinglePointIntent(JobIntent):
-    """`cu -sp <pattern>` — generate single-point input, then submit."""
-    pass
+    """`cu -sp <pattern>` — generate single-point input, then submit. route: a method entry as written (`--route`, a
+    Neva-Touch Scheduler chain step's); None: Benchmark Methods' entry indexOverride (-ovr, default 0)."""
+    route: Optional[str] = None
 
 
 @dataclass
@@ -116,12 +124,13 @@ class ExcelIntent(Intent):
 class GoodVibesIntent(Intent):
     """`cu -gv [FILE ...]` — run goodvibes on the given outputs (default: every output in the CWD), then convert to xlsx.
 
-    analysis.GoodVibesArguments turns the fields into goodvibes flags. truhlarEntropy and checkConsistency are set by the TUI only.
+    analysis.GoodVibesArguments turns the fields into goodvibes flags. A check pass runs first (analysis.CheckArguments:
+    --check, no corrections); allowDifferences waives its categories (analysis.CHECK_CATEGORIES; ["all"]: no check pass).
     """
     files:              list[Path]
     headGordonEnthalpy: bool            = False  # -q
     truhlarEntropy:     bool            = False  # --qs truhlar (Grimme otherwise)
-    checkConsistency:   bool            = False  # --check
+    allowDifferences:   list[str]       = field(default_factory=list)   # --gv-allow
     freqCutoff:         Optional[float] = None
     tempCorrection:     Optional[float] = None   # K
     concCorrection:     Optional[float] = None   # mol/L
@@ -185,6 +194,10 @@ class NevaTouchIntent(Intent):
     memoryRatio: Optional[float] = None
     reRuns:      int             = 0      # the job's own (JobIntent's), carried in its hook
     firstStage:  int             = 1
+    wallTime:    Optional[str]   = None   # the job's own SLURM settings, which a re-run repeats
+    partition:   Optional[str]   = None
+    cluster:     Optional[str]   = None
+    chain:       Optional[str]   = None   # the job's chain file: its next step is what this step submits
 
 
 @dataclass
@@ -203,7 +216,9 @@ class OptimizationIntent(Intent):
     input/output, a named Optimization Method (or 'From Source', or a full --route), written and submitted as the
     builder submits one. None means the builder's starting value (charge/multiplicity: the prior job's, else asked;
     spin: spinstates.txt, else the prior job's classification, else CSS; thenSP: qol.toml's autoNTS). modred: stage
-    number -> its ModRed lines (a file, or lines separated by ';')."""
+    number -> its ModRed lines (a file, or lines separated by ';'). The scheduled SP (a Neva-Touch Scheduler chain
+    step): spMethod (a Benchmark Methods name; None: the first) or spRoute, its resources (None: the config's, its
+    memory as its method needs), and its SLURM settings (partition/cluster None: the opt's)."""
     file:         Path
     method:       Optional[str]   = None
     route:        Optional[str]   = None
@@ -214,10 +229,21 @@ class OptimizationIntent(Intent):
     cpus:         Optional[int]   = None
     memoryRatio:  Optional[float] = None
     checkpoint:   bool            = False
+    nbo7:         bool            = False
+    wallTime:     Optional[str]   = None     # the job's SLURM settings (None: the config's)
+    partition:    Optional[str]   = None
+    cluster:      Optional[str]   = None
     modred:       dict[int, str]  = field(default_factory=dict)
     thenSP:       Optional[bool]  = None
     spCpus:       Optional[int]   = None
     spMemory:     Optional[float] = None
+    spMethod:     Optional[str]   = None
+    spRoute:      Optional[str]   = None
+    spWallTime:   Optional[str]   = None
+    spPartition:  Optional[str]   = None
+    spCluster:    Optional[str]   = None
+    spNbo:        bool            = False
+    spCheckpoint: bool            = False
     stalk:        bool            = False
     stalkLoop:    bool            = False
 
@@ -245,6 +271,12 @@ class AgentIntent(Intent):
 
 
 @dataclass
+class XyzIntent(Intent):
+    """`cu -xyz FILE...` — each file's last geometry (fileops.ReadMolecule) written as NAME.xyz (fileops.WriteXyz)."""
+    files: list[Path]
+
+
+@dataclass
 class InfoIntent(Intent):
     """`cu -info FILE...` — what each file says (info.FileFacts: one map each), read-only."""
     files: list[Path]
@@ -263,7 +295,7 @@ _INTENT_TYPES = {
     Action.RERUN: ReRunIntent, Action.CUBE: CubeIntent, Action.FORM_CHECK: FormCheckIntent,
     Action.GOODVIBES: GoodVibesIntent, Action.FIRST_TIME_SETUP: FirstTimeSetupIntent,
     Action.INIT_PROJECT: InitProjectIntent, Action.PROFILE: ProfileIntent, Action.ATTRIBUTIONS: AttributionsIntent,
-    Action.INFO: InfoIntent, Action.METHODS: MethodsIntent,
+    Action.INFO: InfoIntent, Action.METHODS: MethodsIntent, Action.XYZ: XyzIntent,
 }
 # SI_SCRAPER finalizes in Finalize (its fields are named si* on the draft)
 
@@ -304,6 +336,14 @@ class IntentDraft:
     reRuns:          int             = 0
     firstStage:      int             = 1
 
+    # A job's own SLURM settings (JobIntent's; None: the config's), and its Neva-Touch Scheduler chain file
+    wallTime:        Optional[str]   = None
+    partition:       Optional[str]   = None
+    cluster:         Optional[str]   = None
+    chain:           Optional[str]   = None
+    # SP: a method entry as written instead of Benchmark Methods' (--route with -sp)
+    route:           Optional[str]   = None
+
     # CUBE
     cubeOptions:  list[CubeOption] = field(default_factory=list)
     orbitalRange: Optional[str]    = None
@@ -314,7 +354,7 @@ class IntentDraft:
     # GOODVIBES
     headGordonEnthalpy: bool            = False
     truhlarEntropy:     bool            = False
-    checkConsistency:   bool            = False
+    allowDifferences:   list[str]       = field(default_factory=list)
     freqCutoff:         Optional[float] = None
     tempCorrection:     Optional[float] = None
     concCorrection:     Optional[float] = None
@@ -363,6 +403,13 @@ class IntentDraft:
     optThenSP:       Optional[bool]  = None
     optSpCpus:       Optional[int]   = None
     optSpMemory:     Optional[float] = None
+    optSpMethod:     Optional[str]   = None
+    optSpRoute:      Optional[str]   = None
+    optSpWallTime:   Optional[str]   = None
+    optSpPartition:  Optional[str]   = None
+    optSpCluster:    Optional[str]   = None
+    optSpNbo:        bool            = False
+    optSpCheckpoint: bool            = False
 
     # This validates the fields for an Action() wants from its Intent()
     def Validate(self) -> list[str]:
@@ -389,6 +436,17 @@ class IntentDraft:
         if self.stalk and self.action not in (*JOB_ACTIONS, Action.STALK, Action.OPTIMIZE):
             errors.append("-st follows submitted jobs: use it with -r, -sp, -b, -cu or -re, or on its own to stalk every "
                           "tracked job.")
+
+        slurm = {"--wall-time": self.wallTime, "--partition": self.partition, "--cluster": self.cluster}
+        given = [flag for flag, value in slurm.items() if value is not None]
+        if given and self.action not in (*JOB_ACTIONS, Action.OPTIMIZE, Action.NEVA_TOUCH):
+            errors.append(f"{', '.join(given)} {'go' if len(given) > 1 else 'goes'} with a job command (-r, -sp, -b, "
+                          "-cu, -re or -opt).")
+        if self.wallTime is not None and not (self.wallTime.isdigit() and int(self.wallTime) > 0):
+            errors.append(f"--wall-time takes whole hours above 0 (got '{self.wallTime}').")
+        for flag in ("--partition", "--cluster"):
+            if slurm[flag] is not None and (not slurm[flag].strip() or any(c.isspace() for c in slurm[flag])):
+                errors.append(f"{flag} takes one name, with no spaces (got '{slurm[flag]}').")
 
         if self.action == Action.NEVA_TOUCH:
             if self.nevaTouchStep not in NTS_STEPS:
@@ -417,6 +475,15 @@ class IntentDraft:
             for value, flag in ((self.memoryRatio, "--memory"), (self.optSpMemory, "--sp-memory")):
                 if value is not None and value <= 0:
                     errors.append(f"{flag} must be above 0.")
+            if self.optSpMethod and self.optSpRoute:
+                errors.append("-opt takes --sp-method or --sp-route, not both.")
+            if self.optSpWallTime is not None and not (self.optSpWallTime.isdigit() and int(self.optSpWallTime) > 0):
+                errors.append(f"--sp-wall-time takes whole hours above 0 (got '{self.optSpWallTime}').")
+            for value, flag in ((self.optSpPartition, "--sp-partition"), (self.optSpCluster, "--sp-cluster")):
+                if value is not None and (not value.strip() or any(c.isspace() for c in value)):
+                    errors.append(f"{flag} takes one name, with no spaces (got '{value}').")
+        if self.route is not None and self.action != Action.SINGLE_POINT:
+            errors.append("--route goes with -opt (its method) or -sp (instead of Benchmark Methods').")
 
         if self.action == Action.SI_SCRAPER and self.siFree not in ("qh", "g"):
             errors.append(f"--free takes qh or g (got '{self.siFree}').")
@@ -462,13 +529,17 @@ class IntentDraft:
                 return OptimizationIntent(
                     file=self.files[0], method=self.optMethod, route=self.optRoute, charge=self.optCharge,
                     multiplicity=self.optMultiplicity, spin=self.optSpin, name=self.optName, cpus=self.cpus,
-                    memoryRatio=self.memoryRatio, checkpoint=self.checkpoint, modred=dict(self.optModRed),
-                    thenSP=self.optThenSP, spCpus=self.optSpCpus, spMemory=self.optSpMemory, stalk=self.stalk,
-                    stalkLoop=self.stalkLoop)
+                    memoryRatio=self.memoryRatio, checkpoint=self.checkpoint, nbo7=self.nbo7, wallTime=self.wallTime,
+                    partition=self.partition, cluster=self.cluster, modred=dict(self.optModRed),
+                    thenSP=self.optThenSP, spCpus=self.optSpCpus, spMemory=self.optSpMemory, spMethod=self.optSpMethod,
+                    spRoute=self.optSpRoute, spWallTime=self.optSpWallTime, spPartition=self.optSpPartition,
+                    spCluster=self.optSpCluster, spNbo=self.optSpNbo, spCheckpoint=self.optSpCheckpoint,
+                    stalk=self.stalk, stalkLoop=self.stalkLoop)
             case Action.NEVA_TOUCH:
                 return NevaTouchIntent(step=self.nevaTouchStep, output=self.files[0], jobID=self.nevaTouchJob,
                                        cpus=self.cpus, memoryRatio=self.memoryRatio, reRuns=self.reRuns,
-                                       firstStage=self.firstStage)
+                                       firstStage=self.firstStage, wallTime=self.wallTime, partition=self.partition,
+                                       cluster=self.cluster, chain=self.chain)
         intentType = _INTENT_TYPES.get(self.action)
         if intentType is None:
             raise ValueError(f"Unknown action: {self.action}")

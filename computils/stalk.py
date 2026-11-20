@@ -118,11 +118,11 @@ class TrackedJob:
         return cls(**values)
 
 
-# Where stalked jobs run: jobs are submitted this same run by slurmHandler(), so its Defaults values are exact.
+# Where stalked jobs run: what slurmHandler() wrote this same run (the job's own partition/cluster, else the config's).
 # The cluster is only included when the submission header actually sends -M; otherwise just the partition
-def jobLocation() -> str:
-    submitsCluster = any("-M" in line for line in Defaults.submissionList)
-    parts = [Defaults.cluster if submitsCluster else "", Defaults.partition]
+def jobLocation(partition: str | None = None, cluster: str | None = None) -> str:
+    from .jobs import HeaderSends
+    parts = [(cluster or Defaults.cluster) if HeaderSends("cluster") else "", partition or Defaults.partition]
     return " / ".join(part for part in parts if part)
 
 

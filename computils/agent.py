@@ -184,12 +184,13 @@ def Stop(reason: str, command: str, why: str) -> None:
     Next(command, why)
 
 
-def Human(reason: str, then: str = "") -> None:
-    """Only a person can do this (setup, a config edit): say so, and what they should run (exit 7)."""
+def Human(reason: str, then: str = "", why: str = "A person must run this in a terminal on the cluster.") -> None:
+    """Only a person can do this, or decide it (setup, a config edit, waiving a check): say so, and what they should
+    run (exit 7)."""
     console.print(f"[error]{escape(reason)}[/error]")
     report.human = True
     if then:
-        report.next.append({"command": then, "why": "A person must run this in a terminal on the cluster."})
+        report.next.append({"command": then, "why": why})
 
 
 def Notice(severity: str, text: str) -> None:

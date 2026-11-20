@@ -19,13 +19,14 @@ from .intent    import (
     CubeIntent, FormCheckIntent, ExcelIntent, GoodVibesIntent,
     FirstTimeSetupIntent, UpdateIntent, InitProjectIntent, ProfileIntent, RefreshIntent, StalkIntent,
     AttributionsIntent, NevaTouchIntent, EnvironmentIntent, InfoIntent, MethodsIntent, OptimizationIntent, SIIntent,
-    AgentIntent,
+    AgentIntent, XyzIntent,
 )
 from .fileops   import grabPaths, formCheck, fileCreation, HasContent, MapFile, ReadMolecule, WriteXyz
-from .jobs      import runJob
+from .jobs      import HeaderSends, runJob
 from .          import jobs
 from .workflows import genBench, genSinglePoint, genReRun, gimmeCubes
-from .analysis  import goodVibesProcessor, GoodVibesArguments, SpcPartners, GOODVIBES_OUTPUT
+from .analysis  import (goodVibesProcessor, GoodVibesArguments, SpcPartners, GOODVIBES_OUTPUT, ALLOW_ALL,
+                        CHECK_CATEGORIES, CheckArguments, ReadCheck)
 from .notify    import CheckAndBroadcast
 from .          import environment
 from .          import agent
@@ -56,6 +57,7 @@ def Dispatch(intent: Intent) -> list[TrackedJob]:
         case RefreshIntent():         _DispatchRefresh(intent)
         case StalkIntent():           _DispatchStalk(intent)
         case InfoIntent():            _DispatchInfo(intent)
+        case XyzIntent():             _DispatchXyz(intent)
         case MethodsIntent():         _DispatchMethods()
         case SIIntent():              _DispatchSI(intent)
         case AgentIntent():           _DispatchAgent(intent)
@@ -153,7 +155,7 @@ def _DispatchOptimize(intent: OptimizationIntent) -> list[TrackedJob]:
     from .actions  import SpinState
     from .info     import SourceMolecule
     from .optimize import (FROM_SOURCE_NAME, CustomMethod, MethodChoices, MethodProblems, ModRedStages, OptimizationJob,
-                           SinglePointDefaults, StartingSpin)
+                           SinglePointChoices, SinglePointStep, StartingSpin)
     from .prompts  import AskBool, AskChoice, AskStr
     source = Path(intent.file)
     if not source.is_file():
@@ -224,19 +226,46 @@ def _DispatchOptimize(intent: OptimizationIntent) -> list[TrackedJob]:
             raise agent.UsageError(f"Stage {number} of {label} doesn't take ModRed lines"
                                    + (f" (stages that do: {', '.join(map(str, modRedStages))})." if modRedStages else "."))
 
-    # The Neva-Touch Scheduler: the SP once the opt ends normally (qol.toml's autoNTS unless told)
-    spDefaults = SinglePointDefaults()
-    scheduled = Defaults.autoNTS if intent.thenSP is None else intent.thenSP
-    if scheduled and spDefaults is None:
-        if intent.thenSP:
-            agent.Fail("The Neva-Touch Scheduler needs Benchmark Methods for its single point (Config › Job Keylists).")
-            return []
-        scheduled = False
+    # The Neva-Touch Scheduler: the SP once the opt ends normally (qol.toml's autoNTS unless told; on with any --sp-
+    # flag), a Benchmark Methods entry by name (the first by default) or a route of your own. Its partition and cluster
+    # follow the opt's, the rest the config's
+    spChoices = SinglePointChoices()
+    given = intent.spMethod or intent.spRoute
+    scheduled = (Defaults.autoNTS or bool(given)) if intent.thenSP is None else intent.thenSP
+    then = None
+    if scheduled:
+        if intent.spRoute:
+            spTemplate, _, problem = CustomMethod(intent.spRoute)
+            if spTemplate is None:
+                raise agent.UsageError(f"--sp-route: {problem}.")
+            spName, spRoute = "Custom", intent.spRoute
+        elif not spChoices:
+            if intent.thenSP or given:
+                agent.Fail("The Neva-Touch Scheduler needs Benchmark Methods for its single point (Config › Job "
+                           "Keylists), or --sp-route.")
+                return []
+            scheduled = False
+        else:
+            wanted = (intent.spMethod or "").lower()
+            choice = next((value for value in spChoices.values() if value[0].lower() == wanted),
+                          None) if wanted else next(iter(spChoices.values()))
+            if choice is None:
+                raise agent.UsageError(f"No Benchmark Methods entry named '{intent.spMethod}'. Here: "
+                                       f"{', '.join(value[0] for value in spChoices.values())} (cu -methods).")
+            spName, spRoute = choice[0], choice[3]
+        if scheduled:
+            then = SinglePointStep(spName, spRoute, intent.spCpus or Defaults.CPU, intent.spMemory,
+                                   intent.spWallTime, intent.spPartition or intent.partition,
+                                   intent.spCluster or intent.cluster, intent.spNbo, intent.spCheckpoint)
     job = OptimizationJob(molecule, intent.name or molecule.rootName, charge, multiplicity, spin, template, extension,
                           intent.cpus or Defaults.CPU, intent.memoryRatio, intent.checkpoint, dict(intent.modred),
-                          scheduled, *((intent.spCpus or spDefaults[0], intent.spMemory or spDefaults[1])
-                                       if scheduled else (None, None)))
+                          then, nbo=intent.nbo7, wallTime=intent.wallTime, partition=intent.partition,
+                          cluster=intent.cluster)
     job.Apply()
+    if job.nbo and not job.NboApplies():
+        agent.Warn(f"-nbo is Gaussian's ($NBO keylist): {label} runs in ORCA, so none is written.")
+    if then is not None and then.nbo and not then.NboApplies():
+        agent.Warn(f"--sp-nbo is Gaussian's ($NBO keylist): the SP ({then.name}) runs in ORCA, so none is written.")
     errors, warnings, fileProblem = job.Check()
     if fileProblem:
         errors.append(fileProblem)
@@ -257,15 +286,27 @@ def _DispatchOptimize(intent: OptimizationIntent) -> list[TrackedJob]:
     with open(path, "w") as jobInput:
         jobInput.write(job.InputText())
     agent.Written(path)
+    job.WriteChain(path)
     spinText = "Open Shell" if multiplicity > 1 else spin.name + (f" ({spinReason})" if spinReason and not intent.spin else "")
     console.print(f"[info]{escape(path.name)}: {escape(label)}, charge {charge}, multiplicity {multiplicity}, "
-                  f"{escape(spinText)}" + (f", then SP: {escape(Catalog.benchmarkLines[0])}" if scheduled else "")
+                  f"{escape(spinText)}" + (f", then SP: {escape(then.name)} ({escape(then.route)})" if then else "")
                   + "[/info]")
     result = {"input": str(path.resolve()), "method": label, "charge": charge, "multiplicity": multiplicity,
               "spin": "OPEN" if multiplicity > 1 else spin.name, "cpus": job.cpus,
-              "memoryPerCore": job.memory if job.memory is not None else job.DefaultMemory()}
-    if scheduled:
-        result["thenSP"] = {"route": Catalog.benchmarkLines[0], "cpus": job.spCpus, "memoryPerCore": job.spMemory}
+              "memoryPerCore": job.memory if job.memory is not None else job.DefaultMemory(), "nbo": job.NboApplies(),
+              "wallTimeHours": job.wallTime or Defaults.wallTime, "partition": job.partition or Defaults.partition}
+    if HeaderSends("cluster"):
+        result["cluster"] = job.cluster or Defaults.cluster
+    if then is not None:
+        step = then.ChainStep()
+        result["thenSP"] = {"method": then.name, "route": then.route, "cpus": then.cpus,
+                            "memoryPerCore": then.memory if then.memory is not None
+                            else then.DefaultMemory(job.molecule, job.name),
+                            "wallTimeHours": step.wallTime or Defaults.wallTime,
+                            "partition": step.partition or Defaults.partition, "nbo": step.nbo,
+                            "checkpoint": step.checkpoint}
+        if HeaderSends("cluster"):
+            result["thenSP"]["cluster"] = step.cluster or Defaults.cluster
     agent.Result(result)
     draft = job.Draft(path)
     draft.stalk, draft.stalkLoop = intent.stalk, intent.stalkLoop
@@ -312,15 +353,13 @@ def _DispatchGoodVibes(intent: GoodVibesIntent) -> None:
         return
     # A stale table from an earlier run must never be converted after a failed one
     Path(GOODVIBES_OUTPUT).unlink(missing_ok=True)
+    if ALLOW_ALL not in intent.allowDifferences and not _GoodVibesCheckPasses(intent, inputs):
+        return
     console.print("[operation]Running GoodVibes...[/operation]")
     # Its output goes through the console: the terminal still shows it, and inside the TUI the Results pop-up does
     # (a subprocess writing to the real terminal under Textual would corrupt the screen)
-    try:
-        result = subprocess.run(["goodvibes", *GoodVibesArguments(intent), *(str(path) for path in inputs)],
-                                capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                env={**os.environ, "PYTHONIOENCODING": "utf-8"})
-    except FileNotFoundError:
-        agent.Fail("GoodVibes isn't installed, or isn't on PATH.")
+    result = _RunGoodVibes(GoodVibesArguments(intent), inputs)
+    if result is None:
         return
     for output in (result.stdout, result.stderr):
         if output.strip():
@@ -342,6 +381,93 @@ def _DispatchGoodVibes(intent: GoodVibesIntent) -> None:
                       "rows": [{"structure": name, **{column: value for column, value in row.items()
                                                       if column != "Structure"}}
                                for name, row in run.rows.items()]})
+
+
+def _RunGoodVibes(arguments: list[str], inputs: list[Path]):
+    """goodvibes with these flags on these structures, its output captured (None: it isn't installed, said already)."""
+    try:
+        return subprocess.run(["goodvibes", *arguments, *(str(path) for path in inputs)], capture_output=True,
+                              text=True, encoding="utf-8", errors="replace",
+                              env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+    except FileNotFoundError:
+        agent.Fail("GoodVibes isn't installed, or isn't on PATH.")
+        return None
+
+
+def _GoodVibesCheckPasses(intent: GoodVibesIntent, inputs: list[Path]) -> bool:
+    """The consistency check (P39): a first pass with --check and no corrections, its table discarded. A finding in a
+    stopping category (analysis.CHECK_CATEGORIES) that isn't waived stops the run before the real one; every other
+    finding, and every waived one, is a warning. Waiving is the human's call (an agent asks them first)."""
+    console.print("[operation]Checking the files' consistency (GoodVibes --check, no corrections)...[/operation]")
+    result = _RunGoodVibes(CheckArguments(intent), inputs)
+    Path(GOODVIBES_OUTPUT).unlink(missing_ok=True)
+    if result is None:
+        return False
+    if result.returncode != 0:
+        for output in (result.stdout, result.stderr):
+            if output.strip():
+                console.print(escape(output.rstrip()), highlight=False)
+        agent.Fail("GoodVibes' check pass stopped with an error (see above). Nothing was run with corrections.")
+        return False
+    stops = []
+    for finding in ReadCheck(result.stdout):
+        if finding.category and finding.category not in intent.allowDifferences:
+            stops.append(finding)
+            console.print(f"[error]Stop ({CHECK_CATEGORIES[finding.category][0]}): {escape(finding.text)}[/error]")
+        else:
+            waived = f" (allowed: {CHECK_CATEGORIES[finding.category][0]})" if finding.category else ""
+            agent.Warn(f"GoodVibes' check{waived}: {finding.text}")
+    if not stops:
+        console.print("[good]Consistency check passed.[/good]")
+        return True
+    categories = sorted({finding.category for finding in stops}, key=list(CHECK_CATEGORIES).index)
+    labels = ", ".join(CHECK_CATEGORIES[category][0] for category in categories)
+    waiver = ",".join(categories)
+    agent.Human(f"GoodVibes' consistency check found differences ({labels}), so the real run didn't start. If they are "
+                f"intended (e.g. a benchmark set never shares a method), waive them: --gv-allow {waiver} (in the TUI: "
+                f"tick their rows under Consistency Check).", _WaivedCommand(waiver),
+                why="Only if the human confirms these differences are intended.")
+    return False
+
+
+def _WaivedCommand(waiver: str) -> str:
+    """This -gv command again with the waiver, for the report's next (empty: not run from the command line)."""
+    import sys
+    argv = sys.argv[1:]
+    if not any(arg in ("-gv", "--goodvibes") for arg in argv):
+        return ""
+    words, skip = [], False
+    for arg in argv:
+        if skip:
+            skip = False
+            continue
+        if arg == "--gv-allow":
+            skip = True
+            continue
+        if not arg.startswith("--gv-allow="):
+            words.append(arg)
+    return agent.CommandLine([*words, "--gv-allow", waiver])
+
+
+def _DispatchXyz(intent: XyzIntent) -> None:
+    """`cu -xyz`: each file's last geometry (an output's last, an input's own; Gaussian or ORCA), read from one map as
+    every workflow reads it (ReadMolecule) and written as NAME.xyz (WriteXyz, as -sp writes its own)."""
+    for path in intent.files:
+        baseName, _ = grabPaths(path)
+        if baseName is None:
+            continue
+        if not HasContent(path):
+            agent.Skip(str(path), "Empty file")
+            continue
+        with MapFile(path) as data:
+            molecule = ReadMolecule(data, path)
+        if not molecule.coordinateList:
+            agent.Skip(str(path), "No coordinates found")
+            continue
+        target = fileCreation(baseName, Defaults.coordExtension)
+        WriteXyz(molecule, target)
+        agent.Written(target)
+        console.print(f"[good]{path.name}: {len(molecule.coordinateList)} atoms written to {target}[/good]")
 
 
 def _DispatchStalk(intent: StalkIntent) -> None:
