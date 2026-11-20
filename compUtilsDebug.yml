@@ -20,6 +20,8 @@ dependencies:
   - pandas
   - regex
   - xlsxwriter
+  # Excel workbooks with formulas, for agents' calculations; imported by nothing yet
+  - openpyxl
   - git
   - pip
   - cclib

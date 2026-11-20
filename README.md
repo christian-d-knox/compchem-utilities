@@ -41,15 +41,27 @@ accessed from the command line or from a full-screen terminal interface.
 - A Linux cluster with Slurm (`sbatch`, `squeue`). Settings pre-configured for public clusters Bridges-2 (PSC) and
   Stampede3 (TACC) are built in; other clusters are added through a lab profile.
 - Gaussian 16 and/or ORCA 6.1, installed and licensed on that cluster (see [Third-Party Software](#third-party-software)).
-- Python 3.11 or later. The installer builds a conda environment with everything CompUtils needs.
+- Python 3.11 or later. The installer builds a conda environment with everything CompUtils needs (it starts on any
+  Python 3.6+). CompUtils also installs on a Windows or Linux computer, e.g. for the files you copy down.
 
 ## Installation
 
-Download the `conda-installer.py` file from the repository and run it via `python3 conda-installer.py`. The installer
-will take care of installing miniconda3 if no conda is present on the system (set to use conda-forge only), then
-automatically create the CompUtils conda environment and install CompUtils inside of it. It asks nothing, and never
-accepts any terms on your behalf. If your lab already has its own `profile.toml` file, CompUtils asks for it during
-first-time setup (`cu -profile FILE` applies one later).
+Download the `conda-installer.py` file from the repository and run it via `python3 conda-installer.py` (on Windows,
+`python conda-installer.py`). The same file works on Linux (a cluster's login node or a workstation) and Windows. The
+installer will take care of installing miniconda3 if no conda is present on the system (set to use conda-forge only),
+then automatically create the CompUtils conda environment for your system (`compUtils.yml`, or `compUtilsWindows.yml`
+on Windows) and install CompUtils inside of it. It asks nothing, and never accepts any terms on your behalf. If your
+lab already has its own `profile.toml` file, CompUtils asks for it during first-time setup (`cu -profile FILE` applies
+one later).
+
+- **Linux:** activate the environment (`con`, an alias the installer adds, or `conda activate compUtils`), then `cu`.
+- **Windows:** the installer writes a `cu` command (`cu.cmd` in `%LOCALAPPDATA%\Programs\CompUtils`, added to your user
+  PATH), so `cu` works in any new PowerShell or cmd window with nothing to activate.
+- **A Windows computer with no Python at all:** install Miniconda first (its silent installer, to
+  `%USERPROFILE%\miniconda3`), then run the installer with Miniconda's Python and `--conda-forge-only`:
+  `& "$HOME\miniconda3\python.exe" conda-installer.py --conda-forge-only` (PowerShell).
+
+The environments also carry `openpyxl`, so an AI agent can build Excel workbooks with formulas from `GoodVibes.xlsx`.
 
 ## Usage
 

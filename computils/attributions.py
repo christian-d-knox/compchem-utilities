@@ -241,6 +241,14 @@ SECTIONS = [
                "BSD-3-Clause", "https://github.com/cloudpipe/cloudpickle", distribution="cloudpickle",
                copyright="Copyright (c) 2015, Cloudpickle contributors; Copyright (c) 2012, Regents of the University "
                "of California", via="joblib"),
+        Credit("openpyxl", "Excel workbooks with formulas, for agents building a project's calculations (energy "
+               "profiles, Delta G tables) from GoodVibes.xlsx.", "Charlie Clark (maintainer) and the openpyxl "
+               "contributors", "MIT", "https://openpyxl.readthedocs.io", distribution="openpyxl",
+               copyright="Copyright (c) 2010 openpyxl"),
+        Credit("et_xmlfile", "Incremental XML writing for openpyxl.", "Charlie Clark, Daniel Hillier and Elias Rabel",
+               "MIT (with code from CPython under the Python license)",
+               "https://foss.heptapod.net/openpyxl/et_xmlfile", distribution="et_xmlfile",
+               copyright="Copyright (c) 2010 openpyxl", via="openpyxl"),
         Credit("PySide6 (Qt for Python)", "A graphical interface (planned).", "The Qt Company", "LGPL-3.0-only (also "
                "GPL or commercial)", "https://www.qt.io/qt-for-python", distribution="PySide6"),
         Credit("Shiboken6", "The binding generator runtime behind PySide6.", "The Qt Company", "LGPL-3.0-only (also "

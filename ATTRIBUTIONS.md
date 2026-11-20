@@ -380,6 +380,23 @@ Installed by compUtils.yml for features still to come; CompUtils doesn't use the
 - **Needed By:** joblib
 - **Link:** https://github.com/cloudpipe/cloudpickle
 
+### openpyxl (3.1.5)
+
+- **Use:** Excel workbooks with formulas, for agents building a project's calculations (energy profiles, Delta G tables) from GoodVibes.xlsx.
+- **By:** Charlie Clark (maintainer) and the openpyxl contributors
+- **License:** MIT
+- **Copyright:** Copyright (c) 2010 openpyxl
+- **Link:** https://openpyxl.readthedocs.io
+
+### et_xmlfile (2.0.0)
+
+- **Use:** Incremental XML writing for openpyxl.
+- **By:** Charlie Clark, Daniel Hillier and Elias Rabel
+- **License:** MIT (with code from CPython under the Python license)
+- **Copyright:** Copyright (c) 2010 openpyxl
+- **Needed By:** openpyxl
+- **Link:** https://foss.heptapod.net/openpyxl/et_xmlfile
+
 ### PySide6 (Qt for Python) (6.11.3)
 
 - **Use:** A graphical interface (planned).
