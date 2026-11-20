@@ -2,8 +2,12 @@
 Environment). The one place for it.
 
 A variant is one compUtils*.yml at the repository's root (compUtils.yml: Standard, compUtilsDebug.yml: Debug, …), read
-from the installed branch on GitHub (a local install: its checkout). Checking is instant and offline: the environment's
-packages are read from its conda-meta folder and compared with the yml's specs.
+from the installed branch's latest commit on GitHub (a local install: its checkout). **An environment is current when it
+was built from that very file:** every install, refresh and rebuild leaves a record in the environment
+(etc/computils-environment.json: the yml's fingerprint, its git blob hash, and the commit it came from), and the check
+compares it with the branch's file. What the environment happens to contain doesn't decide it (a package pip-installed
+by hand meets a spec without the file ever being applied); the packages the file asks for that are missing or behind
+are listed for information. The check reads only that record and conda-meta, so it is instant.
 
 The work is never done here. An environment can't be replaced by a process running from it, so cu hands it to
 conda-installer.py (the one environment builder, from the same commit as this code), run detached on conda's own
@@ -15,6 +19,7 @@ one in (the old one is renamed aside first, so a failed swap is rolled back). It
 was one.
 
 Update CompUtils (code only) and this stay separate actions; CodeUpdateProblem keeps them safe together."""
+import hashlib
 import importlib.metadata
 import json
 import os
@@ -44,6 +49,28 @@ MODES = ("refresh", "rebuild", "install")
 DONE_VERBS = {"refresh": "refreshed", "rebuild": "rebuilt", "install": "installed"}
 DOING = {"refresh": "Refreshing", "rebuild": "Rebuilding", "install": "Installing"}
 THIS_PLATFORM = "windows" if sys.platform == "win32" else "linux"
+# What an environment was built from, written into it by conda-installer.py (which keeps the same name)
+RECORD = Path("etc") / "computils-environment.json"
+# A commit SHA as GitHub prints it (a ref that is one is read as it is, never resolved)
+COMMIT_PATTERN = r"[0-9a-f]{7,40}"
+
+
+def YmlFingerprint(text: str) -> str:
+    """The yml's git blob hash (what git and GitHub call the file's sha): it changes exactly when the file's text does.
+    conda-installer.py computes the same from the bytes it downloads."""
+    data = text.encode("utf-8")
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def ReadRecord(prefix: Path | None) -> dict | None:
+    """The record of the env file an environment was built from, or None (built before records, or by hand)."""
+    if prefix is None:
+        return None
+    try:
+        record = json.loads((prefix / RECORD).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) and record.get("fingerprint") else None
 
 
 # ─── Variants (the yml files) ─────────────────────────────────────────
@@ -56,6 +83,11 @@ class Variant:
     specs:    list[str]
     platform: str = ""                  # '' any; 'linux' / 'windows' from a '# @platform' line
     text:     str = ""                  # the yml as read (written for the installer)
+    commit:   str = ""                  # the commit it was read at ('' from a checkout)
+
+    @property
+    def fingerprint(self) -> str:
+        return YmlFingerprint(self.text)
 
     @property
     def label(self) -> str:
@@ -114,8 +146,10 @@ class Variants:
 
 def ReadVariants(source: update.Source, ref: str | None = None) -> Variants | str:
     """Every compUtils*.yml for this platform: from the checkout for a local install, else from GitHub at ref (default:
-    the installed branch's latest). A str says why none could be read."""
-    texts, problems = {}, []
+    the installed branch's latest). A branch is first resolved to its latest commit and the files read at that commit:
+    raw.githubusercontent.com serves a branch's files from a cache for up to 5 minutes after a push, a commit's never
+    change. A str says why none could be read."""
+    texts, problems, commit = {}, [], ""
     if source.localPath:
         folder = Path(source.localPath)
         if not folder.is_dir():
@@ -125,11 +159,18 @@ def ReadVariants(source: update.Source, ref: str | None = None) -> Variants | st
         where = "your checkout"
     else:
         ref = ref or source.branch
-        files = update.RepoFiles(ref)
+        if regex.fullmatch(COMMIT_PATTERN, ref):
+            commit = ref
+        else:
+            latest = update.LatestCommit(ref)
+            if isinstance(latest, str):
+                return latest
+            commit = latest.sha
+        files = update.RepoFiles(commit)
         if isinstance(files, str):
             return files
         for file in sorted(filter(IsVariantFile, files)):
-            read, text = update.RawFile(ref, file)
+            read, text = update.RawFile(commit, file)
             if read:
                 texts[file] = text
             else:
@@ -141,6 +182,7 @@ def ReadVariants(source: update.Source, ref: str | None = None) -> Variants | st
         if isinstance(variant, str):
             problems.append(variant)
         elif variant.Fits():
+            variant.commit = commit
             found.append(variant)
     # Standard first, then by label
     found.sort(key=lambda variant: (variant.name != STANDARD, variant.label))
@@ -301,10 +343,18 @@ class Status:
     behind:  list[tuple[str, str]] = field(default_factory=list)   # (spec, installed version)
     python:  tuple[str, str] | None = None                 # (python spec, installed) when Python itself changed
     job:     dict | None = None                            # its environment job, while one runs
+    record:  dict | None = None                            # what it was built from (ReadRecord)
+
+    @property
+    def changed(self) -> bool:
+        """Whether the env file differs from the one the environment was built from (no record: built before
+        records, so it counts as changed until a refresh writes one)."""
+        return self.record is None or self.record.get("fingerprint") != self.variant.fingerprint
 
     @property
     def current(self) -> bool:
-        return self.prefix is not None and not self.missing and not self.behind and self.python is None
+        """Built from this very env file. The packages decide nothing (missing/behind are for information)."""
+        return self.prefix is not None and not self.changed and self.python is None
 
     @property
     def needsRebuild(self) -> bool:
@@ -318,14 +368,16 @@ class Status:
             return "Not Installed"
         if self.needsRebuild:
             return f"Rebuild Needed (Python {self.python[1]})"
-        count = len(self.missing) + len(self.behind)
-        return f"{count} Package{'s' if count != 1 else ''} Behind" if count else "Current"
+        if self.changed:
+            return "Environment File Changed" if self.record is not None else "Not Recorded (Refresh Once)"
+        return "Current"
 
 
 def CheckStatus(variant: Variant) -> Status:
     prefix = EnvPrefix(variant.name)
     running = RunningPrefix()
-    status = Status(variant, prefix, running is not None and prefix == running, job=RunningJob(variant.name))
+    status = Status(variant, prefix, running is not None and prefix == running, job=RunningJob(variant.name),
+                    record=ReadRecord(prefix))
     if prefix is None:
         return status
     installed = InstalledPackages(prefix)
@@ -366,14 +418,32 @@ def StatusLines(status: Status, where: str) -> list[str]:
         return lines
     if status.prefix is None:
         return lines + ["Not installed."]
+    at = f" (commit {variant.commit[:7]})" if variant.commit else ""
     if status.current:
-        return lines + [f"Up to date with {where}'s {variant.file}."]
-    lines.append(f"{where[0].upper()}{where[1:]} asks for:")
-    lines += [f"  + {spec} (Not Installed)" for spec in status.missing]
-    lines += [f"  ↑ {spec} (Installed {version})" for spec, version in status.behind]
-    if status.python is not None:
-        lines.append(f"  ↑ {status.python[0]} (Installed {status.python[1]}): needs a rebuild")
+        return lines + [f"Built from {where}'s {variant.file}{at}: up to date."]
+    if status.record is None:
+        lines.append(f"No record of the env file it was built from (built before CompUtils kept one): a refresh "
+                     f"applies {where}'s {variant.file}{at} and records it.")
+    elif status.changed:
+        lines.append(f"Built from {BuiltFrom(status.record)}; {where}'s {variant.file}{at} has changed since.")
+    if status.missing or status.behind or status.python is not None:
+        lines.append(f"{where[0].upper()}{where[1:]} asks for:")
+        lines += [f"  + {spec} (Not Installed)" for spec in status.missing]
+        lines += [f"  ↑ {spec} (Installed {version})" for spec, version in status.behind]
+        if status.python is not None:
+            lines.append(f"  ↑ {status.python[0]} (Installed {status.python[1]}): needs a rebuild")
+    else:
+        lines.append("Every package it asks for is already present; a refresh applies the file anyway.")
     return lines
+
+
+def BuiltFrom(record: dict) -> str:
+    """'compUtils.yml at commit cb53ec2 (2026-11-19)', from a record."""
+    commit = record.get("commit") or ""
+    when = record.get("installed")
+    date = time.strftime("%Y-%m-%d", time.localtime(when)) if isinstance(when, (int, float)) else ""
+    return (f"{record.get('file') or 'its env file'}{' at commit ' + commit[:7] if commit else ''}"
+            f"{' (' + date + ')' if date else ''}")
 
 
 def StatusRecord(status: Status, where: str) -> dict:
@@ -381,8 +451,11 @@ def StatusRecord(status: Status, where: str) -> dict:
     variant = status.variant
     record = {"label": variant.label, "name": variant.name, "file": variant.file, "from": where,
               "inUse": status.running, "installed": status.prefix is not None, "verdict": status.Verdict()}
+    if variant.commit:
+        record["fileCommit"] = variant.commit
     if status.prefix is not None:
         record["prefix"] = str(status.prefix)
+        record["builtFrom"] = status.record or None
     if status.missing:
         record["missing"] = status.missing
     if status.behind:
@@ -401,7 +474,7 @@ def ChangeSummary(status: Status) -> str:
     parts += [f"{SpecName(spec)} updated" for spec, _ in status.behind]
     if status.python is not None:
         parts.append(f"Python {status.python[1]} → {status.python[0][len('python'):].lstrip('=<>! ')}")
-    return ", ".join(parts)
+    return ", ".join(parts) or f"{status.variant.file} applied"
 
 
 # ─── Jobs (state files written by the installer's background mode) ───
@@ -556,9 +629,13 @@ def Start(status: Status, mode: str, source: update.Source) -> tuple[bool, str]:
              "summary": ChangeSummary(status) if mode == "refresh" else "", "log": str(log), "reported": False}
     _WriteState(StatePath(variant.name), state)
 
+    # What the environment is built from, which the installer records in it once the job succeeds (the fingerprint is
+    # of the text as read, before writing it to disk could change its line ends)
+    record = {"file": variant.file, "fingerprint": variant.fingerprint, "commit": variant.commit,
+              "branch": "" if source.localPath else source.branch}
     command = [str(python), str(installer), "--background", str(StatePath(variant.name)), "--mode", mode,
                "--yml", str(yml), "--prefix", str(prefix), "--conda-dir", str(CondaBase(conda)),
-               *_PackageArguments(source)]
+               "--record", json.dumps(record), *_PackageArguments(source)]
     # The job's own environment: no PYTHONPATH (it would make the self-test pass on code the new environment lacks)
     environment = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
     detached = ({"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
@@ -659,10 +736,10 @@ def CodeUpdateProblem(source: update.Source, ref: str) -> list[str]:
     status = CheckStatus(variant)
     if status.current:
         return []
-    # The lines after "In Use: …" and "<where> asks for:"
+    # The lines after "In Use: …"
     # The environment job installs the installed branch's latest code, so on that branch it finishes this update too
     then = " and updates CompUtils too" if ref == source.branch else ""
-    return ["The new version needs an updated environment:", *StatusLines(status, variants.where)[2:],
+    return ["The new version needs an updated environment:", *StatusLines(status, variants.where)[1:],
             f"Update the environment first (it runs in the background{then})."]
 
 
