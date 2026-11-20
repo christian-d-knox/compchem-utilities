@@ -281,7 +281,7 @@ def Where(name: str) -> str:
 # ─── Writing ──────────────────────────────────────────────────────────
 
 def WriteKeylists(path: Path, text: str) -> bool:
-    # Never creates its folder (binDirectory is setup's to create, as for the TOMLs)
+    # Never creates its folder (binDirectory is the installer's to create, as for the TOMLs)
     try:
         with open(path, "w", encoding="utf-8", newline="") as file:
             file.write(text)
