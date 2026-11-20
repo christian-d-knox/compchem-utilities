@@ -1,0 +1,36 @@
+# compUtils.yml for macOS (Apple Silicon and Intel). conda-installer.py picks it on a Mac and builds it for you
+# (python3 conda-installer.py), then writes the 'cu' command (~/.local/bin/cu, put on your PATH ahead of macOS' own cu).
+# Keep it current with cu -env (or the TUI's Update Environment).
+# If conda asks you to accept Anaconda's Terms of Service, it is checking the channels your conda is set up with
+# (not this file's): remove them with 'conda config --remove channels defaults', or accept them if you use them.
+# @platform macos
+name: compUtilsMac
+channels:
+  - conda-forge
+  # Never Anaconda's own channels (or their Terms of Service): conda-forge only
+  - nodefaults
+dependencies:
+  - python=3.11
+  # GoodVibes 3.2 has no Apple Silicon build on conda-forge: pip installs it (pure Python; its numpy and cclib come
+  # from this list). Its x86-only symmetry library is loaded only for --ssymm, which CompUtils never passes. Make it
+  # a '- goodvibes=3.2' entry again once conda-forge builds it for osx-arm64
+  # @pip goodvibes==3.2
+  - rich>=13.7
+  - textual>=6.4
+  - pandas
+  - regex
+  - xlsxwriter
+  # Excel workbooks with formulas, for agents' calculations; imported by nothing yet
+  - openpyxl
+  - git
+  - pip
+  - cclib
+  - matplotlib
+  - scikit-learn
+  - pyside6
+  - periodictable
+  # For workflows to come: cheminformatics (SMILES, conformers), semiempirical
+  # xTB methods, and conformer/rotamer searches
+  - rdkit
+  - xtb
+  - crest

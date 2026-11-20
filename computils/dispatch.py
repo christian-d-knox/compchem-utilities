@@ -519,10 +519,10 @@ def _DispatchAgent(intent: AgentIntent) -> None:
     """`cu -agent [TOPIC]`: the skill, or a topic, as plain Markdown on stdout (never through Rich, which would wrap
     and style it); with --json, in the report instead."""
     import socket, sys
-    from .agentskill import SkillText, Topic, TopicNames
+    from .agentskill import LocalInstall, SkillText, Topic, TopicNames
     host = intent.sshHost or socket.getfqdn()
     if intent.topic in ("", "skill"):
-        text = SkillText(host)
+        text = SkillText(host, local=intent.local or LocalInstall())
     elif intent.topic == "topics":
         text = "".join(f"{name}\n" for name in TopicNames())
     else:

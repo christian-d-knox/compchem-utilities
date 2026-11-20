@@ -2,24 +2,25 @@
 """
 CompUtils Installer.
 
-The one file to download, for Linux (a cluster's login node, a workstation) and
-Windows alike. Run it with any Python 3:
-  python3 conda-installer.py          (Linux)
+The one file to download, for Linux (a cluster's login node, a workstation),
+Windows and macOS alike. Run it with any Python 3:
+  python3 conda-installer.py          (Linux, macOS)
   python conda-installer.py           (Windows; or py conda-installer.py)
 
 This is the dev branch's installer: it installs CompUtils from the dev branch.
 It finds conda (or installs Miniconda to ~/miniconda3, set to use conda-forge
 only), builds or updates the environment from the branch's env file for this
-system (compUtils.yml on Linux, compUtilsWindows.yml on Windows), and installs
-CompUtils itself, with its config folder (~/bin). Then, on Linux, it adds the
-'con' alias that activates the environment; on Windows, it writes a 'cu'
-command (cu.cmd, on your user PATH) that runs CompUtils from its environment
-with no activating at all. It asks
-nothing, and every step is safe to repeat, so a failed run is fixed by running
-it again.
+system (compUtils.yml on Linux, compUtilsWindows.yml on Windows, compUtilsMac.yml
+on macOS), and installs CompUtils itself, with its config folder (~/bin). Then,
+on Linux, it adds the 'con' alias that activates the environment; on Windows
+and macOS, it writes a 'cu' command (cu.cmd on your user PATH; ~/.local/bin/cu
+on a Mac, put on your PATH ahead of macOS' own cu) that runs CompUtils from its
+environment with no activating at all. It asks nothing, and every step is safe
+to repeat, so a failed run is fixed by running it again.
 
-A Windows computer without any Python: install Miniconda first (silently, to
-%USERPROFILE%\\miniconda3), then run this file with Miniconda's own python and
+A computer without any Python: install Miniconda first (Windows: silently, to
+%USERPROFILE%\\miniconda3; a Mac without the Command Line Tools: its .sh
+installer, to ~/miniconda3), then run this file with Miniconda's own python and
 --conda-forge-only, so that Miniconda is set to conda-forge as if this
 installer had installed it.
 
@@ -67,19 +68,32 @@ from pathlib import Path
 HOME = Path.home()
 # This system, as CompUtils' env files name it in their '# @platform' lines (computils/environment.py: THIS_PLATFORM)
 WINDOWS = platform.system() == "Windows"
-THIS_PLATFORM = "windows" if WINDOWS else "linux"
+MAC = platform.system() == "Darwin"
+THIS_PLATFORM = "windows" if WINDOWS else "macos" if MAC else "linux"
 DEFAULT_CONDA_DIR = HOME / "miniconda3"
 KNOWN_CONDA_DIRS = [DEFAULT_CONDA_DIR, HOME / "anaconda3", HOME / "miniforge3"]
-MINICONDA_URL = "https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-{arch}.sh"
-MINICONDA_ARCHES = {"x86_64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}
+if MAC:
+    # Where macOS' own installers (.pkg) and Homebrew put conda
+    KNOWN_CONDA_DIRS += [Path("/opt/miniconda3"), Path("/opt/anaconda3"), Path("/opt/homebrew/Caskroom/miniforge/base"),
+                         Path("/usr/local/Caskroom/miniforge/base")]
+MINICONDA_URL = "https://repo.anaconda.com/miniconda/Miniconda3-latest-{system}-{arch}.sh"
+# platform.machine() -> Miniconda's name for it, per system
+MINICONDA_ARCHES = {"Linux": {"x86_64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"},
+                    "MacOSX": {"x86_64": "x86_64", "arm64": "arm64"}}
 MINICONDA_WINDOWS_URL = "https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe"
-# The env file for this system (each names its own environment: compUtils, compUtilsWindows)
-YML_NAME = "compUtilsWindows.yml" if WINDOWS else "compUtils.yml"
+# The env file for this system (each names its own environment: compUtils, compUtilsWindows, compUtilsMac)
+YML_NAME = "compUtilsWindows.yml" if WINDOWS else "compUtilsMac.yml" if MAC else "compUtils.yml"
 # What an environment was built from, written into it after every install, refresh and rebuild; CompUtils compares it
 # with the branch's env file to know whether the environment is current (computils/environment.py: RECORD, ReadRecord)
 RECORD = Path("etc") / "computils-environment.json"
-# Windows: where the 'cu' command (cu.cmd) goes, a per-user programs folder added to the user's PATH
-LAUNCHER_DIR = Path(os.environ.get("LOCALAPPDATA") or str(HOME / "AppData" / "Local")) / "Programs" / "CompUtils"
+# Where the 'cu' command goes. Windows: cu.cmd in a per-user programs folder added to the user's PATH. macOS: a shell
+# script in ~/.local/bin, put on PATH ahead of /usr/bin (macOS ships its own, unrelated, /usr/bin/cu). Never
+# ~/.computils (the project marker's name: the whole home folder would become a project) or ~/bin (the config folder)
+LAUNCHER_DIR = (Path(os.environ.get("LOCALAPPDATA") or str(HOME / "AppData" / "Local")) / "Programs" / "CompUtils"
+                if WINDOWS else HOME / ".local" / "bin")
+LAUNCHER_NAME = "cu.cmd" if WINDOWS else "cu"
+# macOS: the line that puts LAUNCHER_DIR on PATH (in the login shell's profile; see AddToShellPath)
+SHELL_PATH_LINE = 'export PATH="$HOME/.local/bin:$PATH"'
 # CompUtils' config folder (computils/defaults.py: binDirectory). The first 'cu' run writes its config files there but
 # never creates the folder, so a home without one (any fresh Windows PC, some Linux accounts) has to get it here
 CONFIG_DIR = HOME / "bin"
@@ -89,7 +103,7 @@ REPO_NAME = "compchem-utilities"
 BRANCH = "dev"
 # The environment's name when the env file doesn't give one
 ENV_NAME = "compUtils"
-# Where conda's executable sits inside a conda installation (Linux, then Windows)
+# Where conda's executable sits inside a conda installation (Linux and macOS, then Windows)
 CONDA_PLACES = ["bin/conda", "Scripts/conda.exe", "condabin/conda.bat"]
 
 
@@ -206,32 +220,61 @@ def FindConda(condaDir) -> Path:
     return None
 
 
+def AppleSilicon() -> bool:
+    """Whether this Mac has an Apple Silicon processor. Asked of the hardware: platform.machine() says x86_64 under
+    a Rosetta (Intel) Python, which would install an Intel conda that runs everything translated."""
+    try:
+        return subprocess.check_output(["sysctl", "-n", "hw.optional.arm64"], universal_newlines=True,
+                                       stderr=subprocess.DEVNULL).strip() == "1"
+    except (OSError, subprocess.CalledProcessError):
+        return platform.machine() == "arm64"
+
+
 def InstallMiniconda(condaDir: Path) -> Path:
     """Install Miniconda into condaDir (on Linux, set up for bash too); return its conda."""
     if WINDOWS:
         return InstallMinicondaWindows(condaDir)
-    arch = MINICONDA_ARCHES.get(platform.machine())
-    if platform.system() != "Linux" or arch is None:
-        Fail(f"No conda was found, and this installer can only install Miniconda on 64-bit "
-             f"Linux (this is {platform.system()} {platform.machine()}). Install conda "
-             f"yourself, then run the installer again.")
+    system = "MacOSX" if MAC else "Linux"
+    machine = ("arm64" if AppleSilicon() else "x86_64") if MAC else platform.machine()
+    arch = MINICONDA_ARCHES.get(system, {}).get(machine)
+    if platform.system() not in ("Linux", "Darwin") or arch is None:
+        Fail(f"No conda was found, and this installer can only install Miniconda on 64-bit Linux or macOS "
+             f"(this is {platform.system()} {platform.machine()}). Install conda yourself, then run the installer "
+             f"again.")
 
     print(f"Installing Miniconda to {condaDir}. Your terminal will be busy for a moment.")
     with tempfile.TemporaryDirectory() as scratch:
         installer = Path(scratch) / "miniconda.sh"
-        Download(MINICONDA_URL.format(arch=arch), installer)
+        Download(MINICONDA_URL.format(system=system, arch=arch), installer)
         Run(["bash", installer, "-b", "-u", "-p", condaDir])
     conda = condaDir / "bin" / "conda"
-    # Registers conda in ~/.bashrc for future shells (this one is handled by calling conda directly)
-    Run([conda, "init", "bash"])
+    if not MAC:
+        # Registers conda in ~/.bashrc for future shells (this one is handled by calling conda directly). A Mac gets
+        # the 'cu' command instead (WriteLauncher), which needs no activating, as on Windows
+        Run([conda, "init", "bash"])
     UseCondaForgeOnly(conda)
     print("✓ Miniconda installed.")
     return conda
 
 
+def WarnIfTranslated(conda: Path) -> None:
+    """A loud warning when an Apple Silicon Mac's conda is an Intel one: the environment would run under Rosetta
+    (slower, and Apple is ending general Rosetta support). Never a stop: the conda is the person's own."""
+    if not MAC or not AppleSilicon():
+        return
+    try:
+        info = json.loads(subprocess.check_output([str(conda), "info", "--json"], universal_newlines=True))
+    except (OSError, subprocess.CalledProcessError, ValueError):
+        return
+    if info.get("platform") == "osx-64":
+        print(f"\n⚠ WARNING: {conda} is an Intel (osx-64) conda on an Apple Silicon Mac. The CompUtils environment "
+              f"will run under Rosetta, slowly, and only while macOS still has Rosetta. Install an Apple Silicon "
+              f"Miniconda (or Miniforge) and run the installer again with --conda-dir to fix it.\n", flush=True)
+
+
 def InstallMinicondaWindows(condaDir: Path) -> Path:
     """Install Miniconda for this user only, silently, into condaDir; return its conda. It isn't put on PATH or
-    registered as the system's Python: CompUtils' 'cu' command (WriteWindowsLauncher) needs neither."""
+    registered as the system's Python: CompUtils' 'cu' command (WriteLauncher) needs neither."""
     if platform.machine().lower() not in ("amd64", "x86_64"):
         Fail(f"No conda was found, and Miniconda for Windows is 64-bit x86 only (this is {platform.machine()}). "
              f"Install conda yourself, then run the installer again.")
@@ -292,18 +335,23 @@ def EnvPrefix(conda: Path, name: str):
 
 
 def ReadYml(yml: Path):
-    """The env file's environment name, channels (nodefaults left out) and package specs. Only the flat lists
-    compUtils.yml uses are read (no yaml module in the standard library); a nested entry such as '- pip:' stops the
-    install. A '# @platform linux|windows' line limits the file to that system: on another, the install stops. CompUtils
-    keeps a twin (computils/environment.py's ReadYml)."""
-    name, channels, specs, section = ENV_NAME, [], [], None
-    for raw in yml.read_text().splitlines():
+    """The env file's environment name, channels (nodefaults left out), package specs and pip specs. Only the flat
+    lists compUtils.yml uses are read (no yaml module in the standard library); a nested entry such as '- pip:' stops
+    the install. A '# @platform linux|windows|macos' line limits the file to that system: on another, the install
+    stops. A '# @pip SPEC' line is a package conda-forge lacks for that system, pip-installed without its dependencies
+    (InstallPipSpecs; a comment, so the file stays a valid conda env file). CompUtils keeps a twin
+    (computils/environment.py's ReadYml)."""
+    name, channels, specs, pipSpecs, section = ENV_NAME, [], [], [], None
+    for raw in yml.read_text(encoding="utf-8").splitlines():
         comment = raw.strip()[1:].strip() if raw.strip().startswith("#") else ""
         if comment.startswith("@platform") and comment[len("@platform"):].split():
             target = comment[len("@platform"):].split()[0].lower()
             if target != THIS_PLATFORM:
                 Fail(f"{yml} is for {target}, and this is {platform.system()}. Use the env file for this system "
                      f"({YML_NAME}).")
+            continue
+        if comment.startswith("@pip") and comment[len("@pip"):].split():
+            pipSpecs.append(comment[len("@pip"):].split()[0])
             continue
         line = raw.split("#", 1)[0].rstrip()
         if not line.strip():
@@ -326,7 +374,7 @@ def ReadYml(yml: Path):
             specs.append(item)
     if not channels or not specs:
         Fail(f"{yml} lists no channels or no dependencies.")
-    return name, channels, specs
+    return name, channels, specs, pipSpecs
 
 
 def ChannelArgs(channels) -> list:
@@ -341,15 +389,15 @@ def BuildEnv(conda: Path, yml: Path) -> str:
     conda's Terms of Service check reads the channels conda is configured with,
     not an env file's, so 'conda env create' would ask about Anaconda's channels
     even though nothing comes from them. With conda-forge alone there is
-    nothing to accept. Returns the environment's name.
+    nothing to accept. Returns the environment's name and its pip specs.
     """
-    name, channels, specs = ReadYml(yml)
+    name, channels, specs, pipSpecs = ReadYml(yml)
     verb = "install" if EnvExists(conda, name) else "create"
     print(f"{'Updating' if verb == 'install' else 'Creating'} the conda environment '{name}' from "
           f"{', '.join(channels)} (this can take several minutes; your terminal will be busy).")
     Run([conda, verb, "-n", name, *ChannelArgs(channels), "-y", *specs])
     print(f"✓ Conda environment '{name}' is ready.")
-    return name
+    return name, pipSpecs
 
 
 def PipInstall(package: str, editable: bool = False) -> list:
@@ -358,8 +406,17 @@ def PipInstall(package: str, editable: bool = False) -> list:
             *(["-e"] if editable else []), package]
 
 
-def InstallCompUtils(conda: Path, name: str) -> None:
-    """Install CompUtils from the branch."""
+def PipSpecsInstall(pipSpecs) -> list:
+    """The pip arguments that install the env file's '# @pip' packages: without their dependencies (the env file's
+    conda packages are those), and nothing at all when the installed version already meets the spec."""
+    return ["python", "-m", "pip", "install", "--no-deps", *pipSpecs]
+
+
+def InstallCompUtils(conda: Path, name: str, pipSpecs=()) -> None:
+    """Install the env file's pip packages, then CompUtils from the branch."""
+    if pipSpecs:
+        print(f"Installing what conda-forge lacks here with pip: {', '.join(pipSpecs)}.")
+        Run(InEnv(conda, name, *PipSpecsInstall(pipSpecs)))
     print(f"Installing CompUtils from branch '{BRANCH}'.")
     Run(InEnv(conda, name, *PipInstall(PackageUrl())))
 
@@ -369,8 +426,8 @@ SELF_TEST = ["python", "-m", "computils", "--self-test"]
 
 
 def CheckInstall(conda: Path, name: str, launcher=None) -> bool:
-    """Whether 'cu' runs inside the environment, and every module imports (and, on Windows, whether the 'cu' command
-    runs too). None of it touches the config, so setup is left to the first real run."""
+    """Whether 'cu' runs inside the environment, and every module imports (and, on Windows and macOS, whether the 'cu'
+    command runs too). None of it touches the config, so setup is left to the first real run."""
     works = (Run(InEnv(conda, name, "cu", "--help"), check=False) == 0 and
              Run(InEnv(conda, name, *SELF_TEST), check=False) == 0 and
              (launcher is None or Run([launcher, "--help"], check=False) == 0))
@@ -378,13 +435,13 @@ def CheckInstall(conda: Path, name: str, launcher=None) -> bool:
     return works
 
 
-def AddAliases() -> None:
-    """Add the 'con' alias for env activation.
+def AddAliases(name: str = ENV_NAME) -> None:
+    """Add the 'con' alias for env activation (Linux).
 
     'cu' itself needs no alias: it is installed as a pip entry-point inside the
     conda env, so it's on PATH once the env is activated.
     """
-    alias_line = f'alias con="conda activate {ENV_NAME}"'
+    alias_line = f'alias con="conda activate {name}"'
     alias_file = HOME / ".alias"
 
     existing = alias_file.read_text() if alias_file.exists() else ""
@@ -427,9 +484,61 @@ def RemoveLegacyCuAlias() -> None:
         print("✓ Removed legacy 'alias cu=...' from ~/.alias.")
 
 
-# ─── Windows: the 'cu' command ─────────────────────────────────────────────────
+# ─── Windows and macOS: the 'cu' command ───────────────────────────────────────
 
 def LauncherText(conda: Path, name: str, prefix: Path) -> str:
+    """The 'cu' command for this system (cu.cmd on Windows, a shell script on macOS)."""
+    return WindowsLauncherText(conda, name, prefix) if WINDOWS else MacLauncherText(conda, name, prefix)
+
+
+def ShellQuote(value) -> str:
+    """A value for sh, in single quotes (a ' inside written as '\\'')."""
+    return "'" + str(value).replace("'", "'\\''") + "'"
+
+
+def MacLauncherText(conda: Path, name: str, prefix: Path) -> str:
+    """~/.local/bin/cu: CompUtils run from its environment without activating it, as cu.cmd does on Windows. It sets
+    what activation would that CompUtils reads (the CONDA_* variables cu -env uses to find conda; the environment's
+    bin first on PATH, for goodvibes and git) and runs 'python -m computils', so the swap of a refresh (which renames
+    the environment aside and back) and cu --update never leave it pointing at a file that moved."""
+    base = conda.parent.parent          # conda is <base>/bin/conda or <base>/condabin/conda
+    return "\n".join([
+        "#!/bin/sh",
+        "# CompUtils' cu command, written by conda-installer.py (running it again rewrites this file).",
+        "# It runs CompUtils from its conda environment, so no 'conda activate' is needed.",
+        f"CONDA_PREFIX={ShellQuote(prefix)}; export CONDA_PREFIX",
+        f"CONDA_DEFAULT_ENV={ShellQuote(name)}; export CONDA_DEFAULT_ENV",
+        f"CONDA_EXE={ShellQuote(conda)}; export CONDA_EXE",
+        f"CONDA_PYTHON_EXE={ShellQuote(base / 'bin' / 'python')}; export CONDA_PYTHON_EXE",
+        f"PATH={ShellQuote(prefix / 'bin')}:\"$PATH\"; export PATH",
+        f"exec {ShellQuote(prefix / 'bin' / 'python')} -m computils \"$@\"",
+        ""])
+
+
+def ShellProfile() -> Path:
+    """The login shell's profile, where a PATH entry stays ahead of /usr/bin: macOS' /etc/zprofile (and /etc/profile)
+    run path_helper first, which moves entries made earlier (.zshenv) behind the system folders. zsh (macOS' default)
+    reads ~/.zprofile; bash, ~/.bash_profile."""
+    shell = os.path.basename(os.environ.get("SHELL", "")) or "zsh"
+    return HOME / (".bash_profile" if shell == "bash" else ".zprofile")
+
+
+def AddToShellPath() -> bool:
+    """Put LAUNCHER_DIR first on PATH for new terminals (macOS; the twin of AddToUserPath): one line added to the
+    login shell's profile, never anything edited or removed. False if the line was already there."""
+    profile = ShellProfile()
+    existing = profile.read_text(encoding="utf-8", errors="replace") if profile.exists() else ""
+    if SHELL_PATH_LINE in existing:
+        return False
+    with open(str(profile), "a", encoding="utf-8") as file:
+        if existing and not existing.endswith("\n"):
+            file.write("\n")
+        file.write("\n# Added by CompUtils' installer: its 'cu' command, ahead of macOS' own /usr/bin/cu\n"
+                   + SHELL_PATH_LINE + "\n")
+    return True
+
+
+def WindowsLauncherText(conda: Path, name: str, prefix: Path) -> str:
     """cu.cmd: CompUtils run from its environment without activating it. It sets what activation would (the
     environment's folders first on PATH, so its DLLs load; the CONDA_* variables cu -env reads to find conda) and runs
     'python -m computils', never cu.exe: Windows can't replace a running .exe, which would break cu --update."""
@@ -474,21 +583,32 @@ def AddToUserPath(folder: Path) -> bool:
     return True
 
 
-def WriteWindowsLauncher(conda: Path, name: str) -> Path:
-    """Write cu.cmd for the environment called name into LAUNCHER_DIR and put that folder on this user's PATH."""
+def WriteLauncher(conda: Path, name: str) -> Path:
+    """Write the 'cu' command for the environment called name into LAUNCHER_DIR and put that folder on this user's
+    PATH (Windows: the registry; macOS: the login shell's profile, ahead of /usr/bin)."""
     prefix = EnvPrefix(conda, name)
     if prefix is None:
         Fail(f"The environment '{name}' wasn't found, so the 'cu' command couldn't be written.")
     LAUNCHER_DIR.mkdir(parents=True, exist_ok=True)
-    launcher = LAUNCHER_DIR / "cu.cmd"
-    # cmd reads a batch file in the console's (OEM) code page, and wants CRLF line ends
-    with open(str(launcher), "w", encoding="oem", newline="\r\n") as file:
-        file.write(LauncherText(conda, name, prefix))
-    print(f"✓ Wrote the 'cu' command: {launcher}")
-    if AddToUserPath(LAUNCHER_DIR):
-        print(f"✓ Added {LAUNCHER_DIR} to your user PATH (new PowerShell and cmd windows will have 'cu').")
+    launcher = LAUNCHER_DIR / LAUNCHER_NAME
+    if WINDOWS:
+        # cmd reads a batch file in the console's (OEM) code page, and wants CRLF line ends
+        with open(str(launcher), "w", encoding="oem", newline="\r\n") as file:
+            file.write(LauncherText(conda, name, prefix))
     else:
-        print(f"✓ {LAUNCHER_DIR} is already on your user PATH.")
+        with open(str(launcher), "w", encoding="utf-8", newline="\n") as file:
+            file.write(LauncherText(conda, name, prefix))
+        launcher.chmod(0o755)
+    print(f"✓ Wrote the 'cu' command: {launcher}")
+    if WINDOWS:
+        if AddToUserPath(LAUNCHER_DIR):
+            print(f"✓ Added {LAUNCHER_DIR} to your user PATH (new PowerShell and cmd windows will have 'cu').")
+        else:
+            print(f"✓ {LAUNCHER_DIR} is already on your user PATH.")
+    elif AddToShellPath():
+        print(f"✓ Put {LAUNCHER_DIR} first on your PATH in {ShellProfile()} (new terminals will have 'cu').")
+    else:
+        print(f"✓ {ShellProfile()} already puts {LAUNCHER_DIR} on your PATH.")
     return launcher
 
 
@@ -548,9 +668,33 @@ def RemoveEnv(conda: Path, prefix: Path) -> None:
         shutil.rmtree(str(prefix), ignore_errors=True)
 
 
+def MacExecutables():
+    """(pid, executable path) of every process on this Mac whose path macOS will tell (libproc, as Activity Monitor
+    asks; macOS has no /proc)."""
+    import ctypes
+    try:
+        libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
+    except OSError:
+        libproc = ctypes.CDLL(None)                              # libSystem, which carries libproc
+    libproc.proc_listallpids.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    libproc.proc_listallpids.restype = ctypes.c_int
+    libproc.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+    libproc.proc_pidpath.restype = ctypes.c_int
+    count = libproc.proc_listallpids(None, 0)                    # how many processes there are now
+    if count <= 0:
+        return
+    pids = (ctypes.c_int * (count + 64))()                       # room for processes started meanwhile
+    count = libproc.proc_listallpids(pids, ctypes.sizeof(pids))  # returns the number of pids written
+    buffer = ctypes.create_string_buffer(4096)                   # PROC_PIDPATHINFO_MAXSIZE
+    for pid in pids[:max(count, 0)]:
+        if pid > 0 and libproc.proc_pidpath(pid, buffer, ctypes.sizeof(buffer)) > 0:
+            yield pid, os.fsdecode(buffer.value)
+
+
 def Executables():
-    """(pid, executable path) of every process this user can see on this machine: /proc on Linux, the process list on
-    Windows (ctypes; Windows lets a folder be renamed and deleted under a running program, so it must be asked)."""
+    """(pid, executable path) of every process this user can see on this machine: /proc on Linux, libproc on macOS,
+    the process list on Windows (ctypes; Windows lets a folder be renamed and deleted under a running program, so it
+    must be asked)."""
     if os.path.isdir("/proc"):
         for pid in os.listdir("/proc"):
             if pid.isdigit():
@@ -558,6 +702,9 @@ def Executables():
                     yield int(pid), os.readlink("/proc/{}/exe".format(pid))
                 except OSError:
                     continue
+        return
+    if MAC:
+        yield from MacExecutables()
         return
     if os.name != "nt":
         return
@@ -603,10 +750,13 @@ def InstalledCommit(prefix: Path):
     return None
 
 
-def Install(conda: Path, prefix: Path, args, state: State) -> None:
-    """CompUtils (--package: the installed branch, so the code is brought up to date with the environment, or a local
-    install's folder; nothing for a checkout on --pythonpath), then the self-test: every module imports and GoodVibes
-    runs. The commit installed goes in the state, for CompUtils' report."""
+def Install(conda: Path, prefix: Path, args, state: State, pipSpecs=()) -> None:
+    """The env file's pip packages (its '# @pip' lines), CompUtils (--package: the installed branch, so the code is
+    brought up to date with the environment, or a local install's folder; nothing for a checkout on --pythonpath),
+    then the self-test: every module imports and GoodVibes runs. The commit installed goes in the state, for
+    CompUtils' report. Runs after every build and again after a swap's clone, which may not carry pip's packages."""
+    if pipSpecs and Run(InPrefix(conda, prefix, *PipSpecsInstall(pipSpecs)), check=False) != 0:
+        raise JobFailed("pip couldn't install " + ", ".join(pipSpecs))
     if args.package:
         if Run(InPrefix(conda, prefix, *PipInstall(args.package, args.editable)), check=False) != 0:
             raise JobFailed("pip couldn't install CompUtils")
@@ -624,7 +774,7 @@ def Install(conda: Path, prefix: Path, args, state: State) -> None:
         WriteRecord(prefix, json.loads(args.record))
 
 
-def SwapIn(conda: Path, prefix: Path, built: Path, args, state: State) -> None:
+def SwapIn(conda: Path, prefix: Path, built: Path, args, state: State, pipSpecs=()) -> None:
     """Replace the environment at prefix with the one built beside it."""
     aside = Path(str(prefix) + ".old")
     guard = Path(str(prefix) + ".swapping")
@@ -650,7 +800,7 @@ def SwapIn(conda: Path, prefix: Path, built: Path, args, state: State) -> None:
         if Run([conda, "create", "-y", "--offline", "-p", prefix, "--clone", built], check=False) != 0:
             raise JobFailed("conda couldn't copy the new environment into place")
         # The clone moved CompUtils' own files: install it again, so its command points at the final place
-        Install(conda, prefix, args, state)
+        Install(conda, prefix, args, state, pipSpecs)
     except Exception:
         print("\nThe swap failed: putting the old environment back.", flush=True)
         shutil.rmtree(str(prefix), ignore_errors=True)
@@ -683,7 +833,7 @@ def Background(args) -> None:
     try:
         if conda is None:
             raise JobFailed("conda wasn't found")
-        name, channels, specs = ReadYml(args.yml)
+        name, channels, specs, pipSpecs = ReadYml(args.yml)
         if args.mode != "install":
             # The code the environment has now, so CompUtils can report the update (Install records the new one)
             state.Set(codeBefore=InstalledCommit(prefix))
@@ -704,9 +854,9 @@ def Background(args) -> None:
         elif Run([conda, "create", "-y", "-p", built, *ChannelArgs(channels), *specs], check=False) != 0:
             raise JobFailed("conda couldn't create the environment")
         state.Phase("Installing CompUtils")
-        Install(conda, built, args, state)
+        Install(conda, built, args, state, pipSpecs)
         if args.mode != "install":
-            SwapIn(conda, prefix, built, args, state)
+            SwapIn(conda, prefix, built, args, state, pipSpecs)
         state.Set(phase=DONE, finished=time.time())
         print("\n✓ Done.", flush=True)
     except BaseException as error:
@@ -761,8 +911,8 @@ def Main() -> None:
     print(" CompUtils Installer")
     print("=" * 64)
 
-    if platform.system() not in ("Linux", "Windows"):
-        Fail(f"This installer supports Linux and Windows (this is {platform.system()}). Build the environment "
+    if platform.system() not in ("Linux", "Windows", "Darwin"):
+        Fail(f"This installer supports Linux, Windows and macOS (this is {platform.system()}). Build the environment "
              f"yourself from compUtils.yml, then pip-install CompUtils into it.")
     if args.yml is not None and not args.yml.is_file():
         Fail(f"No env file at {args.yml}.")
@@ -779,38 +929,47 @@ def Main() -> None:
             print(f"✓ Using conda at {conda}.")
             if args.conda_forge_only:
                 UseCondaForgeOnly(conda)
+        WarnIfTranslated(conda)
         with tempfile.TemporaryDirectory() as scratch:
             yml, commit = (args.yml, "") if args.yml is not None else FetchYml(Path(scratch))
-            name = BuildEnv(conda, yml)
+            name, pipSpecs = BuildEnv(conda, yml)
             record = {"file": yml.name, "fingerprint": YmlFingerprint(yml.read_bytes()), "commit": commit,
                       "branch": "" if args.yml is not None else BRANCH}
-        InstallCompUtils(conda, name)
+        InstallCompUtils(conda, name, pipSpecs)
         MakeConfigFolder()
-        if WINDOWS:
-            launcher = WriteWindowsLauncher(conda, name)
+        if WINDOWS or MAC:
+            launcher = WriteLauncher(conda, name)
         works = CheckInstall(conda, name, launcher)
         prefix = EnvPrefix(conda, name)
         if works and prefix is not None:
             # What the environment was built from, so CompUtils (cu -env) knows when the branch's env file changes
             WriteRecord(prefix, record)
-        if not WINDOWS:
+        if not (WINDOWS or MAC):
             RemoveLegacyCuAlias()
-            AddAliases()
+            AddAliases(name)
     except (subprocess.CalledProcessError, OSError) as error:  # OSError covers failed downloads
         Fail(f"A step failed: {error}\n  Run the installer again; it picks up where it stopped.")
 
     print("\n" + "=" * 64)
     print(" Installation complete!" if works else " Installed, but 'cu' didn't run (see above).")
     print("=" * 64)
-    if WINDOWS:
+    # Both paths on lines of their own, for an agent setting CompUtils up (computils-setup) to copy from the log
+    if launcher is not None:
+        print(f"\nCompUtils' cu command: {launcher}")
+    if prefix is not None:
+        print(f"CompUtils' Python: {prefix / ('python.exe' if WINDOWS else 'bin/python')}")
+    if WINDOWS or MAC:
         print("\nNext steps:")
-        print("  1. Open a new PowerShell or cmd window (open ones don't see the new PATH yet).")
+        print("  1. Open a new " + ("PowerShell or cmd window" if WINDOWS else "terminal window")
+              + " (open ones don't see the new PATH yet).")
         print("  2. Run CompUtils:                cu")
         print("       (the first run walks you through setting it up, and asks for your lab's profile if it has one)")
         print(f"       In a window opened before this install, run it as: {launcher}")
         print()
         print("Notes:")
         print(f"  • 'cu' is {launcher}: it runs CompUtils from the '{name}' environment, no activating needed.")
+        if MAC:
+            print(f"  • {ShellProfile()} puts it ahead of macOS' own (unrelated) /usr/bin/cu.")
         print(f"  • Update later with 'cu --update' (it stays on branch '{BRANCH}'),")
         print("    or run this installer again.")
         return

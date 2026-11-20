@@ -20,7 +20,6 @@ was one.
 
 Update CompUtils (code only) and this stay separate actions; CodeUpdateProblem keeps them safe together."""
 import hashlib
-import importlib.metadata
 import json
 import os
 import shutil
@@ -48,7 +47,7 @@ MODES = ("refresh", "rebuild", "install")
 # What each mode did, for the reports
 DONE_VERBS = {"refresh": "refreshed", "rebuild": "rebuilt", "install": "installed"}
 DOING = {"refresh": "Refreshing", "rebuild": "Rebuilding", "install": "Installing"}
-THIS_PLATFORM = "windows" if sys.platform == "win32" else "linux"
+THIS_PLATFORM = "windows" if sys.platform == "win32" else "macos" if sys.platform == "darwin" else "linux"
 # What an environment was built from, written into it by conda-installer.py (which keeps the same name)
 RECORD = Path("etc") / "computils-environment.json"
 # A commit SHA as GitHub prints it (a ref that is one is read as it is, never resolved)
@@ -81,9 +80,10 @@ class Variant:
     name:     str                       # the conda environment's name (the yml's name:)
     channels: list[str]
     specs:    list[str]
-    platform: str = ""                  # '' any; 'linux' / 'windows' from a '# @platform' line
+    platform: str = ""                  # '' any; 'linux' / 'windows' / 'macos' from a '# @platform' line
     text:     str = ""                  # the yml as read (written for the installer)
     commit:   str = ""                  # the commit it was read at ('' from a checkout)
+    pipSpecs: list[str] = field(default_factory=list)   # '# @pip SPEC' lines: what conda-forge lacks there (pip)
 
     @property
     def fingerprint(self) -> str:
@@ -101,12 +101,17 @@ class Variant:
 
 def ReadYml(text: str, file: str) -> Variant | str:
     """A variant from an env file's text, or why it can't be read. The twin of conda-installer.py's ReadYml (which
-    can't be imported: it is a standalone Python 3.6 script): flat lists only, nodefaults left out."""
-    name, channels, specs, platform, section = "", [], [], "", None
+    can't be imported: it is a standalone Python 3.6 script): flat lists only, nodefaults left out. '# @platform NAME'
+    limits the file to one system; '# @pip SPEC' is a package conda-forge lacks there, which the installer
+    pip-installs without its dependencies (a comment, so the file stays a valid conda env file)."""
+    name, channels, specs, pipSpecs, platform, section = "", [], [], [], "", None
     for raw in text.splitlines():
         directive = regex.match(r"\s*#\s*@platform\s+(\w+)", raw)
         if directive:
             platform = directive.group(1).lower()
+        pip = regex.match(r"\s*#\s*@pip\s+(\S+)", raw)
+        if pip:
+            pipSpecs.append(pip.group(1))
         line = raw.split("#", 1)[0].rstrip()
         if not line.strip():
             continue
@@ -128,7 +133,7 @@ def ReadYml(text: str, file: str) -> Variant | str:
             specs.append(item)
     if not name or not channels or not specs:
         return f"{file} has no name, channels or dependencies"
-    return Variant(file, name, channels, specs, platform, text)
+    return Variant(file, name, channels, specs, platform, text, pipSpecs=pipSpecs)
 
 
 def IsVariantFile(name: str) -> bool:
@@ -261,13 +266,25 @@ def NewPrefix(name: str) -> Path | None:
     return next((folder / name for folder in EnvsFolders() if folder.is_dir()), None)
 
 
+def PackageKey(name: str) -> str:
+    """A package name as pip compares it (PEP 503: case, '_' and '.' don't matter); conda's names already are."""
+    return regex.sub(r"[-_.]+", "-", name).lower()
+
+
 def InstalledPackages(prefix: Path) -> dict[str, str]:
-    """name -> version, from conda-meta's '<name>-<version>-<build>.json' file names (no conda call)."""
+    """name -> version, from conda-meta's '<name>-<version>-<build>.json' file names, then pip's
+    '<name>-<version>.dist-info' folders for what conda doesn't list (pip-installed: CompUtils, an env file's '# @pip'
+    packages). No conda or pip call, and any environment, running or not."""
     packages = {}
     for record in (prefix / "conda-meta").glob("*.json"):
         parts = record.stem.rsplit("-", 2)
         if len(parts) == 3:
-            packages[parts[0].lower()] = parts[1]
+            packages[PackageKey(parts[0])] = parts[1]
+    for pattern in ("lib/python*/site-packages/*.dist-info", "Lib/site-packages/*.dist-info"):
+        for info in prefix.glob(pattern):
+            name, _, version = info.name[:-len(".dist-info")].partition("-")
+            if version:
+                packages.setdefault(PackageKey(name), version)
     return packages
 
 
@@ -381,15 +398,9 @@ def CheckStatus(variant: Variant) -> Status:
     if prefix is None:
         return status
     installed = InstalledPackages(prefix)
-    for spec in variant.specs:
+    for spec in variant.specs + variant.pipSpecs:
         name = SpecName(spec)
-        version = installed.get(name)
-        if version is None and status.running:
-            # pip-installed in the running environment (conda-meta lists conda's packages only)
-            try:
-                version = importlib.metadata.version(name)
-            except importlib.metadata.PackageNotFoundError:
-                pass
+        version = installed.get(PackageKey(name))
         if version is None:
             status.missing.append(spec)
         elif not Meets(version, spec):

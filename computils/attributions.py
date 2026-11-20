@@ -269,7 +269,7 @@ SECTIONS = [
                "Chem. A 2025, 129, 2667-2682. doi:10.1021/acs.jpca.4c08263; and the method used, e.g. GFN2-xTB: "
                "C. Bannwarth, S. Ehlert, S. Grimme, J. Chem. Theory Comput. 2019, 15, 1652-1671. "
                "doi:10.1021/acs.jctc.8b01176 (xtb's README lists the papers for GFN1-xTB, GFN-FF and ALPB/GBSA)"),
-        Credit("CREST", "Conformer and rotamer searches (planned; Linux, as conda-forge has no Windows build).",
+        Credit("CREST", "Conformer and rotamer searches (planned; Linux and macOS, as conda-forge has no Windows build).",
                "Philipp Pracht, Stefan Grimme and the CREST contributors", "LGPL-3.0-or-later",
                "https://github.com/crest-lab/crest",
                citation="P. Pracht, S. Grimme, C. Bannwarth, F. Bohle, S. Ehlert, G. Feldmann, J. Gorges, M. Müller, "
@@ -408,10 +408,12 @@ def _Roots(repo: Path) -> set[str]:
              tomllib.loads((repo / "pyproject.toml").read_text())["project"]["dependencies"]}
     roots |= set(tomllib.loads((repo / "pyproject.toml").read_text())["build-system"]["requires"][0:1])
     for yml in repo.glob("compUtils*.yml"):
-        # Only the dependencies list (the channels list comes first)
-        dependencies = yml.read_text().split("dependencies:", 1)[-1]
+        # Only the dependencies list (the channels list comes first), and its '# @pip SPEC' lines (environment.ReadYml)
+        text = yml.read_text(encoding="utf-8")
+        dependencies = text.split("dependencies:", 1)[-1]
         roots |= {regex.split(r"[ <>=!~]", line.strip()[2:])[0] for line in dependencies.splitlines()
                   if line.startswith("  - ")}
+        roots |= {regex.split(r"[ <>=!~]", spec)[0] for spec in regex.findall(r"(?m)^\s*#\s*@pip\s+(\S+)", text)}
     return {regex.split(r"[ <>=!~]", root)[0] for root in roots}
 
 def _Requirements(name: str, extras: set[str]) -> list[tuple[str, set[str]]]:

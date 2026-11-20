@@ -154,8 +154,34 @@ def BuildParser() -> argparse.ArgumentParser:
                             help="Write the inputs and job scripts, but submit nothing.")
     agentGroup.add_argument('--ssh-host', default=None, metavar="ALIAS",
                             help="With -agent: the name the agent's computer reaches this cluster by (its ssh alias).")
+    agentGroup.add_argument('--local-cu', default=None, metavar="PATH",
+                            help="With -agent: CompUtils' cu on the agent's own computer (with --local-python), "
+                                 "recorded in the skill so setup never runs again.")
+    agentGroup.add_argument('--local-python', default=None, metavar="PATH",
+                            help="With -agent: CompUtils' Python on the agent's own computer (with --local-cu).")
+    agentGroup.add_argument('--no-local', action='store_true',
+                            help="With -agent: the human chose not to install CompUtils on their own computer "
+                                 "(recorded in the skill, never offered again).")
 
     return parser
+
+
+def _LocalInstall(args):
+    """-agent's record of CompUtils on the agent's own computer (agentskill.LocalInstall), checked: both paths or
+    --no-local, and nothing the skill (plain ASCII) or an ssh command line (no ", $ or backticks) can't carry."""
+    from .agentskill import LocalInstall
+    if args.no_local:
+        if args.local_cu is not None or args.local_python is not None:
+            raise agent.UsageError("--no-local can't go with --local-cu or --local-python.")
+        return LocalInstall(declined=True)
+    if (args.local_cu is None) != (args.local_python is None):
+        raise agent.UsageError("--local-cu and --local-python go together.")
+    if args.local_cu is None:
+        return LocalInstall()
+    for flag, path in (("--local-cu", args.local_cu), ("--local-python", args.local_python)):
+        if not path.strip() or not path.isascii() or any(character in path for character in '"$`'):
+            raise agent.UsageError(f"{flag} takes a plain ASCII path, with no double quotes, $ or backticks.")
+    return LocalInstall(args.local_cu.strip(), args.local_python.strip())
 
 
 def ParseCLI(argv: list[str]) -> Intent:
@@ -209,10 +235,12 @@ def ParseCLI(argv: list[str]) -> Intent:
         raise agent.UsageError("--opt-label, --sp-label, --phase, --free, --output and --species go with -si.")
     if args.spc is not None and draft.action not in (Action.GOODVIBES, Action.SI_SCRAPER):
         raise agent.UsageError("--spc goes with -gv or -si.")
-    if args.ssh_host is not None and draft.action != Action.AGENT:
-        raise agent.UsageError("--ssh-host goes with -agent.")
+    localFlags = (args.local_cu is not None, args.local_python is not None, args.no_local)
+    if (args.ssh_host is not None or any(localFlags)) and draft.action != Action.AGENT:
+        raise agent.UsageError("--ssh-host, --local-cu, --local-python and --no-local go with -agent.")
     if draft.action == Action.AGENT:
         draft.agentTopic, draft.agentSshHost = args.agent.strip().lower(), args.ssh_host or ""
+        draft.agentLocal = _LocalInstall(args)
     if draft.action == Action.SI_SCRAPER:
         draft.siOptLabel, draft.siSpLabel, draft.siOutput = args.opt_label, args.sp_label, args.output
         draft.siPhase = args.phase if args.phase is not None else draft.siPhase

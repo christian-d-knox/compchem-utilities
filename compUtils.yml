@@ -3,7 +3,9 @@
 # with --no-deps, so this list must cover pyproject.toml's dependencies. It reads
 # flat lists only: no nested entries such as '- pip:'. CompUtils keeps it
 # current (cu -env, the TUI's Update Environment) from the branch's copy, so
-# adding a package here reaches every install. Windows has its own file:
+# adding a package here reaches every install. Windows and macOS have their own
+# files (compUtilsWindows.yml, compUtilsMac.yml), kept as close to this one as
+# conda-forge allows:
 # @platform linux
 name: compUtils
 channels:

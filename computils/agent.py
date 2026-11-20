@@ -79,6 +79,7 @@ class Report:
     next:      list[dict] = field(default_factory=list)
     notices:   list[str]  = field(default_factory=list)
     question:  dict | None = None
+    updates:   dict | None = None  # update.DailyCheck: what is newer on GitHub (first report of a day, if anything)
     error:     str  = ""       # what went wrong: a usage error's message, or a crash's last traceback line
     human:     bool = False    # NeedsHuman
     usage:     bool = False    # UsageError / argparse
@@ -105,7 +106,8 @@ class Report:
         code = self.Exit()
         out = {"computils": _Version(), "command": self.command, "exit": int(code), "status": STATUS[code]}
         # Empty fields are left out: every token an agent reads should carry something
-        for name in ("submitted", "written", "skipped", "results", "warnings", "question", "next", "notices", "error"):
+        for name in ("submitted", "written", "skipped", "results", "warnings", "question", "next", "notices", "updates",
+                     "error"):
             value = getattr(self, name)
             if value:
                 out[name] = value

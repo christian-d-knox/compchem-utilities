@@ -241,6 +241,7 @@ class AgentIntent(Intent):
     """`cu -agent [TOPIC]` — the agent skill (SKILL.md), or one topic of it (agentskill.py)."""
     topic:   str = ""
     sshHost: str = ""
+    local:   object = None              # agentskill.LocalInstall: the agent's own computer (None: undecided)
 
 
 @dataclass
@@ -341,6 +342,7 @@ class IntentDraft:
     # AGENT
     agentTopic:   str = ""
     agentSshHost: str = ""
+    agentLocal: object = None
 
     # SI_SCRAPER
     siOptLabel: Optional[str]       = None
@@ -451,7 +453,7 @@ class IntentDraft:
                 return StalkIntent(loop=self.stalkLoop, dismiss=list(self.dismiss),
                                    wait=None if self.wait is None else list(self.wait))
             case Action.AGENT:
-                return AgentIntent(topic=self.agentTopic, sshHost=self.agentSshHost)
+                return AgentIntent(topic=self.agentTopic, sshHost=self.agentSshHost, local=self.agentLocal)
             case Action.SI_SCRAPER:
                 return SIIntent(optLabel=self.siOptLabel, spLabel=self.siSpLabel, phase=self.siPhase,
                                 suffix=self.singlePointPattern, free=self.siFree, output=self.siOutput,

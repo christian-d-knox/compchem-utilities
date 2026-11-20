@@ -21,6 +21,26 @@ HOST_PLACEHOLDER = "<host>"
 
 
 @dataclass(frozen=True)
+class LocalInstall:
+    """CompUtils on the agent's own computer, as setup found it (cu -agent --local-cu/--local-python, or --no-local):
+    written into the skill, so the agent remembers it and never checks or offers the install again. Empty: undecided.
+    The cluster can't see the PC, so these are the agent's word, written as given."""
+    cu:       str  = ""
+    python:   str  = ""
+    declined: bool = False
+
+    def Words(self) -> list[str]:
+        """The flags that give this again (for the skill's regenerate command)."""
+        if self.declined:
+            return ["--no-local"]
+        return ["--local-cu", self.cu, "--local-python", self.python] if self.cu else []
+
+
+# The skill's digest leaves the PC out (as it does the host): it changes only with agent-facing behaviour
+LOCAL_PLACEHOLDER = None
+
+
+@dataclass(frozen=True)
 class AgentCommand:
     """One command as agents see it. flags: the argparse dests it owns (its action flag first). tui: the TUI items it
     mirrors. agent False: a person's only (why says so); hidden: never typed (written into job scripts)."""
@@ -120,7 +140,7 @@ COMMANDS = [
     AgentCommand("attributions", ("attributions",), Action.ATTRIBUTIONS,
                  "Licenses and the citations each program, method and library asks for (a paper's methods section).",
                  "-attributions", "", tui=("screen-attributions",)),
-    AgentCommand("agent", ("agent", "ssh_host"), Action.AGENT,
+    AgentCommand("agent", ("agent", "ssh_host", "local_cu", "local_python", "no_local"), Action.AGENT,
                  "This skill (no TOPIC), or one of its topics, always the installed version's.", "-agent opt"),
     AgentCommand("first", ("first",), Action.FIRST_TIME_SETUP, "First-time setup.", agent=False,
                  why="it asks a person about their cluster, notifications and lab profile",
@@ -165,10 +185,33 @@ def _Usage(parser, command: AgentCommand) -> str:
 
 # ─── The skill ────────────────────────────────────────────────────────
 
-def SkillText(host: str = HOST_PLACEHOLDER, digest: str | None = None, commit: str | None = None) -> str:
-    """SKILL.md: what an agent loads when CompUtils is relevant (~1.6k tokens). Everything else is a topic."""
+def _LocalSection(local: LocalInstall | None) -> list[str]:
+    """The skill's record of CompUtils on the agent's own computer (None: the digest's placeholder)."""
+    lines = ["## This Computer", ""]
+    if local is None:
+        return lines + ["<this computer>", ""]
+    if local.declined:
+        return lines + ["The human chose not to install CompUtils on their own computer. Don't offer it again unless "
+                        "they ask: the cluster's CompUtils is the one you use.", ""]
+    if not local.cu:
+        return lines + ["Not set up yet. Once, follow `computils-setup` (This Computer): install CompUtils on the "
+                        "human's computer with their OK, or record that they don't want it; then regenerate this skill "
+                        "with what it says.", ""]
+    return lines + ["CompUtils is installed on the human's computer too. This is the record setup wrote: never check "
+                    "for it or install it again.", "",
+                    f"- `cu` there (run locally, never over ssh): `{local.cu}`",
+                    f"- its Python, with openpyxl, for workbooks (`excel-workbooks`): `{local.python}`", ""]
+
+
+def SkillText(host: str = HOST_PLACEHOLDER, digest: str | None = None, commit: str | None = None,
+              local: LocalInstall | None = LocalInstall()) -> str:
+    """SKILL.md: what an agent loads when CompUtils is relevant (~1.6k tokens). Everything else is a topic. local is
+    what the agent's own computer has (None: a placeholder, for the digest)."""
+    from .agent import CommandLine
     from .cli import BuildParser
     parser, cu = BuildParser(), _CuPath()
+    regenerate = CommandLine(["-agent", "--ssh-host", host, *(local.Words() if local is not None else [])])
+    regenerate = cu + regenerate[len("cu"):]
     digest = SkillDigest() if digest is None else digest
     if commit is None:
         from .update import InstalledSource
@@ -217,6 +260,11 @@ def SkillText(host: str = HOST_PLACEHOLDER, digest: str | None = None, commit: s
         "| 6 | stopped | A precondition isn't met: run `next[0]`, then retry. |",
         "| 7 | human | Only a person can do this: tell them exactly what `next` says. |",
         "",
+        "A report may also carry `updates` (cu checks GitHub by itself, at most once a day on each machine): tell the "
+        "human what is newer and ask. Run its `command` on that machine (over ssh for the cluster, locally for this "
+        "computer) only on their go. Never check for updates yourself.",
+        "",
+        *_LocalSection(local),
         "## Rules",
         "",
         "- Preview first: job commands take `--dry-run` (inputs and scripts written, nothing submitted). Show the human "
@@ -250,9 +298,9 @@ def SkillText(host: str = HOST_PLACEHOLDER, digest: str | None = None, commit: s
               "## Keeping This Skill Current", "",
               "Every --json report carries `computils.commit` and `computils.skill`. If either differs from the "
               "line below (a local install's commit is always `local`: compare the skill only), CompUtils has "
-              f"changed: regenerate it (`ssh {host} \"{cu} -agent --ssh-host {host}\"`; see `-agent ssh` for saving it) "
-              "and replace this SKILL.md with it "
-              "before going on.", "",
+              f"changed: regenerate it (`ssh {host} \"{regenerate}\"`; see `-agent ssh` for saving it) "
+              "and replace this SKILL.md with it before going on. Keep its flags as they are: they carry what This "
+              "Computer says.", "",
               f"Generated by CompUtils {commit}; skill {digest}.", ""]
     return "\n".join(lines)
 
@@ -260,7 +308,7 @@ def SkillText(host: str = HOST_PLACEHOLDER, digest: str | None = None, commit: s
 def SkillDigest() -> str:
     """A hash of everything the skill says (the host left out: the cluster can't know the PC's alias for it; the
     commit too), so it changes only when agent-facing behaviour does."""
-    return hashlib.sha256(SkillText(HOST_PLACEHOLDER, "", "").encode()).hexdigest()[:10]
+    return hashlib.sha256(SkillText(HOST_PLACEHOLDER, "", "", LOCAL_PLACEHOLDER).encode()).hexdigest()[:10]
 
 
 # ─── Topics (cu -agent TOPIC) ─────────────────────────────────────────
@@ -353,6 +401,9 @@ One JSON object on stdout, at the end of every run. Empty fields are left out.
 - `question`: {key, text, type (bool|str|float|choice), options, default}: answer with --answer KEY=VALUE. A choice
   takes the option's text or its index.
 - `next`: [{command, why}]: what to run next.
+- `updates`: {code: {branch, installed, latest}, environment: {name, verdict}, command, why}: in the first report of
+  a day on a machine, only when something is newer on GitHub (cu checks by itself, at most once a day). Tell the
+  human and run `command` there only on their go: updating is always theirs to decide.
 - `notices`: things that happened outside this command (an environment update that finished...).
 - `error`: a usage error's message, or a crash's last traceback line.
 """
@@ -415,7 +466,7 @@ Every cluster command runs as one ssh call. These rules hold from PowerShell (5.
 
 ## The ssh Config (Your Computer's)
 
-`{host}` is a Host entry in `~/.ssh/config` (Windows: `%USERPROFILE%\.ssh\config`). That file is the human's: show
+`{host}` is a Host entry in `~/.ssh/config` (Windows: `%USERPROFILE%\\.ssh\\config`). That file is the human's: show
 them the exact lines and add them only on their OK. Only ever add a block; never edit or remove existing lines, never
 touch keys or known_hosts, and never turn host key checking off.
 
