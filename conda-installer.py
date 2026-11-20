@@ -47,6 +47,7 @@ an old system python3.
 Originally written by Christian Drew Knox for the Peng Liu Research Group.
 """
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -73,6 +74,9 @@ MINICONDA_ARCHES = {"x86_64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"
 MINICONDA_WINDOWS_URL = "https://repo.anaconda.com/miniconda/Miniconda3-latest-Windows-x86_64.exe"
 # The env file for this system (each names its own environment: compUtils, compUtilsWindows)
 YML_NAME = "compUtilsWindows.yml" if WINDOWS else "compUtils.yml"
+# What an environment was built from, written into it after every install, refresh and rebuild; CompUtils compares it
+# with the branch's env file to know whether the environment is current (computils/environment.py: RECORD, ReadRecord)
+RECORD = Path("etc") / "computils-environment.json"
 # Windows: where the 'cu' command (cu.cmd) goes, a per-user programs folder added to the user's PATH
 LAUNCHER_DIR = Path(os.environ.get("LOCALAPPDATA") or str(HOME / "AppData" / "Local")) / "Programs" / "CompUtils"
 REPO_OWNER = "christian-d-knox"
@@ -85,9 +89,32 @@ ENV_NAME = "compUtils"
 CONDA_PLACES = ["bin/conda", "Scripts/conda.exe", "condabin/conda.bat"]
 
 
-def YmlUrl() -> str:
-    """The raw-content URL of the branch's env file for this system."""
-    return f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/{YML_NAME}"
+def YmlUrl(ref: str = BRANCH) -> str:
+    """The raw-content URL of the env file for this system, at ref (the branch, or one of its commits)."""
+    return f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{ref}/{YML_NAME}"
+
+
+def LatestCommit() -> str:
+    """The branch's latest commit on GitHub, or '' when GitHub's API can't be reached (or its hourly limit is spent)."""
+    request = urllib.request.Request(f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/commits/{BRANCH}",
+                                     headers={"User-Agent": "CompUtils", "Accept": "application/vnd.github+json"})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode()).get("sha", "")
+    except (urllib.error.URLError, OSError, ValueError):
+        return ""
+
+
+def YmlFingerprint(data: bytes) -> str:
+    """The env file's git blob hash, the same as computils/environment.py's YmlFingerprint of its text."""
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def WriteRecord(prefix: Path, record: dict) -> None:
+    """Record in the environment which env file it was built from (with when)."""
+    target = prefix / RECORD
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(dict(record, installed=time.time()), indent=2))
 
 
 def PackageUrl() -> str:
@@ -227,15 +254,18 @@ def UseCondaForgeOnly(conda: Path) -> None:
     Run([conda, "config", "--set", "channel_priority", "strict"])
 
 
-def FetchYml(scratch: Path) -> Path:
-    """Download the branch's env file for this system into scratch (fresh every run, never kept)."""
+def FetchYml(scratch: Path):
+    """Download the branch's env file for this system into scratch (fresh every run, never kept): (its path, the commit
+    it was read at). It is read at the branch's latest commit when GitHub's API says which (a branch's raw files are
+    cached for up to 5 minutes after a push; a commit's never change), else from the branch ('' for the commit)."""
     target = scratch / YML_NAME
-    print(f"Downloading {YML_NAME} from branch '{BRANCH}'...")
+    commit = LatestCommit()
+    print(f"Downloading {YML_NAME} from branch '{BRANCH}'{' (commit ' + commit[:7] + ')' if commit else ''}...")
     try:
-        Download(YmlUrl(), target)
+        Download(YmlUrl(commit or BRANCH), target)
     except urllib.error.HTTPError as error:
         Fail(f"Couldn't download {YML_NAME} from branch '{BRANCH}' ({error.code} {error.reason}).")
-    return target
+    return target, commit
 
 
 def EnvExists(conda: Path, name: str) -> bool:
@@ -579,6 +609,9 @@ def Install(conda: Path, prefix: Path, args, state: State) -> None:
     commit = InstalledCommit(prefix)
     if commit:
         state.Set(codeCommit=commit)
+    # Only now, with the environment checked: what it was built from (a swap's clone carries it, and this runs again)
+    if args.record:
+        WriteRecord(prefix, json.loads(args.record))
 
 
 def SwapIn(conda: Path, prefix: Path, built: Path, args, state: State) -> None:
@@ -701,6 +734,7 @@ def ParseArgs():
     parser.add_argument("--package", help=hidden)
     parser.add_argument("--editable", action="store_true", help=hidden)
     parser.add_argument("--pythonpath", help=hidden)
+    parser.add_argument("--record", help=hidden)
     args = parser.parse_args()
     if args.background is not None and (args.mode is None or args.prefix is None or args.yml is None):
         parser.error("--background needs --mode, --prefix and --yml")
@@ -736,11 +770,18 @@ def Main() -> None:
             if args.conda_forge_only:
                 UseCondaForgeOnly(conda)
         with tempfile.TemporaryDirectory() as scratch:
-            name = BuildEnv(conda, args.yml or FetchYml(Path(scratch)))
+            yml, commit = (args.yml, "") if args.yml is not None else FetchYml(Path(scratch))
+            name = BuildEnv(conda, yml)
+            record = {"file": yml.name, "fingerprint": YmlFingerprint(yml.read_bytes()), "commit": commit,
+                      "branch": "" if args.yml is not None else BRANCH}
         InstallCompUtils(conda, name)
         if WINDOWS:
             launcher = WriteWindowsLauncher(conda, name)
         works = CheckInstall(conda, name, launcher)
+        prefix = EnvPrefix(conda, name)
+        if works and prefix is not None:
+            # What the environment was built from, so CompUtils (cu -env) knows when the branch's env file changes
+            WriteRecord(prefix, record)
         if not WINDOWS:
             RemoveLegacyCuAlias()
             AddAliases()

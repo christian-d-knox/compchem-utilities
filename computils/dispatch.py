@@ -611,8 +611,8 @@ def _DispatchEnvironment(intent: EnvironmentIntent) -> None:
         return
     status = environment.CheckStatus(variant)
     if intent.job == "refresh" and status.current:
-        console.print(f"[good]{escape(variant.name)} is up to date with {escape(variants.where)}'s "
-                      f"{escape(variant.file)}: nothing to refresh.[/good]")
+        console.print(f"[good]{escape(variant.name)} was built from {escape(variants.where)}'s current "
+                      f"{escape(variant.file)}: nothing to refresh (`cu -env rebuild` builds it afresh).[/good]")
         return
     if intent.job == "rebuild" and not AskBool(f"Rebuild {variant.name} from {variant.file}? Packages you added to it "
                                                f"yourself are not kept.", "n", key="env-rebuild"):
