@@ -11,9 +11,10 @@ This is the dev branch's installer: it installs CompUtils from the dev branch.
 It finds conda (or installs Miniconda to ~/miniconda3, set to use conda-forge
 only), builds or updates the environment from the branch's env file for this
 system (compUtils.yml on Linux, compUtilsWindows.yml on Windows), and installs
-CompUtils itself. Then, on Linux, it adds the 'con' alias that activates the
-environment; on Windows, it writes a 'cu' command (cu.cmd, on your user PATH)
-that runs CompUtils from its environment with no activating at all. It asks
+CompUtils itself, with its config folder (~/bin). Then, on Linux, it adds the
+'con' alias that activates the environment; on Windows, it writes a 'cu'
+command (cu.cmd, on your user PATH) that runs CompUtils from its environment
+with no activating at all. It asks
 nothing, and every step is safe to repeat, so a failed run is fixed by running
 it again.
 
@@ -79,6 +80,9 @@ YML_NAME = "compUtilsWindows.yml" if WINDOWS else "compUtils.yml"
 RECORD = Path("etc") / "computils-environment.json"
 # Windows: where the 'cu' command (cu.cmd) goes, a per-user programs folder added to the user's PATH
 LAUNCHER_DIR = Path(os.environ.get("LOCALAPPDATA") or str(HOME / "AppData" / "Local")) / "Programs" / "CompUtils"
+# CompUtils' config folder (computils/defaults.py: binDirectory). The first 'cu' run writes its config files there but
+# never creates the folder, so a home without one (any fresh Windows PC, some Linux accounts) has to get it here
+CONFIG_DIR = HOME / "bin"
 REPO_OWNER = "christian-d-knox"
 REPO_NAME = "compchem-utilities"
 # This is the dev branch's installer, so it installs dev (main's installer installs main)
@@ -115,6 +119,12 @@ def WriteRecord(prefix: Path, record: dict) -> None:
     target = prefix / RECORD
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(dict(record, installed=time.time()), indent=2))
+
+
+def MakeConfigFolder() -> None:
+    """Create CompUtils' config folder, so the first 'cu' run can write its config (an existing one is left alone)."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"✓ CompUtils' config folder: {CONFIG_DIR}")
 
 
 def PackageUrl() -> str:
@@ -775,6 +785,7 @@ def Main() -> None:
             record = {"file": yml.name, "fingerprint": YmlFingerprint(yml.read_bytes()), "commit": commit,
                       "branch": "" if args.yml is not None else BRANCH}
         InstallCompUtils(conda, name)
+        MakeConfigFolder()
         if WINDOWS:
             launcher = WriteWindowsLauncher(conda, name)
         works = CheckInstall(conda, name, launcher)
