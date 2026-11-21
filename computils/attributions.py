@@ -255,7 +255,8 @@ SECTIONS = [
                "GPL or commercial)", "https://www.qt.io/qt-for-python", distribution="shiboken6", via="PySide6"),
         Credit("Qt 6", "The framework PySide6 wraps.", "The Qt Company and the Qt Project", "LGPL-3.0-only (also GPL "
                "or commercial)", "https://www.qt.io", via="PySide6"),
-        Credit("RDKit", "Cheminformatics (planned): molecules from SMILES, conformers.", "Greg Landrum and the RDKit "
+        Credit("RDKit", "Molecules from SMILES: 3D starting geometries (RDKit conformers: ETKDG embedding, MMFF94/UFF "
+               "optimization).", "Greg Landrum and the RDKit "
                "contributors", "BSD-3-Clause", "https://www.rdkit.org", distribution="rdkit",
                copyright="Copyright (c) 2006-2015, Rational Discovery LLC, Greg Landrum, and Julie Penzotti and others",
                citation="RDKit: Open-source cheminformatics. https://www.rdkit.org (the RDKit has no paper; it also asks "

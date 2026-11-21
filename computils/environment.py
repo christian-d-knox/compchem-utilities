@@ -773,7 +773,8 @@ def SwapGuard(prefix: Path | None = None) -> Path:
 # ─── Self-test (python -m computils --self-test) ──────────────────────
 
 def SelfTest() -> int:
-    """Imports every CompUtils module and checks that GoodVibes runs: what proves an environment works (cu --help
+    """Imports every CompUtils module, RDKit (SMILES; imported only inside smiles.py's functions) and checks that GoodVibes
+    runs: what proves an environment works (cu --help
     imports almost nothing). Answered before any config is read, so nothing is written. Returns the exit code."""
     import importlib, pkgutil
     import computils
@@ -786,9 +787,13 @@ def SelfTest() -> int:
             importlib.import_module(name)
         except Exception as error:
             failures.append(f"{name}: {error!r}")
+    try:
+        importlib.import_module("rdkit.Chem.AllChem")
+    except Exception as error:
+        failures.append(f"rdkit: {error!r}")
     if shutil.which("goodvibes") is None:
         failures.append("goodvibes: not on PATH")
     for failure in failures:
         print(f"✗ {failure}")
-    print("✗ Self-test failed." if failures else f"✓ Self-test passed ({len(names)} modules, goodvibes).")
+    print("✗ Self-test failed." if failures else f"✓ Self-test passed ({len(names)} modules, rdkit, goodvibes).")
     return 1 if failures else 0

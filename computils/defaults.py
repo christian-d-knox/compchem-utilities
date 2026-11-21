@@ -161,6 +161,8 @@ class Defaults:
     autoNTS = False
     # How many times the Neva-Touch Scheduler re-runs any one stage of an opt that ran out of optimizer steps
     ntsReRunLimit = 5
+    # How many RDKit conformers a SMILES is built as (smiles.py): the lowest-energy one is used unless another is picked
+    rdkitConformers = 10
 
     # What files contain what keys
     _FILE_GROUPS: dict[str, list[str]] = {
@@ -194,7 +196,7 @@ class Defaults:
         ],
         "qol.toml": [
             "colorMode", "bareCommandOpensTUI", "trackedJobHours", "routeUnderEachMethod", "autoNTS",
-            "ntsReRunLimit",
+            "ntsReRunLimit", "rdkitConformers",
         ]
     }
 
@@ -273,6 +275,8 @@ class Defaults:
             " ends normally, its single point (Benchmark Methods entry 0) is submitted automatically.",
         "ntsReRunLimit": "How many times the Neva-Touch Scheduler re-runs any one stage of an optimization that ran out of"
             " optimizer steps (from its last geometry) before it stops the chain.",
+        "rdkitConformers": "How many RDKit conformers a SMILES is built as (ETKDG, then MMFF94): the lowest-energy one is"
+            " used unless another is picked.",
     }
 
     # Expected Python type for each config key, used by _CoerceValue to validate values loaded from user-editable TOML.

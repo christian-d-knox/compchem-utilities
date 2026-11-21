@@ -1,5 +1,6 @@
 """Input Builders (Home's Input Builders list): screens that build a new input and submit it. The Optimization builder
-(TUI_DESIGN.md 4.11) is two steps: Coordinates (an .xyz, a prior job's geometry, or pasted rows), then the Job, its
+(TUI_DESIGN.md 4.11) is two steps: Coordinates (an .xyz, a prior job's geometry, pasted rows, or a SMILES' RDKit
+conformer), then the Job, its
 settings beside an editable preview of the input. The saved input is submitted the way Run as Written submits one."""
 import copy
 from pathlib import Path
@@ -12,7 +13,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.screen import Screen
-from textual.widgets import DataTable, OptionList, Static, TextArea
+from textual.widgets import DataTable, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 from textual.worker import get_current_worker
 
@@ -23,9 +24,11 @@ from ..fileops  import (ExtractFrom, ExtractFromText, ExtractXyz, InputRoutes, J
                         fileCreation)
 from ..jobs     import HeaderSends, OptMethods
 from ..molecule import Molecule
+from ..smiles   import Available as RDKitAvailable
 from ..optimize import (FROM_SOURCE as FROM_SOURCE_KEY, COORDINATES_MARKER, ModRedCheck, ModRedStages, MethodChoices,
                         MethodProblems, CustomMethod, StartingSpin, SinglePointChoices, SinglePointStep, SplitStages,
                         JoinStages, OptimizationJob)
+from .fromsmiles import BUILDING, ConformerCount, ConformerTable, Indented, SmilesBuilder, StructureLines
 from .common    import (NAV_BINDINGS, NUMBER, TEXT, Column, FrameRule, KeyHint, NavFooter, Notice, Popup, Setting, SettingsList,
                         ValueInput)
 from .home      import TitleLine
@@ -153,12 +156,16 @@ class LeaveText(TextArea):
 # ─── Step 1: Coordinates ──────────────────────────────────────────────
 
 def SourceSettings() -> list[Setting]:
-    """Where the coordinates come from. SMILES waits for RDKit (TUI_DESIGN 4.11)."""
+    """Where the coordinates come from. A SMILES is built by RDKit (smiles.py: the lowest-energy of its RDKit Conformers,
+    unless another is picked), greyed with why where RDKit isn't installed."""
+    missing = RDKitAvailable()
     return [
         Setting("xyz", "", fixed="XYZ File", on=True, choice="source"),
         Setting("prior", "", fixed="Prior Job", on=False, choice="source"),
         Setting("paste", "", fixed="Paste", on=False, choice="source"),
-        Setting("smiles", "", "Needs RDKit (Coming Later)", fixed="SMILES", on=False, choice="source", available=False),
+        Setting("smiles", "", missing, fixed="SMILES", on=False, choice="source", available=not missing),
+        Setting("rdkit-conformers", "RDKit Conformers", value=str(Defaults.rdkitConformers), accepts=r"\d",
+                under="smiles", available=not missing),
     ]
 
 
@@ -177,13 +184,21 @@ class SourceList(SettingsList):
             self.screen.EnterSource()
 
 
+class SmilesBox(Input):
+    """The SMILES, typed: its RDKit conformers are built after a pause. esc returns to the Source; ⏎ continues."""
+    BINDINGS = [Binding("escape", "screen.leave_text", "Done"), Binding("enter", "screen.continue", "Continue")]
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(placeholder="A SMILES, e.g. CC(=O)OC1CCCC1", compact=True, **kwargs)
+
+
 class SourceFiles(OptionList):
     # The highlighted file is the one read; ⏎ continues with it, as from every field, and ␣ (choosing it) does too
     BINDINGS = [Binding("enter", "screen.continue", "Continue"),
                 Binding("space", "screen.continue", "Continue", show=False)]
 
 
-class CoordinatesScreen(Screen):
+class CoordinatesScreen(SmilesBuilder, Screen):
     AUTO_FOCUS = "#settings .-current"
     BINDINGS = [
         Binding("escape", "back", "Home"),
@@ -202,6 +217,8 @@ class CoordinatesScreen(Screen):
         self.reason = ""
         self.readPath: Path | None = None
         self._readTimer = None
+        # The SMILES source: the RDKit conformer in use (1 = the lowest energy), for the build last shown
+        self.rank, self._shownBuild = 1, None
 
     def compose(self) -> ComposeResult:
         yield Static(TitleLine("Optimization: Coordinates"), id="title")
@@ -213,6 +230,8 @@ class CoordinatesScreen(Screen):
             with Vertical(id="inputs-right"):
                 yield SourceFiles(id="source-files")
                 yield LeaveText(id="paste", soft_wrap=False)
+                yield SmilesBox(id="smiles-box")
+                yield ConformerTable(id="conformers", cursor_type="row", zebra_stripes=False)
         yield FrameRule("└┘", split=LEFT_WIDTH - 1, id="submit")
         yield NavFooter()
 
@@ -229,11 +248,16 @@ class CoordinatesScreen(Screen):
         """List the files the source reads (or show the paste box), and read the first."""
         source, top = self.source, self.query_one("#inputs-top", FrameRule)
         files, paste = self.query_one("#source-files", SourceFiles), self.query_one("#paste", LeaveText)
-        files.display, paste.display = source != "paste", source == "paste"
+        files.display, paste.display = source not in ("paste", "smiles"), source == "paste"
+        self.query_one("#smiles-box").display = self.query_one("#conformers").display = source == "smiles"
         self.molecule, self.reason, self.readPath = None, "", None
         if source == "paste":
             top.label2 = Text.assemble("Paste Coordinates · ", KeyHint(self.app, "esc", "Done"))
             self.ReadPasted(paste.text)
+            return
+        if source == "smiles":
+            top.label2 = Text.assemble("SMILES · ", KeyHint(self.app, "esc", "Done"))
+            self.ReadSmiles()
             return
         extensions = ((Defaults.coordExtension,) if source == "xyz" else
                       (Defaults.gaussianExtension, Defaults.orcaExtension, *OutputExtensions()))
@@ -307,6 +331,24 @@ class CoordinatesScreen(Screen):
         self.molecule, self.reason = molecule, reason
         self.ShowStructure()
 
+    def ReadSmiles(self) -> None:
+        """Build the typed SMILES (unless it, and the count, are what was last built), then show what there is."""
+        count = self.query_one("#settings", SettingsList).Row("rdkit-conformers").value
+        self.ScheduleBuild(self.query_one("#smiles-box", SmilesBox).value.strip(), ConformerCount(count))
+        self.ShowBuild()
+
+    def ShowBuild(self) -> None:
+        # SmilesBuilder's: a build (or its problem) arrived, or the conformer in use changed. A new build starts at
+        # its lowest-energy conformer
+        build = None if self.smilesBuilding else self.smilesBuild
+        if build is not self._shownBuild:
+            self.rank, self._shownBuild = 1, build
+            self.query_one("#conformers", ConformerTable).Show(build, self.rank)
+        if self.source != "smiles":
+            return
+        self.molecule = build.Molecule("", self.rank) if build is not None else None
+        self.ShowStructure()
+
     def ReadPasted(self, text: str) -> None:
         coordinates = ExtractFromText(text, ExtractXyz, empty=[]) if text.strip() else []
         self.molecule = Molecule(Path(""), "", "0", "1", coordinates, "", "")
@@ -317,6 +359,24 @@ class CoordinatesScreen(Screen):
     def ShowStructure(self) -> None:
         source, molecule = self.source, self.molecule
         lines, problem = [Text("Structure", "bold")], ""
+        if source == "smiles":
+            lines.append(Text(" SMILES"))
+            if self.smilesBuilding:
+                lines.append(Text(f" {BUILDING}", "dim"))
+                problem = BUILDING
+            elif molecule is None:
+                problem = self.smilesProblem or "Enter a SMILES"
+                # In full here: the bottom edge cuts a long one (RDKit's valence messages)
+                lines += Indented([Styled(problem, "error")], LEFT_WIDTH - 3)
+            else:
+                lines += Indented(StructureLines(self.smilesBuild, self.rank), LEFT_WIDTH - 3)
+            self.query_one("#structure", Static).update(Text("\n").join([Text("")] + lines))
+            self.query_one("#submit", FrameRule).right = (
+                Styled(problem, "dim" if problem == BUILDING else "error") if problem
+                else Text.assemble(Styled(f"{len(molecule.coordinateList)} Atoms Built", "good"), " · ",
+                                   KeyHint(self.app, "⏎", "Continue")))
+            self.refresh_bindings()
+            return
         if source == "paste":
             lines.append(Text(" Pasted"))
         elif self.readPath is None:
@@ -360,6 +420,11 @@ class CoordinatesScreen(Screen):
         if self.source == "paste":
             self.ReadPasted(event.text_area.text)
 
+    def on_input_changed(self, event: Input.Changed) -> None:
+        # The SMILES, or the RDKit Conformers count (typing it chooses SMILES: its Changed message rebuilds too)
+        if self.source == "smiles":
+            self.ReadSmiles()
+
     # ─── Actions ──────────────────────────────────────────────────────
 
     def OnSource(self) -> bool:
@@ -370,9 +435,11 @@ class CoordinatesScreen(Screen):
         return None if action == "continue" and not (self.Ready() or self.OnSource()) else True
 
     def EnterSource(self) -> None:
-        """Move on to the chosen source's files, or into the paste box."""
+        """Move on to the chosen source's files, or into the paste box (the SMILES box)."""
         if self.source == "paste":
             self.query_one("#paste", LeaveText).focus()
+        elif self.source == "smiles":
+            self.query_one("#smiles-box", SmilesBox).focus()
         elif self.paths:
             self.query_one("#source-files", SourceFiles).focus()
         else:
@@ -381,13 +448,22 @@ class CoordinatesScreen(Screen):
     def action_continue(self) -> None:
         # ⏎ moves forward: from the Source to its files (or the paste box), from a file to the Job. The paste box takes
         # ⏎ as a newline, so once coordinates are pasted (esc out of it), ⏎ on the Source continues
-        if self.OnSource() and not (self.source == "paste" and self.Ready()):
+        if self.OnSource() and not (self.source in ("paste", "smiles") and self.Ready()):
             self.EnterSource()
             return
         if not self.Ready():
             self.app.bell()
             return
         self.app.push_screen(OptimizationScreen(self.molecule, self.reason, self.source == "prior"))
+
+    def action_pick_conformer(self) -> None:
+        """␣ on an RDKit conformer: use it (the lowest-energy one is used until another is picked)."""
+        table = self.query_one("#conformers", ConformerTable)
+        if self.smilesBuild is None or not table.row_count:
+            return
+        self.rank = table.cursor_row + 1
+        table.Show(self.smilesBuild, self.rank)
+        self.ShowBuild()
 
     def action_leave_text(self) -> None:
         self.query_one("#settings", SourceList).current.target.focus()
@@ -403,6 +479,8 @@ class CoordinatesScreen(Screen):
             "space / enter on a Source: Choose It and Go to Its Files (or the Paste Box)",
             "space / enter on a File: Continue to the Job Settings With It",
             "Paste: Rows of Symbol x y z (Count and Comment Lines Optional; the Last Block Is Used)",
+            "SMILES: Built by RDKit as RDKit Conformers (Count Under It; qol.toml rdkitConformers), the Lowest Energy "
+            "Used; space on Another Uses That One. Charge and Multiplicity Come From the SMILES",
             "esc in the Paste Box Return to the Source, Where enter Continues",
             "esc Back to Home", "ctrl+q Quit"]))
 
@@ -583,7 +661,10 @@ class OptimizationScreen(Screen):
 
     def compose(self) -> ComposeResult:
         atoms = len(self.molecule.coordinateList)
-        origin = f"{self.source.name if self.source else self.molecule.sourcePath.name or 'Pasted'} ({atoms} Atoms)"
+        conformer = self.molecule.conformer
+        named = (self.source.name if self.source else conformer.Label(forceField=False) if conformer
+                 else self.molecule.sourcePath.name)
+        origin = f"{named or 'Pasted'} ({atoms} Atoms)"
         yield Static(TitleLine("Optimization: Job", Text(origin)), id="title")
         yield StepRule("┌┐", STEP_TITLES[OPT_STEP], split=LEFT_WIDTH - 1, id="inputs-top")
         with Horizontal(id="inputs-body"):

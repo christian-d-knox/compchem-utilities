@@ -119,6 +119,9 @@ class CompUtilsApp(App):
     #source-files, #source-files:focus { height: 1fr; border: none; }
     /* :focus too, or TextArea's own focus border (more specific) comes back */
     #paste, #paste:focus, #input-preview, #input-preview:focus { height: 1fr; border: none; padding: 0 1; }
+    #smiles-box, #smiles-box:focus { border: none; padding: 0 1; }
+    #conformers, #conformers:focus { height: 1fr; border: none; border-top: solid $secondary; border-title-align: left;
+                                     padding: 0 1; }
     /* The Optimization builder's Stages view: the stage table as tall as its rows (up to 10), then the highlighted
        stage's Renders As under a titled rule (as the TextEditor's Check and Example), taking the rest and scrolling */
     #stage-table, #stage-table:focus { height: auto; max-height: 10; border: none; padding: 0 1; }
@@ -198,8 +201,9 @@ class CompUtilsApp(App):
     def WriteXyz(self, intent: Intent) -> None:
         """Write XYZ, run in the app (it reads and writes a few files); what it wrote shows in a Results pop-up, then
         Home re-lists its files."""
-        count = len(intent.files)
-        self.RunInApp(intent, ("Write XYZ", f"Writing {count} XYZ File{'s' if count != 1 else ''}..."),
+        count = len(intent.files) or 1
+        what = "RDKit Conformers..." if intent.smiles else f"{count} XYZ File{'s' if count != 1 else ''}..."
+        self.RunInApp(intent, ("Write XYZ", f"Building {what}" if intent.smiles else f"Writing {what}"),
                       lambda tracked, log: self.push_screen(
                           Popup("XYZ Files Written", log, cancel="Home", ok="Home"),
                           lambda _: self._AfterResults("home")))

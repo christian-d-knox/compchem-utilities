@@ -62,24 +62,32 @@ COMMANDS = [
                  "What outputs and inputs say: status, charge/multiplicity, spin, route, energy, H/G corrections, "
                  "imaginary frequencies, convergence, stability, <S**2>. Read once each: never read a .out yourself.",
                  "-info '*.out' --json", "One record per file (info.FileFacts); next: cu -re / cu -sp suggestions."),
-    AgentCommand("xyz", ("xyz",), Action.XYZ,
+    AgentCommand("xyz", ("xyz", "smiles", "rdkit_conformers", "rdkit_conformer"), Action.XYZ,
                  "Write each file's last geometry (an output's; an input's own; Gaussian or ORCA) as NAME.xyz here, "
-                 "e.g. for figures or another program.",
-                 "-xyz 8a.out TS1.out --json", "written: the .xyz files.", tui=(f"action-{Action.XYZ.value}",)),
+                 "e.g. for figures or another program. Or a SMILES' 3D geometry: -xyz --smiles 'SMILES' --name NAME "
+                 "(RDKit conformers, the lowest energy unless --rdkit-conformer RANK; the comment line names it).",
+                 "-xyz --smiles 'CC(=O)OC1CCCC1' --name cpa --json",
+                 "written: the .xyz files; with --smiles, results[0]: atoms, charge, multiplicity, rdkitConformer "
+                 "and each RDKit conformer's rank and deltaE (kcal/mol).",
+                 ("replace-xyz",), (f"action-{Action.XYZ.value}",)),
     AgentCommand("methods", ("methods",), Action.METHODS,
                  "The Optimization and Benchmark Methods in force here (project, else global): pick -opt's --method "
                  "from these. They differ per project: list them in each folder.",
                  "-methods --json", "One record per section: its level and each method's name, route, program, problem."),
     AgentCommand("opt", ("optimize", "method", "route", "charge", "mult", "spin", "name", "cpus", "memory", "modred",
                          "then_sp", "sp_cpus", "sp_memory", "sp_method", "sp_route", "sp_wall_time", "sp_partition",
-                         "sp_cluster", "sp_nbo", "sp_checkpoint"), Action.OPTIMIZE,
-                 "Write and submit an optimization of ONE molecule (an .xyz, or a prior input/output), as the TUI's "
-                 "Optimization builder does; --then-sp has the Neva-Touch Scheduler submit its single point when it "
+                         "sp_cluster", "sp_nbo", "sp_checkpoint", "smiles", "rdkit_conformers", "rdkit_conformer"),
+                 Action.OPTIMIZE,
+                 "Write and submit an optimization of ONE molecule (an .xyz, a prior input/output, or --smiles 'SMILES' "
+                 "--name NAME in place of the file: RDKit builds its 3D geometry, the lowest-energy RDKit conformer "
+                 "unless --rdkit-conformer RANK, its charge and multiplicity from the SMILES unless given), as the "
+                 "TUI's Optimization builder does; --then-sp has the Neva-Touch Scheduler submit its single point when it "
                  "ends (and re-run a stage that ran out of optimizer steps). The SP: --sp-method NAME (a Benchmark "
                  "Methods entry, cu -methods; default the first) or --sp-route, and its own --sp-* resources; its "
                  "partition and cluster follow the optimization's unless given. The chain is written to NAME.chain.json.",
                  "-opt 8a.xyz --method wb97xd --charge 0 --mult 1 --then-sp --dry-run --json",
-                 "The input written, its method, charge, multiplicity, spin, resources and scheduled SP; submitted[].",
+                 "The input written, its method, charge, multiplicity, spin, resources and scheduled SP (with "
+                 "--smiles: rdkitConformer and each RDKit conformer's rank and deltaE); submitted[].",
                  ("method", "charge", "mult", "replace-input"), ("builder-opt",)),
     AgentCommand("sp", ("singlePoint",), Action.SINGLE_POINT,
                  "Write and submit each output's single point (Benchmark Methods' first entry; -ovr N picks another, "
