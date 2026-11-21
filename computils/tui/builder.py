@@ -14,7 +14,7 @@ from ..analysis import (ALLOW_ALL, CHECK_CATEGORIES, DEFAULT_CONCENTRATION, DEFA
 from ..catalog  import Catalog
 from ..defaults import Defaults
 from ..intent   import IntentDraft
-from .common    import (NAME, NAV_BINDINGS, TEXT, FrameRule, KeyHint, NavFooter, Notice, OptionRow, Setting,
+from .common    import (NAME, NAV_BINDINGS, TEXT, Column, FrameRule, KeyHint, NavFooter, Notice, OptionRow, Setting,
                         SettingsList)
 from .home      import ACTION_LABELS, TitleLine
 from .inspect   import MethodIndices, PreviewMolecule, PreviewRowFor, ProgramName, RowText, Styled
@@ -117,7 +117,7 @@ class BuilderScreen(Screen):
         # One framed form (P2): Files on the top edge, a titled rule per section, Submit on the bottom edge
         yield Static(TitleLine(ACTION_LABELS[self.action]), id="title")
         yield FrameRule("┌┐", Text.assemble(f"Files ({len(self.files)}) · ", KeyHint(self.app, "esc", "Change")))
-        with VerticalScroll(id="form"):
+        with Column(id="form"):
             yield FilesPane(NameList(self.files), id="files-summary", classes="side")
             if self.action == Action.GOODVIBES:
                 yield FrameRule("├┤", Text.assemble("Settings · ", KeyHint(self.app, "␣", "On/Off or Select"), " · ",

@@ -11,14 +11,14 @@ from pathlib import Path
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import DataTable, Static
 
 from ..defaults import Defaults
 from ..stalk    import (AWAITING_PING, LoadTracked, HasLiveJobs, PollQueue, DismissJobs, HeadLine, ProgressLines,
                         StagePosition, TrackedJob)
-from .common    import NAV_BINDINGS, NavFooter, Notice, Popup
+from .common    import NAV_BINDINGS, Column, NavFooter, Notice, Popup
 from .home      import ShortPath, TitleLine
 from .inspect   import Styled
 
@@ -151,7 +151,7 @@ class StalkerScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Static(id="title")
         with Horizontal(id="stalker-body"):
-            with VerticalScroll(id="stalker-left"):
+            with Column(id="stalker-left"):
                 for groupId, title, columns in GROUPS:
                     with Vertical(id=f"{groupId}-pane", classes="pane state-pane"):
                         table = StateTable(id=groupId, cursor_type="row", zebra_stripes=False)
