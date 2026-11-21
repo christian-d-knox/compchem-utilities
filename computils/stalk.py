@@ -6,17 +6,18 @@ Outputs are read the bookmarked way: a termination line is a bookmark. Reporting
 it is searched backwards from EOF and never further back than the latest bookmark; reading forward only happens at a
 step's start, to learn what that step reports (its route)."""
 import copy, json, os, subprocess, sys, time
-from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict, fields
 from pathlib import Path
 
 from .actions  import NTS_SP, NTS_DONE
 from .console  import console
+from .datafile import RecordEndings
 from .defaults import Defaults, BackUpFile
 from .notify   import NotifyPersonal
-from .fileops  import (MapFile, HasContent, FindTermination, TerminationVariant, IsInternalStep, ExtractStability,
-                       ExtractConvergence, ExtractOutOfSteps, ExtractRouteEcho, ExtractOrcaInput, OrcaRouteLine,
-                       JobChecks)
+from .fileops  import (FileLock, MapFile, HasContent, FindTermination, TerminationVariant, IsInternalStep,
+                       ExtractStability, ExtractConvergence, ExtractOutOfSteps, ExtractRouteEcho, ExtractOrcaInput,
+                       OrcaRouteLine, JobChecks, CREST_PROGRAM)
+from .crest    import CONFORMER_SEARCH
 
 TRACKED_FILE = "tracked-jobs.json"
 # JOBID|JOBNAME|STATE|START_TIME|CURRENT_DURATION for each of the user's jobs. '|'-separated and unpadded, so long job
@@ -51,6 +52,7 @@ class Stage:
     stable:      bool | None      = None
     planned:     str              = ""      # what the input's route for it runs (JobChecks.kinds), from submission
     outOfSteps:  bool             = False   # its optimization ran out of optimizer steps (read once the step ends)
+    report:      str              = ""      # a program's own report (CREST: its phase, then the ensemble it kept)
 
 
 @dataclass
@@ -93,6 +95,9 @@ class TrackedJob:
     stepStage:     int       = 0       # a stage that ran out of steps: the one re-run (or given up on)
     stepCount:     int       = 0       # ...and which re-run of that stage this was (over ntsReRunLimit: given up)
     fallbackTried: bool      = False   # a stalker has taken the step (once only)
+    # A CREST job running CompUtils' environment's crest: that environment's prefix, so an environment swap waits for it
+    # (conda-installer.py: a compute node's process is invisible to the login node's process check)
+    runsFrom:      str       = ""
 
     @property
     def key(self) -> str:
@@ -163,36 +168,9 @@ def HasLiveJobs() -> bool:
     return any(Watched(job) for job in LoadTracked())
 
 # The store is shared by every CompUtils run at once: a CLI stalker, the TUI, and a job's Neva-Touch Scheduler hook on
-# a compute node. Each read-merge-write holds a lock file. O_EXCL creation works across machines on a shared
-# filesystem, where flock may not; a lock older than LOCK_STALE seconds was left by a run that died, and is taken over
-LOCK_STALE, LOCK_WAIT = 60, 30
-
-@contextmanager
+# a compute node. Each read-merge-write holds its lock file (fileops.FileLock)
 def _StoreLock():
-    lock = _StorePath().with_name(TRACKED_FILE + ".lock")
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    deadline, owned = time.monotonic() + LOCK_WAIT, False
-    while not owned:
-        try:
-            os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
-            owned = True
-        except FileExistsError:
-            try:
-                if time.time() - lock.stat().st_mtime > LOCK_STALE:
-                    lock.unlink(missing_ok=True)
-                    continue
-            except FileNotFoundError:
-                continue
-            if time.monotonic() > deadline:
-                # Never block for good: writing unlocked is how the store was written before the lock
-                console.print(f"[warning]{lock} has been held for {LOCK_WAIT} seconds; writing without it.[/warning]")
-                break
-            time.sleep(0.05)
-    try:
-        yield
-    finally:
-        if owned:
-            lock.unlink(missing_ok=True)
+    return FileLock(_StorePath().with_name(TRACKED_FILE + ".lock"))
 
 def _WriteStore(stored: dict[str, TrackedJob]) -> None:
     path = _StorePath()
@@ -302,6 +280,12 @@ def _ReadQueue(jobs: list[TrackedJob]) -> dict[tuple[str, str], list[str]] | Non
 def _ReadStep(job: TrackedJob, data) -> bool:
     """Reads forward from the bookmark to the current step's route, and so what it reports. False if it isn't
     written yet."""
+    if job.program == CREST_PROGRAM:
+        # One step, whose report is CREST's own (crest.ProgressReport)
+        stage = job.stages[job.stage]
+        stage.status, stage.label, stage.reports = IN_PROGRESS, CONFORMER_SEARCH, True
+        job.stepRead, job.stepOptimizes, job.stepStability = True, False, False
+        return True
     if job.program == Defaults.orcaExtension:
         inputText = ExtractOrcaInput(data)
         route = OrcaRouteLine(inputText)
@@ -321,6 +305,10 @@ def _ReadStep(job: TrackedJob, data) -> bool:
 def _ReadReports(job: TrackedJob, data, end: int | None = None) -> None:
     """The current step's reporting data: backwards from end (EOF, or a termination line), never past the bookmark."""
     stage = job.stages[job.stage]
+    if job.program == CREST_PROGRAM:
+        from .crest import ProgressReport
+        stage.report = ProgressReport(data, job.bookmark, end) or stage.report
+        return
     if job.stepOptimizes:
         convergence = ExtractConvergence(data, job.bookmark, end)
         if convergence is not None:
@@ -426,6 +414,7 @@ def PollQueue(jobs: list[TrackedJob]) -> list[TrackedJob] | None:
             endedNow.append(job)
     _FireFallbacks(leftNow)
     NotifyEndings(endedNow)
+    RecordEndings(endedNow)
     _SaveStore(jobs)
     return endedNow
 
@@ -447,6 +436,7 @@ def CheckTracked() -> None:
             _ReadProgress(job, final=True)
     _FireFallbacks(gone)
     NotifyEndings(gone, caughtUp=True)
+    RecordEndings(gone)
     if gone:
         _SaveStore(gone)
 
@@ -527,8 +517,10 @@ def EndingMessage(job: TrackedJob, termination: str | None = None) -> str:
     termination = job.termination if termination is None else termination
     head = (f"Job {job.name}{_OnLocation(job)} has finished via {EndingPhrase(termination)}." if termination
             else f"Job {job.name}{_OnLocation(job)} left the queue without a termination line.")
+    # A program's own report of its ending (CREST: the conformers it kept)
+    report = job.stages[job.stage].report if termination and job.program == CREST_PROGRAM else ""
     note = NevaTouchNote(job, termination)
-    return f"{head} {note}" if note else head
+    return " ".join(part for part in (head, report, note) if part)
 
 def NotifyEndings(jobs: list[TrackedJob], caughtUp: bool = False) -> None:
     """One Telegram message for every job here not yet notified (split only at Telegram's length limit). A single
@@ -572,6 +564,8 @@ def _StageReport(stage: Stage) -> list[str]:
         lines.append("The wave function has stabilized." if stage.stable else "The wave function has not stabilized.")
     if stage.outOfSteps:
         lines.append("Ran out of optimizer steps.")
+    if stage.report:
+        lines.append(stage.report)
     if not lines and stage.status in (IN_PROGRESS, COMPLETE) and stage.label and not stage.reports:
         lines.append("No reporting criteria.")
     return lines
@@ -657,7 +651,8 @@ def JobRecord(job: TrackedJob) -> dict:
                   ("number", number), ("status", stage.status), ("planned", stage.planned), ("step", stage.label),
                   ("convergence", {"met": stage.convergence[0], "total": stage.convergence[1]}
                                   if stage.convergence is not None else None),
-                  ("stable", stage.stable), ("outOfSteps", stage.outOfSteps or None)) if value not in ("", None)}
+                  ("stable", stage.stable), ("outOfSteps", stage.outOfSteps or None), ("report", stage.report))
+                  if value not in ("", None)}
                          for number, stage in enumerate(job.stages, job.firstStage)],
               "nevaTouch": NevaTouchLine(job) if job.nevaTouch else "", "nextJob": job.nextJob}
     return {key: value for key, value in record.items() if value not in ("", None, [])}

@@ -80,16 +80,20 @@ def FileDetails(path: Path) -> dict[str, str]:
     if "stages" in facts:
         details["Stages"] = f"{len(facts['stages'])} ({' → '.join(facts['stages'])})"
     if "multiplicity" in facts:
-        details["Charge"], details["Mult"] = str(facts["charge"]), str(facts["multiplicity"])
-        details["Spin"] = f"{facts['spin']} ({facts['spinReason']})"
+        details["Charge"], details["Mult"] = str(facts.get("charge", "—")), str(facts["multiplicity"])
+        # A CREST output has no spin classification (xTB has no broken-symmetry singlets)
+        if "spin" in facts:
+            details["Spin"] = f"{facts['spin']} ({facts['spinReason']})"
     method, basis = facts.get("method", ""), facts.get("basis", "")
     if method:
         details["Method"] = f"{method}/{basis}" if basis else method
     # The program that wrote the file; for a file of neither program's, the one its method runs in
     details["Program"] = facts.get("program") or (ProgramName(method) if method else "") or "—"
-    details["Keys"] = facts.get("keys") or "—"
+    # A CREST output's options (its level, solvation and thresholds) stand where a route's keywords do
+    details["Keys"] = facts.get("keys") or facts.get("options") or "—"
     if "cpus" in facts:
-        details["CPU"], details["Mem"] = str(facts["cpus"]), f"{facts['memoryGB']} GB"
+        details["CPU"] = str(facts["cpus"])
+        details["Mem"] = f"{facts['memoryGB']} GB" if "memoryGB" in facts else "—"
     return details
 
 

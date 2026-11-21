@@ -1,9 +1,10 @@
 import time, regex
+from pathlib import Path
 
 from .console  import console
 from .defaults import Defaults
 from .catalog  import Catalog, ParseRouteTemplate
-from .fileops import fileCreation, IncrementSuffix, Retarget, ReRunTemplate
+from .fileops import fileCreation, ReRunNameIn, Retarget, ReRunTemplate
 from .actions  import CubeOption
 from .intent import JobIntent, BenchmarkIntent, ReRunIntent, CubeIntent
 from .jobs     import genFile, runJob, slurmHandler, SubmitJob, DRY_RUN
@@ -23,8 +24,9 @@ def BenchmarkName(molecule: Molecule, index: int, template) -> str:
     return f"{molecule.rootName}-{index}-{methodName}{'SMD' if isSMD else ''}{Defaults.singlePointExtra}"
 
 def ReRunName(molecule: Molecule) -> str:
-    """A re-run's job name: 8a -> 8a_re, and a re-run of a re-run increments (8a_re -> 8a_re2, never 8a_re_re)."""
-    return IncrementSuffix(molecule.baseName, Defaults.reRunExtra)
+    """A re-run's job name: 8a -> 8a_re, a re-run of a re-run increments (8a_re -> 8a_re2, never 8a_re_re), past any
+    name that already has an output beside the source (fileops.ReRunNameIn)."""
+    return ReRunNameIn(molecule.baseName, Path(molecule.sourcePath or molecule.fullPath).parent)
 
 # Also runs the first job of a benchmark, which passes its BenchmarkIntent (same fields)
 def genSinglePoint(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
@@ -98,12 +100,19 @@ def gimmeCubes(molecule: Molecule, intent: CubeIntent) -> None:
 
 # Because jobs don't always work the first time
 def genReRun(molecule: Molecule, intent: ReRunIntent, trackedJobs: list) -> None:
-    template, problem = ReRunTemplate(molecule)
-    if template is None:
-        agent.Skip(molecule.baseName, problem)
-        return
-    # The program was set by ReRunTemplate, which a verbatim route's first token may not name
-    Retarget(molecule, ReRunName(molecule), template, molecule.extensionType)
+    """A re-run from the job's last geometry, named as a re-run (8a_re), so it feeds the species' data file as its next
+    attempt: with the route it ran (ReRunTemplate), or a corrected one (intent.route: --route, or --method's
+    Optimization Method; its program from its method, as -sp's)."""
+    if intent.route:
+        template = ParseRouteTemplate(intent.route)
+        Retarget(molecule, ReRunName(molecule), template)
+    else:
+        template, problem = ReRunTemplate(molecule)
+        if template is None:
+            agent.Skip(molecule.baseName, problem)
+            return
+        # The program was set by ReRunTemplate, which a verbatim route's first token may not name
+        Retarget(molecule, ReRunName(molecule), template, molecule.extensionType)
 
     # Calls the separate file generation method, feeds directly into runJob. Skip this job if generation failed
     if genFile(molecule, intent):

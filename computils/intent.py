@@ -109,11 +109,17 @@ class BenchmarkIntent(JobIntent):
 
 @dataclass
 class ReRunIntent(JobIntent):
-    """`cu -re <pattern>` — regenerate failed-job input, then submit.
+    """`cu -re <pattern>` — re-run a job from its last geometry, named as a re-run (8a_re), then submit.
 
-    Method detection is now automatic via ExtractRouteLine + IdentifyMethod. thenSP: --then-sp's next job for each
-    re-run that optimizes (None: none)."""
-    thenSP: Optional[ThenSP] = None
+    route None: the route it ran (ReRunTemplate, method detection automatic); else a corrected route (--route, or
+    --method's Optimization Method, resolved by Finalize). thenSP: --then-sp's next job for each re-run that optimizes
+    (None: none). A CREST output's re-run (crest.py) takes method as a Conformer Search Methods name, route as its
+    options, and constrain/forceConstant as its constraints (None: the ones it ran with)."""
+    route:         Optional[str]    = None
+    thenSP:        Optional[ThenSP] = None
+    method:        Optional[str]    = None
+    constrain:     Optional[str]    = None
+    forceConstant: Optional[float]  = None
 
 
 @dataclass
@@ -317,6 +323,36 @@ class XyzIntent(Intent):
 
 
 @dataclass
+class CrestIntent(Intent):
+    """`cu -crest FILE...` — a CREST conformer search of each molecule (crest.py), as the TUI's Conformer Search builder
+    submits one: from an .xyz, a prior input or output (its last geometry), or a SMILES (smiles: an RDKit conformer,
+    files empty). method: a Conformer Search Methods entry by name (asked when neither it nor route is given); route:
+    CREST's options typed in full. charge/multiplicity None: the source's, else asked. name: the species (the job is
+    NAME_CREST; default the file's). constrain: constraint lines ('B 12 15;B 15 21'); forceConstant None: 1.0.
+    cpus/memoryRatio None: the config's; wallTime/partition/cluster None: the config's. job: a crest.CrestJob the TUI's
+    Conformer Search screen built from its settings (any source, pasted rows too): checked and submitted as it is."""
+    files:           list[Path]
+    smiles:          Optional[str]   = None
+    rdkitConformers: Optional[int]   = None
+    rdkitConformer:  int             = 1
+    method:          Optional[str]   = None
+    route:           Optional[str]   = None
+    charge:          Optional[int]   = None
+    multiplicity:    Optional[int]   = None
+    name:            Optional[str]   = None
+    constrain:       Optional[str]   = None
+    forceConstant:   Optional[float] = None
+    cpus:            Optional[int]   = None
+    memoryRatio:     Optional[float] = None
+    wallTime:        Optional[str]   = None
+    partition:       Optional[str]   = None
+    cluster:         Optional[str]   = None
+    stalk:           bool            = False
+    stalkLoop:       bool            = False
+    job:             object          = None
+
+
+@dataclass
 class InfoIntent(Intent):
     """`cu -info FILE...` — what each file says (info.FileFacts: one map each), read-only."""
     files: list[Path]
@@ -382,8 +418,10 @@ class IntentDraft:
     partition:       Optional[str]   = None
     cluster:         Optional[str]   = None
     chain:           Optional[str]   = None
-    # SP: a method entry as written instead of Benchmark Methods' (--route with -sp)
+    # SP: a method entry as written instead of Benchmark Methods' (--route with -sp); -re: a corrected route
     route:           Optional[str]   = None
+    # -re: an Optimization Method by name for the corrected route (--method with -re)
+    reRunMethod:     Optional[str]   = None
 
     # CUBE
     cubeOptions:  list[CubeOption] = field(default_factory=list)
@@ -441,6 +479,11 @@ class IntentDraft:
     rdkitConformers: Optional[int]   = None
     rdkitConformer:  Optional[int]   = None
 
+    # CREST (and -re on a CREST output): its constraint lines and force constant. Its method, route, charge,
+    # multiplicity and name are -opt's fields below (the same flags)
+    crestConstrain:     Optional[str]   = None
+    crestForceConstant: Optional[float] = None
+
     # OPTIMIZE (files[0] is the source; cpus/memoryRatio/checkpoint are shared with the job actions)
     optMethod:       Optional[str]   = None
     optRoute:        Optional[str]   = None
@@ -472,10 +515,10 @@ class IntentDraft:
             errors.append("No matching files for the given pattern.")
 
         if self.smiles is not None:
-            if self.action not in (Action.OPTIMIZE, Action.XYZ):
-                errors.append("--smiles goes with -opt or -xyz.")
+            if self.action not in (Action.OPTIMIZE, Action.XYZ, Action.CREST):
+                errors.append("--smiles goes with -opt, -xyz or -crest.")
             elif self.files:
-                errors.append(f"-{'opt' if self.action == Action.OPTIMIZE else 'xyz'} takes files or --smiles, not both.")
+                errors.append(f"-{self.action.value} takes files or --smiles, not both.")
             elif not self.smiles.strip():
                 errors.append("--smiles is empty.")
             elif not self.optName:
@@ -501,14 +544,14 @@ class IntentDraft:
             errors.append(f"No lab profile file at {self.profileFile}.")
 
         if self.stalk and self.action not in (*JOB_ACTIONS, Action.STALK, Action.OPTIMIZE):
-            errors.append("-st follows submitted jobs: use it with -r, -sp, -b, -cu or -re, or on its own to stalk every "
-                          "tracked job.")
+            errors.append("-st follows submitted jobs: use it with -r, -sp, -b, -cu, -re, -opt or -crest, or on its own "
+                          "to stalk every tracked job.")
 
         slurm = {"--wall-time": self.wallTime, "--partition": self.partition, "--cluster": self.cluster}
         given = [flag for flag, value in slurm.items() if value is not None]
         if given and self.action not in (*JOB_ACTIONS, Action.OPTIMIZE, Action.NEVA_TOUCH):
             errors.append(f"{', '.join(given)} {'go' if len(given) > 1 else 'goes'} with a job command (-r, -sp, -b, "
-                          "-cu, -re or -opt).")
+                          "-cu, -re, -opt or -crest).")
         if self.wallTime is not None and not (self.wallTime.isdigit() and int(self.wallTime) > 0):
             errors.append(f"--wall-time takes whole hours above 0 (got '{self.wallTime}').")
         for flag in ("--partition", "--cluster"):
@@ -530,16 +573,44 @@ class IntentDraft:
         if self.action == Action.ENVIRONMENT and self.environmentJob not in ("", "refresh", "rebuild", "install"):
             errors.append(f"-env takes refresh, rebuild or install, then an environment (got '{self.environmentJob}').")
 
-        generates = (Action.SINGLE_POINT, Action.BENCHMARK, Action.RERUN, Action.OPTIMIZE, Action.NEVA_TOUCH)
+        generates = (Action.SINGLE_POINT, Action.BENCHMARK, Action.RERUN, Action.OPTIMIZE, Action.NEVA_TOUCH,
+                     Action.CREST)
         if (self.cpus is not None or self.memoryRatio is not None) and self.action not in generates:
-            errors.append("--cpus and --memory go with -sp, -b, -re or -opt (an input as written has its own).")
-        if self.action in (Action.SINGLE_POINT, Action.BENCHMARK, Action.RERUN):
+            errors.append("--cpus and --memory go with -sp, -b, -re, -opt or -crest (an input as written has its own).")
+        if self.action in (Action.SINGLE_POINT, Action.BENCHMARK, Action.RERUN, Action.CREST):
             if self.cpus is not None and self.cpus < 1:
                 errors.append("--cpus must be 1 or more.")
             if self.memoryRatio is not None and self.memoryRatio <= 0:
                 errors.append("--memory must be above 0.")
         if self.action == Action.RERUN:
             errors += self.ThenSPProblems()
+            if self.reRunMethod and self.route:
+                errors.append("-re takes --method or --route, not both.")
+            elif self.reRunMethod and self.ReRunMethodRoute() is None and not self.CrestMethodKnown():
+                from .jobs import OptMethods
+                from .crest import Methods
+                names = ", ".join(OptMethods()) or "none (Config › Job Keylists)"
+                errors.append(f"--method: no Optimization Method '{self.reRunMethod}' here (cu -methods lists them: "
+                              f"{names}), and no Conformer Search Method of that name (for a CREST output: "
+                              f"{', '.join(Methods()) or 'none'}).")
+
+        if self.action in (Action.CREST, Action.RERUN):
+            if self.crestForceConstant is not None and self.crestForceConstant <= 0:
+                errors.append("--force-constant must be above 0.")
+        elif self.crestConstrain is not None or self.crestForceConstant is not None:
+            errors.append("--constrain and --force-constant go with -crest (or -re on a CREST output).")
+        if self.action == Action.CREST:
+            if self.optMethod and self.optRoute:
+                errors.append("-crest takes --method or --route, not both.")
+            if self.optMultiplicity is not None and self.optMultiplicity < 1:
+                errors.append("--mult must be 1 or more.")
+            if self.optName and len(self.files) > 1:
+                errors.append("--name names one search: give -crest one file with it (or none, with --smiles).")
+            if self.optMethod:
+                from .crest import Methods
+                if self.optMethod.lower() not in {name.lower() for name in Methods()}:
+                    errors.append(f"--method: no Conformer Search Method '{self.optMethod}' here (cu -methods lists "
+                                  f"them: {', '.join(Methods()) or 'none'}).")
 
         if self.action == Action.OPTIMIZE:
             if len(self.files) != 1 and self.smiles is None:
@@ -563,8 +634,9 @@ class IntentDraft:
             for value, flag in ((self.optSpPartition, "--sp-partition"), (self.optSpCluster, "--sp-cluster")):
                 if value is not None and (not value.strip() or any(c.isspace() for c in value)):
                     errors.append(f"{flag} takes one name, with no spaces (got '{value}').")
-        if self.route is not None and self.action != Action.SINGLE_POINT:
-            errors.append("--route goes with -opt (its method) or -sp (instead of Benchmark Methods').")
+        if self.route is not None and self.action not in (Action.SINGLE_POINT, Action.RERUN):
+            errors.append("--route goes with -opt (its method), -sp (instead of Benchmark Methods') or -re (a "
+                          "corrected route).")
 
         if self.action == Action.SI_SCRAPER and self.siFree not in ("qh", "g"):
             errors.append(f"--free takes qh or g (got '{self.siFree}').")
@@ -580,6 +652,20 @@ class IntentDraft:
             errors.append(f"-refresh takes no argument, or 'project' (got '{self.refreshScope}').")
 
         return errors
+
+    def CrestMethodKnown(self) -> bool:
+        """Whether -re --method names a Conformer Search Method (for a CREST output's re-run)."""
+        from .crest import Methods
+        return bool(self.reRunMethod) and self.reRunMethod.lower() in {name.lower() for name in Methods()}
+
+    def ReRunMethodRoute(self) -> str | None:
+        """-re --method's route: the Optimization Method's as written, '' for From Source (the route it ran), None for
+        a name that isn't one."""
+        from .jobs import OptMethods
+        from .optimize import FROM_SOURCE_NAME
+        if self.reRunMethod.strip().lower() == FROM_SOURCE_NAME.lower():
+            return ""
+        return OptMethods().get(self.reRunMethod)
 
     def ThenSPProblems(self) -> list[str]:
         """The --sp-* flags' checks (-opt's and -re's)."""
@@ -648,9 +734,21 @@ class IntentDraft:
                     stalk=self.stalk, stalkLoop=self.stalkLoop)
             case Action.RERUN:
                 intent = ReRunIntent(**{entry.name: getattr(self, entry.name) for entry in fields(ReRunIntent)
-                                        if entry.name != "thenSP"})
+                                        if entry.name not in ("thenSP", "method", "constrain", "forceConstant")})
+                if self.reRunMethod:
+                    intent.route = self.ReRunMethodRoute() or None
+                    intent.method = self.reRunMethod
                 intent.thenSP = self.ThenSP()
+                intent.constrain, intent.forceConstant = self.crestConstrain, self.crestForceConstant
                 return intent
+            case Action.CREST:
+                return CrestIntent(
+                    files=list(self.files), smiles=self.smiles, rdkitConformers=self.rdkitConformers,
+                    rdkitConformer=self.rdkitConformer or 1, method=self.optMethod, route=self.optRoute,
+                    charge=self.optCharge, multiplicity=self.optMultiplicity, name=self.optName,
+                    constrain=self.crestConstrain, forceConstant=self.crestForceConstant, cpus=self.cpus,
+                    memoryRatio=self.memoryRatio, wallTime=self.wallTime, partition=self.partition,
+                    cluster=self.cluster, stalk=self.stalk, stalkLoop=self.stalkLoop)
             case Action.XYZ:
                 return XyzIntent(files=list(self.files), smiles=self.smiles, name=self.optName,
                                  rdkitConformers=self.rdkitConformers, rdkitConformer=self.rdkitConformer or 1)

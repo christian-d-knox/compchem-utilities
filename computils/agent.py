@@ -224,14 +224,22 @@ def Acted() -> None:
 # ─── Main's side ──────────────────────────────────────────────────────
 
 def Configure(argv: list[str]) -> None:
-    """Set from argv before anything prints: --json moves every message to stderr. (--answer and --dry-run are read
-    with the other flags, in cli.ParseCLI, before any question can be asked.)"""
+    """Set from argv before anything prints: --json moves every message to stderr. (--answer is read before first-time
+    setup, ReadAnswers, and again with the other flags in cli.ParseCLI; --dry-run there, before any question.)"""
     global jsonOutput
     jsonOutput = "--json" in argv
     # -agent's stdout is the skill itself (redirected into SKILL.md): a startup message (a config warning, jobs caught
     # up on) printed there would land above its frontmatter, so messages go to stderr, as with --json
     if jsonOutput or any(arg in ("-agent", "--agent") for arg in argv):
         console.file = sys.stderr
+
+
+def ReadAnswers(argv: list[str]) -> None:
+    """The --answer pairs straight from argv, before cli.ParseCLI: first-time setup asks its questions before the
+    command line is parsed (wizards.UnattendedSetup). ParseCLI sets the same ones again."""
+    pairs = [argv[index + 1] for index, arg in enumerate(argv[:-1]) if arg == "--answer"]
+    pairs += [arg.split("=", 1)[1] for arg in argv if arg.startswith("--answer=")]
+    SetAnswers(pairs)
 
 
 def SetAnswers(pairs: list[str]) -> None:

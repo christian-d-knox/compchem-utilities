@@ -20,7 +20,7 @@ from ..catalog  import Catalog
 from ..defaults import Defaults
 from ..intent   import IntentDraft
 from ..jobs     import DefaultMemoryRatio
-from ..optimize import (CustomMethod, JoinStages, MethodProblems, SinglePointChoices, SlurmOverrides, SlurmProblems,
+from ..optimize import (CustomMethod, JoinStages, MethodChoices, MethodProblems, SinglePointChoices, SlurmOverrides, SlurmProblems,
                         SplitStages)
 from ..planned  import (LoadMolecules, PlanAsWritten, PlanBenchmark, PlannedJob, PlanReRuns, PlanSinglePoints,
                         Resources)
@@ -87,6 +87,9 @@ class JobScreen(SchedulerSteps, Screen):
         # Single Point and Benchmark: Benchmark Methods, named as the Opt builder names them (keys method-N, N its
         # entry); a greyed one says why it can't be written
         self.methods = {key.replace("sp-method", "method", 1): value for key, value in SinglePointChoices().items()}
+        if action == Action.RERUN:
+            # Re-Run: a corrected route from the Optimization Methods (or Custom), else each file's own (As Each Ran)
+            self.methods = MethodChoices(None, False)[0]
         self.problems = MethodProblems(self.methods)
         self.lastMethod, self.customRoute = "", ""
         # Re-Run's Then: SP step (steps.SchedulerSteps)
@@ -116,7 +119,15 @@ class JobScreen(SchedulerSteps, Screen):
                 self.lastMethod = chosen.key if chosen else ""
                 return [*methods, *ResourceRows(), *OutputRows()]
             case Action.RERUN:
-                return [Setting("as-ran", "Route", "Each File's Own, From Its Last Geometry", fixed="As Each Ran"),
+                # As Each Ran, or a corrected route (an Optimization Method, Custom): either way from the last
+                # geometry, named as a re-run, so it feeds the species' data file as its next attempt
+                methods = MethodRows(self.methods, self.problems, "method", "custom", label="")
+                for row in methods:
+                    row.on = False
+                self.lastMethod = "as-ran"
+                return [Setting("as-ran", "Route", "Each File's Own, From Its Last Geometry", fixed="As Each Ran",
+                                choice="method", on=True),
+                        *methods, Setting("route", "  └ Route", value="", accepts=TEXT, under="custom"),
                         *ResourceRows(), *OutputRows(),
                         Setting("nts", "Neva-Touch Scheduler", "", on=False)]
             case _:
@@ -199,6 +210,14 @@ class JobScreen(SchedulerSteps, Screen):
         chosen = self.settings.Chosen("method")
         return list(self.methods).index(chosen) if chosen in self.methods else None
 
+    def ReRunRoute(self) -> str | None:
+        """Re-Run's corrected route: the chosen Optimization Method's as written, Custom's as typed, None for As Each
+        Ran (each file's own)."""
+        chosen = self.settings.Chosen("method")
+        if chosen in self.methods:
+            return self.methods[chosen][3]
+        return self.settings.Row("route").value if chosen == "custom" else None
+
     def ReadResources(self) -> tuple[Resources, list[str]]:
         settings, errors = self.settings, []
         resources = Resources()
@@ -243,7 +262,11 @@ class JobScreen(SchedulerSteps, Screen):
                 index = self.MethodIndex()
                 return (PlanBenchmark(molecules, index, resources), []) if index is not None else ([], [])
             case Action.RERUN:
-                return PlanReRuns(molecules, resources), []
+                route = self.ReRunRoute()
+                if route is None:
+                    return PlanReRuns(molecules, resources), []
+                template, _, problem = CustomMethod(route)
+                return PlanReRuns(molecules, resources, template, problem), [problem] if problem else []
         return self.jobs, []
 
     def ShowOptions(self) -> None:
@@ -275,7 +298,7 @@ class JobScreen(SchedulerSteps, Screen):
 
     def ShowMethods(self) -> None:
         """Only the chosen method shows its route under it; Benchmark greys the methods before the one it starts at."""
-        if self.action not in (Action.SINGLE_POINT, Action.BENCHMARK) or not self.methods:
+        if self.action not in (Action.SINGLE_POINT, Action.BENCHMARK, Action.RERUN) or not self.methods:
             return
         chosen = self.settings.Chosen("method") if any(row.on for row in self.settings.rows
                                                          if row.setting.choice == "method") else ""
@@ -446,7 +469,7 @@ class JobScreen(SchedulerSteps, Screen):
                 self.Refresh()
                 self.SwitchStep(SP_STEP if self.scheduled else MAIN_STEP)
                 return
-        if self.action == Action.SINGLE_POINT:
+        if self.action in (Action.SINGLE_POINT, Action.RERUN):
             chosen = self.settings.Chosen("method")
             if chosen != self.lastMethod:
                 self.lastMethod = chosen
@@ -460,6 +483,8 @@ class JobScreen(SchedulerSteps, Screen):
         if row.target.has_focus:
             return
         chosen = self.settings.Chosen("method")
+        if chosen not in self.methods and chosen != "custom":
+            return
         route = (self.customRoute or row.value) if chosen == "custom" else self.methods[chosen][3]
         if row.value != route:
             row.SetValue(route)
@@ -508,6 +533,8 @@ class JobScreen(SchedulerSteps, Screen):
                 draft.indexOverride = index
             else:
                 draft.route = self.settings.Row("route").value.strip()
+        if self.action == Action.RERUN and self.ReRunRoute() is not None:
+            draft.route = self.ReRunRoute().strip()
         if self.action != Action.RUN:
             resources, _ = self.ReadResources()
             draft.cpus, draft.memoryRatio = resources.cpus, resources.memory
@@ -542,6 +569,8 @@ class JobScreen(SchedulerSteps, Screen):
         if self.action == Action.BENCHMARK:
             lines.append("Starts At: the Chosen Method and Every One After It Run (-ovr)")
         if self.action == Action.RERUN:
+            lines.append("Route: As Each Ran, or a Corrected One (an Optimization Method, or Custom)")
+            lines.append("Each Re-Run Starts From Its File's Last Geometry, Named as a Re-Run (8a_re, 8a_re2…)")
             lines.append("Neva-Touch Scheduler: Then a Single Point for Each Re-Run That Optimizes ([ ] Its Step)")
         if self.action == Action.RUN:
             lines.append("Each Input Runs as Written: Its CPUs and Memory Are Its Own")

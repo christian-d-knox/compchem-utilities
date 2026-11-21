@@ -107,11 +107,13 @@ def _Run(argv: list[str]) -> None:
     # installation, not the cluster: a run nobody can answer does them before setup too (an agent on a computer used
     # only for workbooks, where nobody set cu up)
     deferSetup = not prompts.interactive and argv[:1] in (["-env"], ["--environment"], ["--update-plugin"])
-    # Setup is a conversation with a person: a run nobody can answer stops here, saying who must run what
+    # A run nobody at a terminal can answer (an agent's) sets CompUtils up itself: a local install by itself, a
+    # cluster's questions (lab profile, cluster, notifications) as keyed ones the agent asks the human (exit 3)
     if not prompts.interactive and not deferSetup and (Defaults.needsFirstTimeSetup
                                                        or Defaults.colorMode not in ("lowColor", "hexCode")):
-        raise agent.NeedsHuman("CompUtils isn't set up for this account yet: a person must run `cu` once in a terminal "
-                               "on this cluster (it asks about the cluster and notifications).", "cu -first")
+        from .wizards import UnattendedSetup
+        agent.ReadAnswers(argv)
+        UnattendedSetup()
 
     # If Defaults._Validate determined that first-time setup is needed,
     # run it here rather than from inside Defaults.

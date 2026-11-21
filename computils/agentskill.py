@@ -59,9 +59,15 @@ class AgentCommand:
 
 COMMANDS = [
     AgentCommand("info", ("info",), Action.INFO,
-                 "What outputs and inputs say: status, charge/multiplicity, spin, route, energy, H/G corrections, "
-                 "imaginary frequencies, convergence, stability, <S**2>. Read once each: never read a .out yourself.",
-                 "-info '*.out' --json", "One record per file (info.FileFacts); next: cu -re / cu -sp suggestions."),
+                 "What outputs and inputs say: status, charge/multiplicity, spin, route, solvation, energy, ZPE and "
+                 "the thermochemistry totals as printed, H/G corrections, imaginary and lowest frequencies, "
+                 "convergence, stability, <S**2>, an optimization's constraints (frozen or scanned coordinates) and "
+                 "a Gaussian TS's tsEigenvector (the coordinates its mode moves, with their final values). Read once "
+                 "each: never read a .out yourself. A staged output "
+                 "(Opt+Freq then SP in one file) gives each stage's results in `stages`.",
+                 "-info '*.out' --json", "One record per file (info.FileFacts): a one-stage output's results in the "
+                 "record, a staged one's in `stages` (an input's `stages` only lists what each runs), and dataFile; "
+                 "next: cu -re / cu -sp suggestions."),
     AgentCommand("xyz", ("xyz", "smiles", "rdkit_conformers", "rdkit_conformer"), Action.XYZ,
                  "Write each file's last geometry (an output's; an input's own; Gaussian or ORCA) as NAME.xyz here, "
                  "e.g. for figures or another program. Or a SMILES' 3D geometry: -xyz --smiles 'SMILES' --name NAME "
@@ -71,9 +77,10 @@ COMMANDS = [
                  "and each RDKit conformer's rank and deltaE (kcal/mol).",
                  ("replace-xyz",), (f"action-{Action.XYZ.value}",)),
     AgentCommand("methods", ("methods",), Action.METHODS,
-                 "The Optimization and Benchmark Methods in force here (project, else global): pick -opt's --method "
-                 "from these. They differ per project: list them in each folder.",
-                 "-methods --json", "One record per section: its level and each method's name, route, program, problem."),
+                 "The Optimization, Benchmark and Conformer Search Methods in force here (project, else global): pick "
+                 "-opt's and -crest's --method from these. They differ per project: list them in each folder.",
+                 "-methods --json", "One record per section: its level and each method's name, route (a Conformer "
+                 "Search Method: its options, level and solvation), program, problem."),
     AgentCommand("opt", ("optimize", "method", "route", "charge", "mult", "spin", "name", "cpus", "memory", "modred",
                          "then_sp", "sp_cpus", "sp_memory", "sp_method", "sp_route", "sp_wall_time", "sp_partition",
                          "sp_cluster", "sp_nbo", "sp_checkpoint", "smiles", "rdkit_conformers", "rdkit_conformer"),
@@ -89,6 +96,24 @@ COMMANDS = [
                  "The input written, its method, charge, multiplicity, spin, resources and scheduled SP (with "
                  "--smiles: rdkitConformer and each RDKit conformer's rank and deltaE); submitted[].",
                  ("method", "charge", "mult", "replace-input"), ("builder-opt",)),
+    AgentCommand("crest", ("crest", "method", "route", "charge", "mult", "name", "cpus", "memory", "constrain",
+                           "force_constant", "smiles", "rdkit_conformers", "rdkit_conformer"),
+                 Action.CREST,
+                 "Write and submit a CREST conformer search of each molecule (an .xyz, a prior input/output's last "
+                 "geometry, or --smiles 'SMILES' --name NAME), as the TUI's Conformer Search builder does: CompUtils' "
+                 "own crest, tracked like any job. --method NAME is a Conformer Search Method (cu -methods: CREST's "
+                 "options, e.g. --gfn2 --alpb toluene --ewin 8 --rthr 0.5), --route 'OPTIONS' CREST's options typed in "
+                 "full; CompUtils writes --T (the CPUs), --chrg, --uhf (multiplicity - 1) and --cinp itself. "
+                 "--constrain 'B 12 15;B 15 21' holds bonds (A i j k angles, D i j k l dihedrals) at the starting "
+                 "geometry's values (computed for you; or give one: 'B 1 9 2.05'), 'atoms 11-14', 'elements Pd', "
+                 "'fix 2,4'; --force-constant (default 1.0). The search of 8a is 8a_CREST (its next attempt, "
+                 "8a_CREST_re, when that one has run here), so its output feeds 8a.cudf; the conformers come back to "
+                 "8a_CREST-scratch/ (crest_conformers.xyz, crest_best.xyz, crest.energies).",
+                 "-crest TS1.out --method gfn2 --constrain 'B 12 15;B 15 21' --dry-run --json",
+                 "One result per search: job, method, options, level, solvation, charge, multiplicity, uhf, the crest "
+                 "command, the constraints file's lines (each held value), resources, output and results folder; "
+                 "written[], submitted[].",
+                 ("crest-method", "charge", "mult"), ("builder-crest",)),
     AgentCommand("sp", ("singlePoint",), Action.SINGLE_POINT,
                  "Write and submit each output's single point (Benchmark Methods' first entry; -ovr N picks another, "
                  "--route gives a route of your own; --cpus N and --memory GB set its resources).",
@@ -99,11 +124,18 @@ COMMANDS = [
                  "N; --cpus N and --memory GB set every job's resources, memory otherwise as each method needs).",
                  "-b 8a.out --dry-run --json", "written[], submitted[], skipped[] per method variant.",
                  tui=(f"action-{Action.BENCHMARK.value}",)),
-    AgentCommand("rerun", ("rerun",), Action.RERUN,
-                 "Re-run failed jobs from their last geometry, with the route they ran (named 8a_re, 8a_re2...); "
-                 "--cpus N and --memory GB set their resources. --then-sp (with -opt's --sp-* flags) has the "
-                 "Neva-Touch Scheduler submit each re-run optimization's single point when it ends (NAME.chain.json).",
-                 "-re 8a.out --then-sp --dry-run --json", "written[] (and each chain file), submitted[].",
+    AgentCommand("rerun", ("rerun", "route", "method", "constrain", "force_constant"), Action.RERUN,
+                 "Re-run jobs from their last geometry, with the route they ran, or a corrected one (--route ROUTE, "
+                 "or --method NAME: an Optimization Method). This is how a bad or mistaken output is fixed: the "
+                 "re-run is named 8a_re, 8a_re2... (past any name with an output), so it feeds the species' data "
+                 "file as its next attempt and replaces the old one there once it succeeds. --cpus N and --memory GB "
+                 "set their resources. --then-sp (with -opt's --sp-* flags) has the Neva-Touch Scheduler submit each "
+                 "re-run optimization's single point when it ends (NAME.chain.json). A CREST output is searched again "
+                 "(8a_CREST_re) from the same starting geometry with the options and constraints it ran with, or "
+                 "corrected: --method a Conformer Search Method, --route CREST's options, --constrain/--force-constant "
+                 "(as -crest takes them).",
+                 "-re 8a.out --route 'opt=(ts,calcfc,noeigen) freq b3lyp/def2svp' --dry-run --json",
+                 "written[] (and each chain file), submitted[].",
                  tui=(f"action-{Action.RERUN.value}",)),
     AgentCommand("run", ("run",), Action.RUN,
                  "Submit inputs exactly as written (each gets a job script; every job is tracked).",
@@ -170,9 +202,10 @@ COMMANDS = [
     AgentCommand("agent", ("agent", "ssh_host", "local_cu", "local_python", "no_local"), Action.AGENT,
                  "This skill (no TOPIC), or one of its topics, always the installed version's.", "-agent opt"),
     AgentCommand("first", ("first",), Action.FIRST_TIME_SETUP, "First-time setup.", agent=False,
-                 why="it asks a person about their cluster, notifications and lab profile",
-                 questions=("color-mode", "cluster", "notifications", "test-message", "chat-id", "apply-profile",
-                            "profile-file")),
+                 why="re-running setup is a person's, at a terminal (a fresh install's first --json run sets itself "
+                     "up: see the Rules)",
+                 questions=("color-mode", "cluster", "notifications", "bot-token", "test-message", "chat-id",
+                            "apply-profile", "profile-file")),
     AgentCommand("profile", ("profile",), Action.PROFILE, "Apply a lab profile.", agent=False,
                  why="it changes the lab's shared settings for this account", questions=("apply-changed-profile",)),
     AgentCommand("refresh", ("refresh",), Action.REFRESH, "Rewrite the config files in the current layout.",
@@ -310,14 +343,41 @@ def SkillText(host: str = HOST_PLACEHOLDER, digest: str | None = None, commit: s
         "",
         "- Preview first: job commands take `--dry-run` (inputs and scripts written, nothing submitted). Show the human "
         "the route(s) and what will be submitted; submit on their go-ahead (`next` has the command).",
-        "- Chemistry is the human's: method, charge, multiplicity, spin (`--spin css|oss` for singlets), basis. Ask; "
-        "never guess. Mechanical answers (replacing an input you just previewed, dismissing ended jobs) are yours.",
+        "- Chemistry is the human's: method, charge, multiplicity, spin (`--spin css|oss` for singlets), basis; for a "
+        "conformer search its level, solvent, thresholds and which bonds it holds. Ask; never guess. Mechanical "
+        "answers (replacing an input you just previewed, dismissing ended jobs) are yours.",
         "- Only `cu` submits (never `sbatch`): every job is then tracked, notified and chained.",
         "- Read outputs with `-info` (never cat, grep or copy a .out: they're huge). Inputs are small to read.",
+        "- Each job's results are kept in its data file, `<root>.cudf` beside its outputs (8a.out, 8a_re.out, "
+        "8a_SP_re2.out and the benchmark's 8a-2-B3LYP_SP.out all feed 8a.cudf), written by `-info` and whenever a "
+        "tracked job ends. It is small and has a fixed layout (`=== Section ===` headers, one `Label  value` line "
+        "each), so read it directly (`cat`) instead of running `-info` on every output. The first section is the "
+        "molecule (formula, charge, multiplicity, spin, its final geometry); then one section per stage of work "
+        "(Optimization (Reaction Intermediate), Optimization (ModRedundant), Optimization (Transition State), "
+        "Single Point: LEVEL, ...), each holding the final successful attempt (a re-run that ended "
+        "normally replaces the failed original). Each From line names the output (and stage) it came from; if that "
+        "output has changed since, run `-info` on it, which refreshes the section. The geometry and the full "
+        "frequency list are only there, never in `-info` (or run `-xyz` for an .xyz). The data file is the species' "
+        "hub: fix a bad or mistaken output by re-running it with its input corrected (`-re FILE --route '...'` or "
+        "`--method NAME`, previewed with --dry-run, on the human's word), never by a job under a new name, so the "
+        "re-run takes the old one's section once it succeeds. An optimization lists its "
+        "Constraints (Bond C1 C4 Frozen @ 2.05 A; From the Checkpoint when its route didn't ask for them), a "
+        "Gaussian TS its TS Eigenvector (each coordinate's coefficient and final value, as Gaussian printed them). A "
+        "CREST search (8a_CREST.out) is a Conformer Search (CREST): LEVEL section: its options and constraints, the "
+        "ensemble it kept (conformers, energy window, E (Lowest), ensemble G, the lowest's population, wall time) and "
+        "every conformer's energy and population (Conformer Energies, only there).",
         "- Waiting for jobs: never poll `-st` or sleep in a loop. Run the `-st --wait JOB... --json` that a submission's "
         "`next` gives as a background command and end your turn: it exits (waking you) when one of them ends. Read "
         "its report, act, and run its `next` to wait again. `-st --json` is one snapshot, any time.",
-        "- Config (methods, basis sets, ORCA blocks, clusters) and setup are the human's: they edit them in `cu -tui`.",
+        "- Config (methods, basis sets, ORCA blocks, clusters) is the human's: they edit it in `cu -tui`.",
+        "- First-time setup runs itself on a fresh install's first `cu ... --json`: on the human's own computer it "
+        "needs nothing (high color, no cluster, no notifications). On the cluster it stops with exit 3 for each of "
+        "its questions: the lab profile (`profile-file`: a path, or empty for none; `apply-profile` when an earlier "
+        "install left one), the cluster (`cluster`), Telegram notifications (`notifications`, then `bot-token` when "
+        "the profile has none). Ask the human all of them at once, then re-run the same command with every answer "
+        "(`--answer profile-file=PATH --answer cluster=NAME --answer notifications=n`). Notifications yes: tell the "
+        "human to send their bot any message right after you start that run (it waits 60 seconds); `chat-id` is "
+        "asked if no message came.",
         "- One molecule per `-opt` call; loop over molecules yourself.",
         "",
         "## Commands",

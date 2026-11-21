@@ -1,5 +1,6 @@
 import os
 import platform
+import shutil
 import sys
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from .console  import console, Panel
 from .defaults import Defaults
 from .notify   import _SendTelegram, _DetectTelegramChatID
 from .prompts import AskBool, AskStr, AskChoice
+from . import agent, prompts
 
 
 def NotificationSetup() -> None:
@@ -21,7 +23,11 @@ def NotificationSetup() -> None:
             print(line)
         print("=" * 55)
 
-    choice = AskBool("  Enable notifications?", "Y", key="notifications")
+    # Asked through an agent, the question says what the human does next (the run waits for their message)
+    question = ("  Enable notifications?" if prompts.interactive else
+                "Enable Telegram notifications for when your jobs finish? If yes: right after the next run starts, "
+                "send any message to your bot in Telegram (CompUtils waits 60 seconds for it, to learn your chat ID).")
+    choice = AskBool(question, "Y", key="notifications")
     if not choice:
         StopSetup("  Notifications disabled.", "  Re-run setup or edit notifications.toml to enable later.")
         return
@@ -34,14 +40,20 @@ def NotificationSetup() -> None:
     if botToken:
         console.print("[info]  Using the bot token from your lab profile.[/info]")
     else:
-        print("  You'll need a bot token: your lab admin's, or your own from Telegram's @BotFather.")
-        print("  (Enter 'q' to quit and come back later.)")
-        botToken = input("  Bot token: ").strip()
+        if prompts.interactive:
+            print("  You'll need a bot token: your lab admin's, or your own from Telegram's @BotFather.")
+            print("  (Enter 'q' to quit and come back later.)")
+        botToken = AskStr("  Bot token" if prompts.interactive else
+                          "Telegram bot token (your lab admin's, or your own from Telegram's @BotFather; q to skip "
+                          "notifications)", key="bot-token").strip()
 
         if botToken.lower() == "q":
             StopSetup("  Setup paused. Access later by calling with the --first flag.")
             return
         if ":" not in botToken:
+            if "bot-token" in agent.answers:
+                raise agent.UsageError("--answer bot-token: that doesn't look like a bot token (expected "
+                                       "123456789:ABCdef...).")
             console.print("[warning]  Warning: that doesn't look like a valid bot token[/warning]")
             print("  (expected format: 123456789:ABCdef...).")
             StopSetup("  Setup cancelled. Access later by calling with the --first flag.")
@@ -49,14 +61,20 @@ def NotificationSetup() -> None:
 
     Defaults.botToken = botToken
 
-    print("  Now open Telegram and send any message to the bot.")
-    chatID = _DetectTelegramChatID(botToken, timeoutSeconds=60)
+    # A chat ID given in advance (an agent's re-run after no message came) needs no wait
+    if "chat-id" in agent.answers:
+        chatID = agent.answers["chat-id"] or None
+    else:
+        print("  Now open Telegram and send any message to the bot.")
+        chatID = _DetectTelegramChatID(botToken, timeoutSeconds=60)
 
     if chatID:
         Defaults.chatID = chatID
         console.print(f"  \u2713 Chat ID detected: {chatID}") #light_green good
 
-        testChoice = AskBool("Send a test message?", "Y", key="test-message")
+        # Unattended, the test is sent unless the answer says otherwise (its default): it confirms the token and chat
+        testChoice = (AskBool("Send a test message?", "Y", key="test-message")
+                      if prompts.interactive or "test-message" in agent.answers else True)
         if testChoice:
             success = _SendTelegram(botToken, chatID,
                 "Welcome to remote queue notifications with CompUtils!")
@@ -65,10 +83,14 @@ def NotificationSetup() -> None:
             else:
                 console.print("[error]Test failed. Double-check the bot token.[/error]")
     else:
-        console.print("[error]Detection timed out. This usually means the token is incorrect or Telegram was "
-                      "unreachable.[/error]")
+        if "chat-id" not in agent.answers:
+            console.print("[error]Detection timed out. This usually means the token is incorrect or Telegram was "
+                          "unreachable.[/error]")
 
-        manualID = AskStr("Enter your chat ID manually (or press Enter to skip)", key="chat-id").strip()
+        manualID = "" if "chat-id" in agent.answers else AskStr(
+            "Enter your chat ID manually (or press Enter to skip)" if prompts.interactive else
+            "No message reached the bot within 60 seconds. Your Telegram chat ID, if you know it (empty: no "
+            "personal notifications for now; cu -first in a terminal tries again)", "", key="chat-id").strip()
         if manualID:
             Defaults.chatID = manualID
         else:
@@ -94,9 +116,15 @@ def ColorSetup() -> None:
         console.print(Panel("This is macOS' Terminal, which shows high color only from macOS 26 on. Choose low color "
                             "here, or use a terminal that supports truecolor, like iTerm2.", style="warning"))
     hexColor = AskBool("Would you like to operate in high color mode?", "Y", key="color-mode")
+    SetColorMode(hexColor)
+
+
+def SetColorMode(hexColor: bool, shellFile: bool = True) -> None:
+    """Saves the colour mode; high colour also makes sure the shell says truecolor (COLORTERM, in its startup file;
+    shellFile False: not touched, for a computer whose terminal isn't a Unix shell's)."""
     Defaults.colorMode = "hexCode" if hexColor else "lowColor"
     Defaults._SaveSection("qol.toml")
-    if not hexColor:
+    if not hexColor or not shellFile:
         return
     if os.environ.get("COLORTERM","").lower() in ("truecolor", "24bit"):
         console.print("[good]High color environment variable already detected! Enjoy![/good]")
@@ -127,6 +155,37 @@ def _OldMacTerminal() -> bool:
 
 
 
+def OnCluster() -> bool:
+    """Whether this computer submits jobs (SLURM's sbatch is here): a cluster's login node, not a person's own
+    computer (a local install: Windows, a Mac, a Linux PC)."""
+    return shutil.which("sbatch") is not None
+
+
+def UnattendedSetup() -> None:
+    """First-time setup in a run nobody at a terminal can answer (an agent's, over ssh or on the human's own computer),
+    so the human never has to run `cu` themselves first. High colour, asked of nobody. A local
+    install (no sbatch here) needs nothing else: no cluster (hpcType LOCAL_INSTALL), no lab profile, no notifications.
+    On a cluster, the lab profile, the cluster and notifications are firstTimeSetup's own keyed questions: each stops
+    the run (exit 3) until the agent has asked the human and re-runs with the answers (--answer KEY=VALUE)."""
+    from .defaults import LOCAL_INSTALL
+    cluster = OnCluster()
+    if Defaults.colorMode not in ("lowColor", "hexCode"):
+        SetColorMode(True, shellFile=cluster)
+    if not Defaults.needsFirstTimeSetup:
+        return
+    if not cluster:
+        Defaults.hpcType = LOCAL_INSTALL
+        Defaults._SaveKeys(["hpcType"])
+        Defaults.isNotifications = False
+        Defaults._SaveSection("notifications.toml")
+        agent.Notice("info", "Set up as a local install: high color, no cluster, lab profile or notifications "
+                             "(run `cu -first` in a terminal to change that).")
+    elif firstTimeSetup() is None:
+        raise agent.UsageError("--answer cluster=q: CompUtils needs a cluster to write job scripts for.")
+    # Set up: the rest of this run goes on as any other (Main's interactive setup steps see nothing to do)
+    Defaults.needsFirstTimeSetup = False
+
+
 def firstTimeSetup(profileFile: Path | None = None) -> bool | None:
     """Apply a lab profile (if there is one), then set the cluster (and notifications). True once a cluster is set,
     None if the user cancelled."""
@@ -143,6 +202,8 @@ def firstTimeSetup(profileFile: Path | None = None) -> bool | None:
     Defaults.hpcType, Defaults.submissionList = cluster.hpcType, cluster.submissionList
     for key, value in cluster.settings.items():
         setattr(Defaults, key, value)
-    Defaults._SaveKeys(["hpcType", *cluster.settings])
+    # The cluster is saved last: it is what marks setup done, so a run stopped at a notifications question (an
+    # agent's, exit 3) comes back through every question with its answers
     NotificationSetup()
+    Defaults._SaveKeys(["hpcType", *cluster.settings])
     return True

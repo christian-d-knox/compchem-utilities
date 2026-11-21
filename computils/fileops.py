@@ -1,4 +1,4 @@
-import regex, subprocess
+import os, regex, subprocess, time
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from mmap import mmap, ACCESS_READ
@@ -46,6 +46,37 @@ def FindInMap(data, pattern: str, reverse: bool = False, ignoreCase: bool = Fals
         start = max(0, len(data) + start)
     return regex.search(pattern.encode(), data, flags, pos=start, endpos=end, concurrent=True)
 
+# A file several CompUtils runs write at once (the tracked-jobs store, a data file): a CLI stalker, the TUI, and a job's
+# Neva-Touch Scheduler hook on a compute node. O_EXCL creation works across machines on a shared filesystem, where flock
+# may not; a lock older than LOCK_STALE seconds was left by a run that died, and is taken over
+LOCK_STALE, LOCK_WAIT = 60, 30
+
+@contextmanager
+def FileLock(lock: Path):
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    deadline, owned = time.monotonic() + LOCK_WAIT, False
+    while not owned:
+        try:
+            os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            owned = True
+        except FileExistsError:
+            try:
+                if time.time() - lock.stat().st_mtime > LOCK_STALE:
+                    lock.unlink(missing_ok=True)
+                    continue
+            except FileNotFoundError:
+                continue
+            if time.monotonic() > deadline:
+                # Never block for good: writing unlocked is how the store was written before the lock
+                console.print(f"[warning]{lock} has been held for {LOCK_WAIT} seconds; writing without it.[/warning]")
+                break
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        if owned:
+            lock.unlink(missing_ok=True)
+
 # mmap can't map an empty file, so every read of a whole file checks this first
 def HasContent(filePath: Path) -> bool:
     return filePath.is_file() and filePath.stat().st_size > 0
@@ -80,16 +111,23 @@ def SkipInMap(data, match, skipLines: int = 0, fromStart: bool = False) -> None:
 # ORCA's banner is line 2, Gaussian's 'Entering Gaussian System' line 1
 PROGRAM_HEADER_BYTES = 4096
 ORCA_HEADER = r"\* O   R   C   A \*"
+# CREST's banner (line 3 of its output, inside its box)
+CREST_HEADER = r"C R E S T"
+# CREST's program key: it has no input file of its own (crest.py: an .xyz and the options it runs with), so a name in the
+# program slot where Gaussian and ORCA have their input extensions
+CREST_PROGRAM = "CREST"
 
 def ExtractProgram(data, suffix: str) -> str:
-    """The program that wrote this file, as its input extension (the key CompUtils branches on), or '' if unknown.
-    An input file is known by its extension; an output by its header."""
+    """The program that wrote this file, as its input extension (the key CompUtils branches on; CREST_PROGRAM for a
+    CREST output), or '' if unknown. An input file is known by its extension; an output by its header."""
     if suffix in (Defaults.gaussianExtension, Defaults.orcaExtension):
         return suffix
-    header = FindInMap(data, ORCA_HEADER + "|Entering Gaussian System", end=PROGRAM_HEADER_BYTES)
+    header = FindInMap(data, f"{ORCA_HEADER}|Entering Gaussian System|{CREST_HEADER}", end=PROGRAM_HEADER_BYTES)
     if header is None:
         return ""
-    return Defaults.orcaExtension if header.group().startswith(b"*") else Defaults.gaussianExtension
+    found = header.group()
+    return (Defaults.orcaExtension if found.startswith(b"*") else CREST_PROGRAM if found.startswith(b"C")
+            else Defaults.gaussianExtension)
 
 def ExtractCoords(data, program: str, fromInput: bool = False) -> tuple[list[str], list[str], list[str], list[str]]:
     """The LAST geometry printed (an optimisation's final one) as (element symbols, X, Y, Z). fromInput: the file is an
@@ -150,6 +188,18 @@ def _CoordinateRows(data, start: int, last: bool = False) -> tuple[list[str], li
                 break
             current = None
     return blocks[-1] if blocks else ([], [], [], [])
+
+def XyzFrames(data) -> int:
+    """How many structures (blocks of 'Symbol x y z' rows) an .xyz holds: a CREST ensemble has one per conformer, of
+    which ExtractXyz reads only the last."""
+    frames, inBlock = 0, False
+    data.seek(0)
+    for rawLine in iter(data.readline, b""):
+        row = regex.match(COORDINATE_ROW, rawLine.decode(errors="replace").rstrip("\n"))
+        isRow = bool(row and _RowSymbol(row.group(1)))
+        frames += isRow and not inBlock
+        inBlock = isRow
+    return frames
 
 def ExtractXyz(data) -> list[str]:
     """The coordinate lines of an .xyz file or pasted coordinates: the last block of 'Symbol x y z' rows (the count and
@@ -445,17 +495,56 @@ def ExtractTermination(data, start: int = 0) -> str:
 # What Gaussian prints right after the termination line of a step it added itself (opt freq's freq), but not after a
 # --Link1-- stage the input asked for, which starts with 'Initial command:' instead
 INTERNAL_STEP = r"[ \t]*Link1:\s+Proceeding to internal job step"
+# Some Gaussian builds (G16 C.01) print '(Enter …/l1.exe)' between the termination line and the internal step's line
+ENTER_LINE = r"[ \t]*\(Enter "
+# What follows a termination line at the end of a file that stopped inside the next line: Gaussian's own step if it
+# starts that way (an Enter line can only lead into one)
+INTERNAL_STEP_START = rf"(?:{ENTER_LINE}[^\n]*\n)*{INTERNAL_STEP}|{ENTER_LINE}"
 
 def IsInternalStep(data, termLine: regex.Match) -> bool | None:
-    """Whether the step after this termination line is Gaussian's own (same stage), or None if the next line isn't
-    complete yet (it can't be told apart until it is)."""
+    """Whether the step after this termination line is Gaussian's own (same stage), or None if the next line (past an
+    Enter line) isn't complete yet (it can't be told apart until it is)."""
     lineEnd = data.find(b"\n", termLine.end())
-    if lineEnd < 0:
-        return None
-    nextEnd = data.find(b"\n", lineEnd + 1)
-    if nextEnd < 0:
-        return None
-    return regex.match(INTERNAL_STEP.encode(), data[lineEnd + 1:nextEnd]) is not None
+    while lineEnd >= 0:
+        nextEnd = data.find(b"\n", lineEnd + 1)
+        if nextEnd < 0:
+            return None
+        line = data[lineEnd + 1:nextEnd]
+        if not regex.match(ENTER_LINE.encode(), line):
+            return regex.match(INTERNAL_STEP.encode(), line) is not None
+        lineEnd = nextEnd
+    return None
+
+def StageSpans(data, program: str) -> list[tuple[int, int, str]]:
+    """Each stage of an output as (start, end, termination): the part of the file its reporting is read from (the
+    bookmarks the stalker uses). Gaussian: a --Link1-- stage ends at its termination line, unless Gaussian's own
+    internal step follows (opt freq's freq, the same stage); an error termination ends the job; a stage still running,
+    or killed, runs to the end of the file with termination ''. ORCA: one stage, the whole file."""
+    if program == Defaults.orcaExtension:
+        return [(0, len(data), ExtractTermination(data, -TERMINATION_TAIL))]
+    spans, start, bookmark = [], 0, 0
+    while True:
+        termLine = FindTermination(data, bookmark, reverse=False)
+        if termLine is None:
+            break
+        lineEnd = data.find(b"\n", termLine.end())
+        bookmark = len(data) if lineEnd < 0 else lineEnd + 1
+        termination = TerminationVariant(termLine)
+        internal = IsInternalStep(data, termLine)
+        if internal is None:
+            # The file ends inside the next line: Gaussian's own step if that's how it starts (the job stopped there),
+            # else nothing follows the termination line (the job's end)
+            internal = lineEnd >= 0 and regex.match(INTERNAL_STEP_START.encode(), data[lineEnd + 1:]) is not None
+        if termination != Defaults.terminationVariants[2] and internal:
+            continue
+        spans.append((start, bookmark, termination))
+        start = bookmark
+        if termination == Defaults.terminationVariants[2]:
+            return spans
+    # What follows the last termination is a stage only once its route is written
+    if start < len(data) and (not spans or ExtractRouteEcho(data, start) is not None):
+        spans.append((start, len(data), ""))
+    return spans
 
 # Stability analysis section headers, Gaussian then ORCA. Case-sensitive: ORCA also prints 'stability analysis' (its
 # contributor list) and 'SCF Stability Analysis' (its timings)
@@ -526,47 +615,100 @@ def ExtractResources(data, extensionType: str) -> tuple[int, int]:
     ram = ToGB(int(ramMatch.group(1)), cpus) if ramMatch else cpus * Defaults.memoryRatio
     return cpus, int(ram + Defaults.memoryBuffer)
 
-def ExtractSpinContamination(data) -> float | None:
-    """Return the LAST reported <S**2> in a Gaussian or ORCA output, or None if the file reports none."""
+def ExtractSpinContamination(data, start: int = 0, end: int | None = None) -> float | None:
+    """Return the LAST reported <S**2> in a Gaussian or ORCA output (in data[start:end]: one stage), or None if the file
+    reports none."""
     # Value in a lookahead: see FindInMap. Without it, a file with no <S**2> took ~0.14 s/MB for the ORCA pattern
     for pattern in (r"S\*\*2 before annihilation(?=\s+(-?[\d.]+))",           # Gaussian
                     r"Expectation value of <S\*\*2>(?=\s*:\s*(-?[\d.]+))"):    # ORCA
-        spinMatch = FindInMap(data, pattern, reverse=True)
+        spinMatch = FindInMap(data, pattern, reverse=True, start=start, end=end)
         if spinMatch:
             return float(spinMatch.group(1).decode())
     return None
 
-def _LastNumber(data, pattern: str) -> float | None:
-    # The number captured by the LAST match of a literal-led pattern (its value in a lookahead: see FindInMap)
-    found = FindInMap(data, pattern, reverse=True)
+def _LastNumber(data, pattern: str, start: int = 0, end: int | None = None) -> float | None:
+    # The number captured by the LAST match of a literal-led pattern in data[start:end] (its value in a lookahead: see
+    # FindInMap)
+    found = FindInMap(data, pattern, reverse=True, start=start, end=end)
     return float(found.group(1).decode()) if found else None
 
-def ExtractEnergy(data, program: str) -> float | None:
-    """The last electronic energy (Hartree): Gaussian's 'SCF Done', ORCA's 'FINAL SINGLE POINT ENERGY' (its total,
-    e.g. DLPNO-CCSD(T)'s). None if the file reports none."""
+def ExtractEnergy(data, program: str, start: int = 0, end: int | None = None) -> float | None:
+    """The last electronic energy (Hartree) in data[start:end]: Gaussian's 'SCF Done', ORCA's 'FINAL SINGLE POINT
+    ENERGY' (its total, e.g. DLPNO-CCSD(T)'s). None if the file reports none."""
     if program == Defaults.orcaExtension:
-        return _LastNumber(data, r"FINAL SINGLE POINT ENERGY(?=\s+(-?[\d.]+))")
-    return _LastNumber(data, r"SCF Done:(?=\s+E\(\S+\)\s+=\s+(-?[\d.]+))")
+        return _LastNumber(data, r"FINAL SINGLE POINT ENERGY(?=\s+(-?[\d.]+))", start, end)
+    return _LastNumber(data, r"SCF Done:(?=\s+E\(\S+\)\s+=\s+(-?[\d.]+))", start, end)
 
-def ExtractThermalCorrections(data, program: str) -> tuple[float, float] | None:
+def ExtractThermalCorrections(data, program: str, start: int = 0, end: int | None = None) -> tuple[float, float] | None:
     """(enthalpy correction, Gibbs free energy correction) to the electronic energy, in Hartree, from the last
-    thermochemistry printed; None without one (no frequency job). ORCA's G already uses Grimme's quasi-RRHO entropy."""
+    thermochemistry printed in data[start:end]; None without one (no frequency job). ORCA's G already uses Grimme's
+    quasi-RRHO entropy."""
     if program == Defaults.orcaExtension:
-        enthalpy = _LastNumber(data, r"Total Enthalpy(?=\s+\.\.\.\s+(-?[\d.]+))")
-        electronic = _LastNumber(data, r"Electronic energy(?=\s+\.\.\.\s+(-?[\d.]+))")
-        gibbs = _LastNumber(data, r"G-E\(el\)(?=\s+\.\.\.\s+(-?[\d.]+))")
+        enthalpy = _LastNumber(data, r"Total Enthalpy(?=\s+\.\.\.\s+(-?[\d.]+))", start, end)
+        electronic = _LastNumber(data, r"Electronic energy(?=\s+\.\.\.\s+(-?[\d.]+))", start, end)
+        gibbs = _LastNumber(data, r"G-E\(el\)(?=\s+\.\.\.\s+(-?[\d.]+))", start, end)
         if None in (enthalpy, electronic, gibbs):
             return None
         return enthalpy - electronic, gibbs
-    enthalpy = _LastNumber(data, r"Thermal correction to Enthalpy=(?=\s+(-?[\d.]+))")
-    gibbs = _LastNumber(data, r"Thermal correction to Gibbs Free Energy=(?=\s+(-?[\d.]+))")
+    enthalpy = _LastNumber(data, r"Thermal correction to Enthalpy=(?=\s+(-?[\d.]+))", start, end)
+    gibbs = _LastNumber(data, r"Thermal correction to Gibbs Free Energy=(?=\s+(-?[\d.]+))", start, end)
     return None if enthalpy is None or gibbs is None else (enthalpy, gibbs)
 
-def ExtractFrequencies(data, program: str) -> list[float]:
-    """The last frequency calculation's vibrational frequencies (cm-1), lowest first; imaginary modes are negative.
-    [] without one. ORCA's 0.00 translation/rotation modes are left out."""
+# The thermochemistry each program prints, from its last frequency job (Hartree): name -> its line. Taken as printed,
+# never added up: ORCA prints no E + ZPE, so it has none
+THERMOCHEMISTRY = {
+    "G16": {"zeroPoint":       r"Zero-point correction=(?=\s+(-?[\d.]+))",
+            "energyZeroPoint": r"Sum of electronic and zero-point Energies=(?=\s+(-?[\d.]+))",
+            "thermalEnergy":   r"Sum of electronic and thermal Energies=(?=\s+(-?[\d.]+))",
+            "enthalpy":        r"Sum of electronic and thermal Enthalpies=(?=\s+(-?[\d.]+))",
+            "gibbs":           r"Sum of electronic and thermal Free Energies=(?=\s+(-?[\d.]+))"},
+    "O":   {"zeroPoint":       r"Zero point energy(?=\s+\.\.\.\s+(-?[\d.]+))",
+            "thermalEnergy":   r"Total thermal energy(?=\s+(?:\.\.\.\s+)?(-?[\d.]+))",
+            "enthalpy":        r"Total Enthalpy(?=\s+\.\.\.\s+(-?[\d.]+))",
+            "gibbs":           r"Final Gibbs free energy(?=\s+\.\.\.\s+(-?[\d.]+))"},
+}
+
+def ExtractThermochemistry(data, program: str, start: int = 0, end: int | None = None) -> dict[str, float]:
+    """The last thermochemistry printed in data[start:end] (Hartree): zeroPoint (the ZPE correction), energyZeroPoint
+    (Gaussian's E + ZPE), thermalEnergy, enthalpy, gibbs (totals; ORCA's G with Grimme's quasi-RRHO entropy). Only what
+    the file prints; {} without a frequency job."""
+    code = "O" if program == Defaults.orcaExtension else "G16"
+    values = {name: _LastNumber(data, pattern, start, end) for name, pattern in THERMOCHEMISTRY[code].items()}
+    return {name: value for name, value in values.items() if value is not None}
+
+# ORCA's implicit solvation keywords on its ! line, and a %cpcm block's SMD switch and solvent
+ORCA_SOLVATION = r"(?i)\b(CPCMC|CPCMX|CPCM|SMD|ALPB|DDCOSMO|COSMORS)\(([^)]*)\)"
+
+def ExtractSolvation(data, program: str, inputText: str = "", start: int = 0, end: int | None = None) -> str:
+    """The implicit solvation of the last energy in data[start:end] (one stage, StageSpans), 'MODEL (Solvent)' as the
+    program names them ('' for gas phase). Gaussian: the stage's last PCM block (so SCRF=Check is read too; SMD radii
+    mean SMD). ORCA: its input as written (inputText: the echoed input), the ! line's CPCM(X)/SMD(X), or a %cpcm
+    block's smd true."""
     if program == Defaults.orcaExtension:
-        block = FindInMap(data, r"VIBRATIONAL FREQUENCIES", True)
+        found = regex.search(ORCA_SOLVATION, "\n".join(line for line in inputText.splitlines()
+                                                        if line.lstrip().startswith("!")))
+        model, solvent = (found.group(1).upper(), found.group(2).strip()) if found else ("", "")
+        block = regex.search(r"(?is)^\s*%cpcm\b(.*?)^\s*end\b", inputText, regex.MULTILINE)
+        if block:
+            if regex.search(r"(?i)\bsmd\s+true\b", block.group(1)):
+                model = "SMD"
+            named = regex.search(r"(?i)\b(?:smdsolvent|solvent)\s+\"([^\"]+)\"", block.group(1))
+            model, solvent = model or "CPCM", (named.group(1) if named else solvent)
+        return f"{model} ({solvent})" if model and solvent else model
+    block = FindInMap(data, r"Polarizable Continuum Model", True, start=start, end=end)
+    if block is None:
+        return ""
+    end = data.find(b"Spheres list", block.end())
+    text = data[block.end():end if end > 0 else block.end() + 4096].decode(errors="replace")
+    fields = dict(regex.findall(r"(?m)^\s*(Model|Atomic radii|Solvent)\s*:\s*([^,\r\n]*?)\.?\s*(?:,|$)", text))
+    model = "SMD" if fields.get("Atomic radii", "").upper().startswith("SMD") else fields.get("Model", "PCM")
+    return f"{model} ({fields['Solvent']})" if fields.get("Solvent") else model
+
+def ExtractFrequencies(data, program: str, start: int = 0, end: int | None = None) -> list[float]:
+    """The last frequency calculation's vibrational frequencies (cm-1) in data[start:end], lowest first; imaginary
+    modes are negative. [] without one. ORCA's 0.00 translation/rotation modes are left out."""
+    if program == Defaults.orcaExtension:
+        block = FindInMap(data, r"VIBRATIONAL FREQUENCIES", True, start=start, end=end)
         if block is None:
             return []
         SkipInMap(data, block)
@@ -581,7 +723,7 @@ def ExtractFrequencies(data, program: str) -> list[float]:
             elif started and line.strip():
                 break
         return sorted(frequencies)
-    block = FindInMap(data, r"Harmonic frequencies", True)
+    block = FindInMap(data, r"Harmonic frequencies", True, start=start, end=end)
     if block is None:
         return []
     SkipInMap(data, block)
@@ -593,6 +735,85 @@ def ExtractFrequencies(data, program: str) -> list[float]:
         elif b"Thermochemistry" in line:
             break
     return sorted(frequencies)
+
+# Gaussian's redundant internal coordinate tables: '! R5    R(1,46)    2.3428    Frozen    !'. An optimization prints
+# Initial (its first step) and Optimized (converged) ones, a stage reading a checkpoint's coordinates Current, a freq
+# step after an optimization Non-Optimized
+PARAMETERS_HEADER = r"(?:Initial|Optimized|Non-Optimized|Current) Parameters"
+PARAMETER_ROW = rb"^ ! (\w+)\s+([A-Z])\(([-\d,]+)\)\s+(-?[\d.]+)\s*(.*?)\s*!?\s*$"
+
+def ExtractParameters(data, start: int = 0, end: int | None = None,
+                      first: bool = False) -> dict[str, tuple[str, tuple[int, ...], float, str]]:
+    """One of Gaussian's internal coordinate tables in data[start:end], the last (its final values) or the first (what
+    the stage started with, e.g. which coordinates are frozen): {name: (letter, atoms, value, derivative info)}, e.g.
+    'R5': ('R', (1, 46), 2.3428, 'Frozen'). A linear bend's padding indices (0, negative) are dropped. {} without one."""
+    header = FindInMap(data, PARAMETERS_HEADER, not first, start=start, end=end)
+    if header is None:
+        return {}
+    SkipInMap(data, header)
+    parameters, started = {}, False
+    for line in iter(data.readline, b""):
+        if end is not None and data.tell() > end:
+            break
+        row = regex.match(PARAMETER_ROW, line.rstrip(b"\r\n"))
+        if row:
+            started = True
+            name, letter, atoms, value, info = (group.decode(errors="replace") for group in row.groups())
+            parameters[name] = (letter, tuple(int(atom) for atom in atoms.split(",") if int(atom) > 0), float(value),
+                                info)
+        elif started and line.lstrip().startswith(b"-"):
+            break
+    return parameters
+
+MODRED_ECHO = r"The following ModRedundant input section has been read:"
+MODRED_TYPES = {1: "X", 2: "B", 3: "A", 4: "D"}
+
+def ExtractModRedInput(data, start: int = 0, end: int | None = None) -> list[tuple[str, tuple[int, ...], str, list[str]]]:
+    """The ModRedundant lines a Gaussian stage in data[start:end] read, as echoed: (type, atoms, action, the rest), e.g.
+    ('B', (50, 53), 'F', []) or a scan's ('B', (1, 4), 'S', ['10', '-0.1']). A line without its type letter gets it from
+    its atom count. [] without one."""
+    echo = FindInMap(data, MODRED_ECHO, start=start, end=end)
+    if echo is None:
+        return []
+    SkipInMap(data, echo)
+    rows = []
+    for line in iter(data.readline, b""):
+        tokens = line.decode(errors="replace").split()
+        if not tokens:
+            break
+        kind = tokens.pop(0).upper() if tokens[0].isalpha() else ""
+        atoms = []
+        while tokens and tokens[0].isdigit():
+            atoms.append(int(tokens.pop(0)))
+        if not atoms or not tokens:
+            break
+        rows.append((kind or MODRED_TYPES.get(len(atoms), ""), tuple(atoms), tokens[0].upper(), tokens[1:]))
+    return rows
+
+TS_EIGENVECTOR = r"Eigenvectors required to have negative eigenvalues:"
+TS_EIGENVALUE = r"Eigenvalue\s+\d+\s+is\s+(\S+)\s+should be less than"
+
+def ExtractTSEigenvector(data, start: int = 0, end: int | None = None) -> tuple[list[tuple[str, float]], float | None]:
+    """A Gaussian TS optimization's last eigenvector in data[start:end], as printed (the internal coordinates the mode
+    is made of, largest first: [('R12', -0.68211), …]), and its eigenvalue when Gaussian says it should be less than 0
+    (printed only then, e.g. under noeigentest). ([], None) without one."""
+    block = FindInMap(data, TS_EIGENVECTOR, True, start=start, end=end)
+    if block is None:
+        return [], None
+    SkipInMap(data, block)
+    vector, names = [], []
+    # Rows of up to 5 coordinate names, each followed by '   1   0.41 -0.39 …'
+    for line in iter(data.readline, b""):
+        tokens = line.split()
+        if tokens and tokens[0] == b"1" and names and len(tokens) == len(names) + 1:
+            vector += [(name, float(value)) for name, value in zip(names, tokens[1:])]
+            names = []
+        elif tokens and not names and all(regex.fullmatch(rb"[A-Z]\d+", token) for token in tokens):
+            names = [token.decode() for token in tokens]
+        else:
+            break
+    eigenvalue = FindInMap(data, TS_EIGENVALUE, start=block.end(), end=end)
+    return vector, (float(eigenvalue.group(1).decode().replace("D", "E")) if eigenvalue else None)
 
 def HasRestrictedInstability(data) -> bool:
     """Gaussian stable= output: 'The wavefunction has an RHF -> UHF instability.' ORCA prints no such line, so its
@@ -686,7 +907,8 @@ def NamedRoutes(entries: list[tuple[str, list[tuple[int, str]]]]) -> list[tuple[
     two unnamed routes of one method are."""
     named, taken = [], set()
     for tag, stages in entries:
-        tag = tag or stages[0][1].split()[0].split("/")[0].lower()
+        # A CREST option line's first flag names it without its dashes (--gfn2: gfn2)
+        tag = tag or stages[0][1].split()[0].split("/")[0].lstrip("-").lower()
         name, number = tag, 2
         while name in taken:
             name, number = f"{tag}-{number}", number + 1
@@ -698,6 +920,11 @@ def ExtractOptMethods(data) -> dict[str, str]:
     """Named routes from an Optimization Methods section (NamedRoutes): name -> route card (stages joined with
     STAGE_JOIN), in order."""
     return {name: JoinStages(stages) for name, stages in NamedRoutes(RouteEntries(data))}
+
+def ExtractCrestMethods(data) -> dict[str, str]:
+    """Named option lines from a Conformer Search Methods section (NamedRoutes): name -> CREST's options, one line each
+    ('>' lines mean nothing to CREST, so only an entry's first line counts)."""
+    return {name: stages[0][1] for name, stages in NamedRoutes(RouteEntries(data))}
 
 def ExtractBenchmarkMethods(data) -> list[str]:
     """The route cards of a Benchmark Methods section, in order (stages joined with STAGE_JOIN); entry 0 is -sp's
@@ -925,6 +1152,15 @@ def IncrementSuffix(baseName: str, extra: str) -> str:
         return baseName + extra
     count = int(suffixMatch.group(2) or 1) + 1
     return f"{suffixMatch.group(1)}{extra}{count}"
+
+def ReRunNameIn(stem: str, folder: Path) -> str:
+    """A re-run's name (8a -> 8a_re -> 8a_re2, never 8a_re_re), past any name that already has an output in folder (a
+    job that ran there). An input alone is rewritten. The one rule for `cu -re` and the Neva-Touch Scheduler, so a
+    re-run always feeds its species' data file as a new attempt (datafile.Attempt) and never overwrites one."""
+    name = IncrementSuffix(stem, Defaults.reRunExtra)
+    while (Path(folder) / fileCreation(name, Defaults.outputExtension)).exists():
+        name = IncrementSuffix(name, Defaults.reRunExtra)
+    return name
 
 # Formats checkpoints automatically
 # formchk's own output is captured and printed through the console (the TUI can't have it written to its screen).

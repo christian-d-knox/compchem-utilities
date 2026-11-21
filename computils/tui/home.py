@@ -34,7 +34,8 @@ ENVIRONMENT_ITEM = "screen-environment"
 # SP); the scrapers read the whole CWD. Screen items (the builder, the scrapers) dim the file pane, as the screens below
 # the divider do
 BUILDERS_ITEM = "screen-builders"
-BUILDER_ITEMS = {"builder-opt": "Optimization", f"action-{Action.SINGLE_POINT.value}": ACTION_LABELS[Action.SINGLE_POINT],
+BUILDER_ITEMS = {"builder-opt": "Optimization", "builder-crest": "Conformer Search",
+                 f"action-{Action.SINGLE_POINT.value}": ACTION_LABELS[Action.SINGLE_POINT],
                  f"action-{Action.BENCHMARK.value}": ACTION_LABELS[Action.BENCHMARK]}
 SCRAPER_ITEMS = {"scraper-si": "SI Scraper"}
 # Sub-menu item id -> (pane title prefix, the title while ‹ Actions is highlighted, its items)
@@ -43,8 +44,8 @@ SUBMENUS = {BUILDERS_ITEM: ("Builders", "Input Builders", BUILDER_ITEMS),
 SUBMENU_BACK = "submenu-back"
 # Actions listed in a sub-menu instead of the main list
 SUBMENU_ACTIONS = {itemId.removeprefix("action-") for itemId in BUILDER_ITEMS if itemId.startswith("action-")}
-ITEM_LABELS = {BUILDERS_ITEM: "Input Builders ›", "builder-opt": "Optimization", **SCREEN_ITEMS, **SCRAPER_ITEMS,
-               SUBMENU_BACK: "‹ Actions"}
+ITEM_LABELS = {BUILDERS_ITEM: "Input Builders ›", "builder-opt": "Optimization", "builder-crest": "Conformer Search",
+               **SCREEN_ITEMS, **SCRAPER_ITEMS, SUBMENU_BACK: "‹ Actions"}
 _COLLAPSE = Binding.Group("Collapse")
 _ALL_NONE = Binding.Group("All/None")
 _FOLD = Binding.Group("Fold", compact=True)
@@ -55,7 +56,7 @@ STATUS_STYLES = {"Normal": "good", "Error": "error", "Unknown": "warning"}
 
 # Help lines are labels, so Title Case (round 31)
 HELP = {
-    "actions": "↑/↓ Highlight an Action · space Choose It and Go to the Folders (the File List Below the Project Root) · enter Continue to the File List · space / enter on Input Builders or Scrapers: List Them (‹ Actions or esc to Go Back) · space / enter on Optimization: Build an Input from Coordinates · space / enter on SI Scraper: Open the SI Scraper · space / enter on Job Stalker: Open the Job Stalker ·space / enter on Config or Project Files: Open the Config Editor · space / enter on Attributions: Show the License, Disclaimer and Credits · 1 Collapse Actions",
+    "actions": "↑/↓ Highlight an Action · space Choose It and Go to the Folders (the File List Below the Project Root) · enter Continue to the File List · space / enter on Input Builders or Scrapers: List Them (‹ Actions or esc to Go Back) · space / enter on Optimization: Build an Input from Coordinates · space / enter on Conformer Search: Build a CREST Search from Coordinates · Re-Run on a CREST Output: the Conformer Search Screen, Preset From It · space / enter on SI Scraper: Open the SI Scraper · space / enter on Job Stalker: Open the Job Stalker ·space / enter on Config or Project Files: Open the Config Editor · space / enter on Attributions: Show the License, Disclaimer and Credits · 1 Collapse Actions",
     "folders": "↑/↓ Move · space / Click Open the Folder (It Becomes the CWD) and Go to the File List · ←/→ or Click the Arrow Fold · enter Continue · 2 Collapse Folders",
     "glob":    "Type a Pattern to Select Matching Files · enter / esc Return to the File List",
     "files":   "space Select · a All · n None · / Glob · enter Continue to the Builder · s on Write XYZ: From a SMILES (RDKit Conformers, No File Needed)",
@@ -468,6 +469,9 @@ class HomeScreen(Screen):
             case "builder-opt":
                 from .inputs import CoordinatesScreen
                 self.app.push_screen(CoordinatesScreen())
+            case "builder-crest":
+                from .inputs import CoordinatesScreen
+                self.app.push_screen(CoordinatesScreen("Conformer Search"))
             case "scraper-si":
                 from .scrapers import SIScraperScreen
                 keep = set(self.query_one("#files", FileList).selected)
@@ -486,6 +490,20 @@ class HomeScreen(Screen):
             case "screen-attributions":
                 from .attributions import AttributionsScreen
                 self.app.push_screen(AttributionsScreen())
+
+    def OpenCrestReRun(self, output: Path) -> None:
+        """A CREST output re-run (crest.ReRunJob: the same start, options and constraints as it ran) in the Conformer
+        Search screen, where any of them can be corrected before it is submitted as the next attempt."""
+        from ..crest   import ReRunJob
+        from ..intent  import ReRunIntent
+        from .crestscreen import ConformerSearchScreen
+        job, problem = ReRunJob(output.resolve(), ReRunIntent(files=[output]),
+                                lambda charge, multiplicity, molecule: (0 if charge is None else charge,
+                                                                        1 if multiplicity is None else multiplicity))
+        if job is None:
+            Notice(self.app, "Can't Re-Run This Search", problem, "error")
+            return
+        self.app.push_screen(ConformerSearchScreen(job.molecule, "", False, preset=job))
 
     def OpenConfig(self, section: str = "SLURM") -> None:
         from .config import ConfigScreen
@@ -521,6 +539,17 @@ class HomeScreen(Screen):
         if self.action == Action.XYZ:
             self.app.WriteXyz(XyzIntent(files=files))
             return
+        # Re-Run on a CREST output: the Conformer Search screen, preset from it (its next attempt), one at a time
+        if self.action == Action.RERUN:
+            from ..crest import IsCrestOutput
+            searches = [path for path in files if IsCrestOutput(path)]
+            if searches:
+                if len(files) > 1:
+                    Notice(self.app, "One CREST Search at a Time", "A CREST search is re-run in the Conformer Search "
+                           "screen, preset from it: select it alone (DFT outputs go through Re-Run together).", "warning")
+                    return
+                self.OpenCrestReRun(searches[0])
+                return
         # Single Point, Benchmark, Re-Run and Run as Written: the job screens (the Opt builder's template); GoodVibes and
         # Cube Files: the Builder
         from .jobscreens import JOB_ACTIONS, JobScreen

@@ -103,16 +103,22 @@ def PlanBenchmark(molecules: list[tuple[Path, Molecule | None]], start: int, res
     return jobs
 
 
-def PlanReRuns(molecules: list[tuple[Path, Molecule | None]], resources: Resources) -> list[PlannedJob]:
-    """-re: each file re-run from its last geometry with the route it ran (fileops.ReRunTemplate), named 8a_re."""
+def PlanReRuns(molecules: list[tuple[Path, Molecule | None]], resources: Resources,
+               template: RouteTemplate | None = None, problem: str = "") -> list[PlannedJob]:
+    """-re: each file re-run from its last geometry, named as a re-run (8a_re, past names with an output), with the
+    route it ran (fileops.ReRunTemplate) or a corrected one (template: --route / --method; problem: why it can't be
+    made)."""
     jobs = []
     for source, molecule in molecules:
         if molecule is None:
             jobs.append(_Generated(None, source, source.stem + Defaults.reRunExtra, None, "", resources))
             continue
         job = copy.copy(molecule)
-        template, problem = ReRunTemplate(job)
-        jobs.append(_Generated(job, source, ReRunName(job), template, problem, resources, job.extensionType))
+        if template is not None or problem:
+            jobs.append(_Generated(job, source, ReRunName(job), template, problem, resources))
+            continue
+        ownTemplate, ownProblem = ReRunTemplate(job)
+        jobs.append(_Generated(job, source, ReRunName(job), ownTemplate, ownProblem, resources, job.extensionType))
     return jobs
 
 

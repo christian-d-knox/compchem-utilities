@@ -18,9 +18,10 @@ from rich.markup import escape
 
 from .actions  import NTS_SP, NTS_DONE
 from .console  import console
+from .datafile import RecordEndings
 from .defaults import Defaults
 from .environment import StablePython, SwapGuard
-from .fileops  import (ExtractFrom, ExtractTermination, ExtractProgram, StageCount, IncrementSuffix, fileCreation,
+from .fileops  import (ExtractFrom, ExtractTermination, ExtractProgram, StageCount, ReRunNameIn, fileCreation,
                        TERMINATION_TAIL)
 from .intent   import NevaTouchIntent, SinglePointIntent, RunIntent
 from .notify   import NotifyPersonal
@@ -166,10 +167,7 @@ def _SubmitSinglePoint(intent: NevaTouchIntent, output: Path) -> TrackedJob | No
 def _ReRunName(output: Path) -> str:
     """The re-run's name, as `cu -re` names one (8a -> 8a_re -> 8a_re2), past any job that has run here (has an output).
     An input alone is rewritten, as `cu -re` does: e.g. one a refused hook wrote, which the fallback then submits."""
-    name = IncrementSuffix(output.stem, Defaults.reRunExtra)
-    while (output.parent / fileCreation(name, Defaults.outputExtension)).exists():
-        name = IncrementSuffix(name, Defaults.reRunExtra)
-    return name
+    return ReRunNameIn(output.stem, output.parent)
 
 def _SubmitReRun(intent: NevaTouchIntent, output: Path, stage: int, originalStage: int,
                  count: int) -> tuple[TrackedJob | None, str]:
@@ -231,6 +229,8 @@ def RunStep(intent: NevaTouchIntent) -> None:
     ending = ReadEnding(job) if job.program else job
     if tracked and ending is not job:
         TrackJobs([ending])
+    # Its data file (<root>.cudf), so its summary is there before the next ping
+    RecordEndings([ending])
     endedIn, outOfSteps = ending.stage, ending.stages[ending.stage].outOfSteps
     console.print(f"[operation]{time.strftime('%Y-%m-%d %H:%M:%S')}: Neva-Touch Scheduler, {intent.step} step for "
                   f"{output.name} (job {intent.jobID}, by the {stepBy}): {termination or 'no termination line'}"

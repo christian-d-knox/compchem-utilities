@@ -441,22 +441,26 @@ def WallTimeProblem(value: str) -> str:
 # this job's own (a builder's rows, the job commands' --wall-time/--partition/--cluster), None for the config's
 def slurmHandler(molecule: Molecule, queueName: Path, outputName: Path, cpus: int, jobRam: int,
                  wallTime: str | None = None, partition: str | None = None, cluster: str | None = None) -> None:
-    fills = {"name": f" {molecule.baseName}", "output": f" {outputName}", "cpus": f"{cpus}", "memory": f"{jobRam}GB",
+    with open(queueName, 'w') as outputFile:
+        outputFile.write(SlurmHeaderText(molecule.baseName, outputName, cpus, jobRam, wallTime, partition, cluster))
+
+def SlurmHeaderText(name: str, outputName: Path | str, cpus: int, jobRam: int, wallTime: str | None = None,
+                    partition: str | None = None, cluster: str | None = None) -> str:
+    """The submission header as slurmHandler writes it (a CREST job's script and its preview build on it too)."""
+    fills = {"name": f" {name}", "output": f" {outputName}", "cpus": f"{cpus}", "memory": f"{jobRam}GB",
              "wallTime": f" {wallTime or Defaults.wallTime}:00:00", "partition": f" {partition or Defaults.partition}",
              "cluster": f" {cluster or Defaults.cluster}"}
-    with open(queueName, 'w') as outputFile:
-        for line in Defaults.submissionList:
-            outputFile.write(f"{line}{fills.get(HeaderKey(line), '')}\n")
+    return "".join(f"{line}{fills.get(HeaderKey(line), '')}\n" for line in Defaults.submissionList)
 
-# An ORCA job's plumbing, after orcaNonVariant's environment: run in node scratch, then copy the result files into
-# <job name>-scratch/ however the job ends. At the wall time SLURM sends SIGTERM (then SIGKILL ~30 s later), so the TERM
-# trap exits and the EXIT trap still copies. The .out itself comes back through SLURM -o
-ORCA_RUN_SCRIPT = """\
+# An ORCA or CREST job's plumbing, after its NonVariant environment: run in node scratch, then copy the result files
+# into <job name>-scratch/ however the job ends. At the wall time SLURM sends SIGTERM (then SIGKILL ~30 s later), so the
+# TERM trap exits and the EXIT trap still copies. The .out itself comes back through SLURM -o
+SCRATCH_RUN_SCRIPT = """\
 # Run in the node's scratch space
-cp "$SLURM_SUBMIT_DIR/{inputName}" "$SLURM_SCRATCH/"
+cp {inputs} "$SLURM_SCRATCH/"
 cd "$SLURM_SCRATCH"
 
-# Copy the results back however the job ends: normal end, ORCA error, or the wall time
+# Copy the results back however the job ends: normal end, {program} error, or the wall time
 results="$SLURM_SUBMIT_DIR/{resultsFolder}"
 CopyBack() {{
     mkdir -p "$results"
@@ -467,9 +471,15 @@ CopyBack() {{
 trap CopyBack EXIT
 trap 'exit 143' TERM
 
-# $(which orca) is necessary: ORCA needs its full path to run in parallel
-$(which orca) {inputName}
+{command}
 """
+
+def ScratchRunScript(inputs: list[str], program: str, resultsFolder: str, resultFiles: list[str], command: str) -> str:
+    """The run in node scratch (SCRATCH_RUN_SCRIPT): inputs copied there, command run, resultFiles copied back into
+    resultsFolder however the job ends."""
+    return SCRATCH_RUN_SCRIPT.format(inputs=" ".join(f'"$SLURM_SUBMIT_DIR/{name}"' for name in inputs),
+                                     program=program, resultsFolder=resultsFolder,
+                                     resultFiles=" ".join(str(name) for name in resultFiles), command=command)
 
 # Every job reaches the queue through here, so the group broadcast can count the whole invocation (dispatch)
 submittedJobs = 0
@@ -563,12 +573,13 @@ def runJob(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
 
         case Defaults.orcaExtension:
             program = "ORCA"
-            resultFiles = " ".join(str(fileCreation(molecule.baseName, suffix)) for suffix in Defaults.orcaResultSuffixes)
+            inputName = fileCreation(molecule.baseName, Defaults.orcaExtension)
             with open(queueName, 'a') as outputFile:
                 outputFile.writelines(Defaults.orcaNonVariant)
-                outputFile.write(ORCA_RUN_SCRIPT.format(
-                    inputName=fileCreation(molecule.baseName, Defaults.orcaExtension), resultFiles=resultFiles,
-                    resultsFolder=fileCreation(molecule.baseName, "", Defaults.scratchFolderExtra)))
+                outputFile.write(ScratchRunScript(
+                    [str(inputName)], "ORCA", str(fileCreation(molecule.baseName, "", Defaults.scratchFolderExtra)),
+                    [fileCreation(molecule.baseName, suffix) for suffix in Defaults.orcaResultSuffixes],
+                    f"# $(which orca) is necessary: ORCA needs its full path to run in parallel\n$(which orca) {inputName}"))
                 outputFile.write(hook)
 
         # Only Gaussian and ORCA inputs are submitted

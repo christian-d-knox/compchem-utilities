@@ -4,6 +4,7 @@
     === Benchmark Methods ===        the benchmark suite, one route per entry (entry 0 is -sp's default)
     === Mixed Basis ===              Gen/GenECP basis groups and ECPs
     === ORCA Blocks ===              %blocks, pulled into ORCA jobs by {tag} tokens
+    === Conformer Search Methods === named CREST option lines for conformer searches ('# @NAME' above each; crest.py)
 
 Each section keeps its own format and extractor (fileops). The file has no extension: it is edited in the TUI (Config ›
 Job Keylists, one section at a time). It lives at two levels, and the nearer level that HAS a section wins, section by
@@ -23,16 +24,23 @@ from rich.markup import escape
 
 from .console  import console
 from .defaults import BackUpFile, Defaults
-from .fileops  import (ExtractBenchmarkMethods, ExtractFromText, ExtractMixedBasis, ExtractOptMethods, ExtractOrcaBlocks,
-                       HasContent, JoinStages, MapFile, MixedBasis, NamedRoutes, RouteEntries)
+from .fileops  import (ExtractBenchmarkMethods, ExtractCrestMethods, ExtractFromText, ExtractMixedBasis,
+                       ExtractOptMethods, ExtractOrcaBlocks, HasContent, JoinStages, MapFile, MixedBasis, NamedRoutes,
+                       RouteEntries)
 from .project  import FindProjectRoot, ProjectFilePath
 
 KEYLISTS_FILE = "jobRelatedKeylists"
 OPTIMIZATION, BENCHMARK, MIXED_BASIS, ORCA_BLOCKS = "Optimization Methods", "Benchmark Methods", "Mixed Basis", "ORCA Blocks"
+CONFORMER_SEARCH = "Conformer Search Methods"
 # The TOML key the Benchmark Methods section replaced (programs.toml, project.toml, a lab profile's [settings])
 LEGACY_KEY = "benchmarkMethods"
 # The suite when no level has one
 DEFAULT_BENCHMARK = ["M062X 6-311+G(d,p)"]
+# The conformer searches when no level has any: GFN2-xTB in the gas phase, with looser deduplication thresholds than
+# CREST's own. A project adds its solvent (--alpb toluene) as an entry of its own
+DEFAULT_CONFORMER_SEARCH = {"gfn2": "--gfn2 --ewin 8 --rthr 0.5 --ethr 0.25 --bthr 0.05 --noreftopo"}
+# A section's named entries as its file writes them ('# @name' above each)
+NAMED_SECTIONS = (OPTIMIZATION, CONFORMER_SEARCH)
 # '=== Name ===' on a line of its own. Nothing in any section's format starts with '='
 SECTION_HEADER = r"(?m)^===[ \t]*(.*?)[ \t]*===[ \t]*(?=\r?$)"
 _HEADER_TEXT, _HEADER_BYTES = regex.compile(SECTION_HEADER), regex.compile(SECTION_HEADER.encode())
@@ -53,6 +61,7 @@ SECTIONS = {section.name: section for section in (
     Section(BENCHMARK, ExtractBenchmarkMethods, list),
     Section(MIXED_BASIS, ExtractMixedBasis, lambda: MixedBasis([], []), "mixedbasis.txt"),
     Section(ORCA_BLOCKS, ExtractOrcaBlocks, dict, "orcablocks.txt"),
+    Section(CONFORMER_SEARCH, ExtractCrestMethods, dict),
 )}
 
 
@@ -148,10 +157,10 @@ def _ParseParts(parts) -> dict:
 
 def RouteAt(name: str, text: str, row: int) -> tuple[str, int, int, str] | None:
     """The route on a methods section's line (the TUI editor's cursor): (its label, the stage the line is, stage count,
-    the whole route card, stages joined), or None off a route. Labels are the Optimization Methods' names, or 'Entry N'
-    (Benchmark)."""
+    the whole route card, stages joined), or None off a route. Labels are the Optimization (or Conformer Search)
+    Methods' names, or 'Entry N' (Benchmark)."""
     entries = ExtractFromText(text, RouteEntries, empty=[])
-    labelled = (NamedRoutes(entries) if name == OPTIMIZATION
+    labelled = (NamedRoutes(entries) if name in NAMED_SECTIONS
                 else [(f"Entry {index}", stages) for index, (_, stages) in enumerate(entries)])
     for label, stages in labelled:
         for number, (line, route) in enumerate(stages, 1):
@@ -264,13 +273,32 @@ def KeylistSource(name: str, texts: dict[Path, str] | None = None) -> tuple[Leve
 
 def Keylist(name: str, texts: dict[Path, str] | None = None):
     """A section's parsed value from the nearest level that has it: OptMethods' {name: route}, the benchmark list,
-    MixedBasis, ORCA {tag: block}. Without one anywhere: its empty value (the default suite for Benchmark Methods).
-    texts ({level path: unsaved text}) stands in for files (the TUI's config editor)."""
+    MixedBasis, ORCA {tag: block}, Conformer Search {name: options}. Without one anywhere: its empty value (the
+    default suite for Benchmark Methods, the default search for Conformer Search Methods). texts ({level path: unsaved
+    text}) stands in for files (the TUI's config editor)."""
     for level in Levels():
         found = LevelSections(level, texts)
         if name in found:
             return found[name][0]
-    return list(DEFAULT_BENCHMARK) if name == BENCHMARK else SECTIONS[name].empty()
+    return DefaultValue(name)
+
+
+def DefaultValue(name: str):
+    """A section's value when no level has it."""
+    if name == BENCHMARK:
+        return list(DEFAULT_BENCHMARK)
+    if name == CONFORMER_SEARCH:
+        return dict(DEFAULT_CONFORMER_SEARCH)
+    return SECTIONS[name].empty()
+
+
+def DefaultBody(name: str, benchmark: list[str] | None = None) -> str:
+    """A new file's text for a section: the benchmark suite, the default conformer search ('# @name' above it)."""
+    if name == BENCHMARK:
+        return "\n".join(benchmark or DEFAULT_BENCHMARK)
+    if name == CONFORMER_SEARCH:
+        return "\n".join(f"# @{entry}\n{options}" for entry, options in DEFAULT_CONFORMER_SEARCH.items())
+    return ""
 
 
 def Where(name: str) -> str:
@@ -301,10 +329,10 @@ def SaveSection(path: Path, name: str, body: str | None) -> bool:
 
 
 def DefaultText(benchmark: list[str]) -> str:
-    """A new global file: every section's header, the benchmark suite in its section."""
+    """A new global file: every section's header, the benchmark suite and the default conformer search in theirs."""
     text = FILE_PREAMBLE
     for name in SECTIONS:
-        text = ReplaceSection(text, name, "\n".join(benchmark) if name == BENCHMARK else "")
+        text = ReplaceSection(text, name, DefaultBody(name, benchmark))
     return text
 
 

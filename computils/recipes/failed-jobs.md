@@ -15,6 +15,14 @@
 
        {cu} -re 8a.out --dry-run --json
 
+   A bad or mistaken input is fixed the same way, as a re-run with the input corrected: a route of your own
+   (`--route`) or an Optimization Method (`--method NAME`, `{cu} -methods` lists them), on the human's word. The re-run
+   starts from the last geometry and is named as a re-run (8a_re, or 8a_re2 past one that ran), so it replaces the
+   old attempt in the species' data file once it succeeds. A route given here is a fresh job's: it writes the
+   geometry, so leave out `Geom=AllCheck` and `guess=read` unless the checkpoint is wanted (`-ch`).
+
+       {cu} -re 8a.out --route 'opt=(ts,calcfc,noeigen) freq b3lyp/def2svp' --dry-run --json
+
    An optimization re-run can have its single point submitted when it ends, as `-opt --then-sp` does (the same
    `--sp-*` flags; a re-run that doesn't optimize gets no next job):
 

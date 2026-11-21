@@ -19,7 +19,7 @@ from .intent    import (
     CubeIntent, FormCheckIntent, ExcelIntent, GoodVibesIntent,
     FirstTimeSetupIntent, UpdateIntent, PluginUpdateIntent, InitProjectIntent, ProfileIntent, RefreshIntent, StalkIntent,
     AttributionsIntent, NevaTouchIntent, EnvironmentIntent, InfoIntent, MethodsIntent, OptimizationIntent, SIIntent,
-    AgentIntent, XyzIntent,
+    AgentIntent, XyzIntent, CrestIntent,
 )
 from .fileops   import grabPaths, formCheck, fileCreation, HasContent, MapFile, ReadMolecule, WriteXyz
 from .jobs      import HeaderSends, runJob
@@ -46,6 +46,7 @@ def Dispatch(intent: Intent) -> list[TrackedJob]:
         case CubeIntent():            _DispatchCube(intent)
         case ReRunIntent():           return _DispatchReRun(intent)
         case OptimizationIntent():    return _DispatchOptimize(intent)
+        case CrestIntent():           return _DispatchCrest(intent)
         case FormCheckIntent():       _DispatchFormCheck(intent)
         case ExcelIntent():           _DispatchExcel(intent)
         case GoodVibesIntent():       _DispatchGoodVibes(intent)
@@ -96,6 +97,36 @@ def _LoadMolecule(jobPath, coordExtra: str = "") -> Molecule | None:
     WriteXyz(molecule, fileCreation(baseName, Defaults.coordExtension, coordExtra))
     console.print(f"[info]{molecule.rootName}: {molecule.spinState.name} ({reason})[/info]")
     return molecule
+
+
+def _WarnFrames(path: Path) -> None:
+    """An .xyz holding several structures (a CREST ensemble) is read as its last one: say so, so nobody takes its
+    highest-energy conformer by mistake."""
+    from .fileops import ExtractFrom, XyzFrames
+    if Path(path).suffix == Defaults.coordExtension:
+        frames = ExtractFrom(Path(path), XyzFrames, empty=0)
+        if frames > 1:
+            agent.Warn(f"{Path(path).name} holds {frames} structures: only the last one is used.")
+
+
+def _Whole(value: str, what: str) -> int:
+    try:
+        return int(value)
+    except ValueError:
+        raise agent.UsageError(f"The {what} must be a whole number (got '{value}').") from None
+
+
+def _ChargeAndMultiplicity(charge: int | None, multiplicity: int | None, molecule: Molecule,
+                           known: bool) -> tuple[int, int]:
+    """A job's charge and multiplicity (-opt's and -crest's): given, else the molecule's when it carries them (a prior
+    job, a SMILES), else asked (an .xyz carries neither)."""
+    from .prompts import AskStr
+    known = known and bool(molecule.multiplicity)
+    charge = (charge if charge is not None else int(molecule.charge) if known
+              else _Whole(AskStr("Charge", "0", key="charge"), "charge"))
+    multiplicity = (multiplicity if multiplicity is not None else int(molecule.multiplicity) if known
+                    else _Whole(AskStr("Multiplicity", "1", key="mult"), "multiplicity"))
+    return charge, multiplicity
 
 
 # Run, Cube and FormChk use their files as-is: no coordinates (coordinateList=0 sentinel). Missing files are skipped
@@ -180,14 +211,169 @@ def _ScheduledSinglePoint(asked: ThenSP, partition: str | None, cluster: str | N
 
 
 def _DispatchReRun(intent: ReRunIntent) -> list[TrackedJob]:
+    import copy
+    from .crest   import IsCrestOutput
+    # A CREST output's re-run is a search again (crest.ReRunJob); every other file's is genReRun's
+    searches = [path for path in intent.files if IsCrestOutput(Path(path))]
+    others = [path for path in intent.files if path not in searches]
+    if intent.method and intent.route is None and others:
+        # --method named only a Conformer Search Method: nothing to correct a DFT job's route with
+        for path in others:
+            agent.Skip(str(path), f"--method '{intent.method}' is a Conformer Search Method, not an Optimization Method")
+        others = []
+    if (intent.constrain is not None or intent.forceConstant is not None) and others:
+        agent.Warn("--constrain and --force-constant are CREST's: the DFT re-runs ignore them.")
+    trackedJobs: list[TrackedJob] = []
+    if searches:
+        trackedJobs += _ReRunSearches(intent, searches)
+    if not others:
+        return _AfterSubmission(trackedJobs) if searches else []
+    intent = copy.copy(intent)
+    intent.files = others
     # --then-sp: each re-run that optimizes gets the single point as its next job (runJob writes its chain file)
     if intent.thenSP is not None:
         step, stop = _ScheduledSinglePoint(intent.thenSP, intent.partition, intent.cluster, required=True)
         if stop:
-            return []
+            return trackedJobs
         if step is not None:
             intent.thenSteps = [step.ChainStep()]
-    return _GenerateBatch(intent, genReRun, "_failed")
+    return trackedJobs + _GenerateBatch(intent, genReRun, "_failed")
+
+
+def _ReRunSearches(intent: ReRunIntent, outputs: list[Path]) -> list[TrackedJob]:
+    """-re on CREST outputs: each searched again as its next attempt (8a_CREST_re), from the same starting geometry with
+    the options and constraints it ran with, unless corrected (--method/--route, --constrain). Every question is asked
+    before anything is written."""
+    from .crest import ReRunJob, Submit
+    jobs = []
+    for output in outputs:
+        job, problem = ReRunJob(Path(output), intent, lambda charge, multiplicity, molecule: _ChargeAndMultiplicity(
+            charge, multiplicity, molecule, False))
+        if job is None:
+            agent.Skip(str(output), problem)
+            continue
+        job.Apply()
+        errors, warnings = job.Check()
+        if errors:
+            agent.Skip(str(output), "; ".join(errors))
+            continue
+        for warning in warnings:
+            agent.Warn(f"{job.name}: {warning}")
+        jobs.append(job)
+    trackedJobs: list[TrackedJob] = []
+    for job in jobs:
+        if Submit(job, trackedJobs):
+            agent.Result(job.Result())
+            console.print(f"[info]{escape(job.name)}: {escape(job.CommandLine())}[/info]")
+    return trackedJobs
+
+
+def _DispatchCrest(intent: CrestIntent) -> list[TrackedJob]:
+    """`cu -crest FILE...`: a CREST conformer search of each molecule (crest.py, which the TUI's Conformer Search builder
+    uses too), named NAME_CREST (the next attempt, NAME_CREST_re, when that one has run here). Every question (the
+    search, a charge or multiplicity an .xyz doesn't carry) is asked before anything is written."""
+    import copy, sys
+    from .crest    import CUSTOM, DEFAULT_FORCE_CONSTANT, CrestJob, JobName, Methods, OptionsProblem, Submit
+    from .datafile import RootName
+    from .fileops  import ReRunNameIn
+    from .info     import SourceMolecule
+    from .prompts  import AskChoice
+    # The TUI's Conformer Search screen: its job, built from its settings, checked again and submitted as it is
+    if intent.job is not None:
+        job, trackedJobs = intent.job, []
+        errors, warnings = job.Check()
+        if errors:
+            agent.Skip(job.name, "; ".join(errors))
+            return []
+        for warning in warnings:
+            agent.Warn(f"{job.name}: {warning}")
+        if Submit(job, trackedJobs):
+            agent.Result(job.Result())
+        return _AfterSubmission(trackedJobs)
+    # CREST's options: a Conformer Search Method by name (cu -methods), typed in full, or asked (once for the batch)
+    if intent.route is not None:
+        label, options = CUSTOM, " ".join(intent.route.split())
+        problem = OptionsProblem(options)
+        if problem:
+            raise agent.UsageError(f"--route: {problem}.")
+    else:
+        methods = Methods()
+        if not methods:
+            agent.Fail("There are no Conformer Search Methods here (Config › Job Keylists), so give CREST's options "
+                       "with --route.")
+            return []
+        if intent.method:
+            label = next(name for name in methods if name.lower() == intent.method.lower())
+        else:
+            names = list(methods)
+            chosen = AskChoice("Which conformer search (cu -methods lists each one's options)?", names,
+                               key="crest-method")
+            if chosen is None:
+                return []
+            label = names[chosen]
+        options = methods[label]
+        problem = OptionsProblem(options)
+        if problem:
+            agent.Fail(f"Conformer Search Method {label}: {problem} (Config › Job Keylists).")
+            return []
+
+    # The molecules, each with its charge and multiplicity (asked here, before anything is written)
+    sources = []
+    if intent.smiles is not None:
+        from .smiles import SmilesMolecule
+        read, build, problem = SmilesMolecule(intent.smiles, intent.name, intent.rdkitConformers, intent.rdkitConformer)
+        for warning in build.warnings if build is not None else []:
+            agent.Warn(f"{intent.smiles}: {warning}")
+        if read is None:
+            agent.Skip(intent.smiles, problem)
+            return []
+        sources.append((intent.smiles, read, True, intent.name))
+    for path in intent.files:
+        path = Path(path)
+        if not path.is_file():
+            agent.Skip(str(path), "No such file")
+            continue
+        read, _, prior = SourceMolecule(path)
+        if not read.coordinateList:
+            agent.Skip(path.name, "No coordinates found")
+            continue
+        _WarnFrames(path)
+        sources.append((path.name, read, prior, intent.name or RootName(path.stem)))
+    jobs, taken = [], set()
+    for item, read, known, species in sources:
+        molecule = copy.copy(read)
+        charge, multiplicity = _ChargeAndMultiplicity(intent.charge, intent.multiplicity, molecule, known)
+        name = JobName(species)
+        # A search that has run here keeps its output: this one is its next attempt (the species' data file ranks it)
+        if (Path.cwd() / fileCreation(name, Defaults.outputExtension)).exists() or name in taken:
+            name = ReRunNameIn(name, Path.cwd())
+            while name in taken:
+                name = ReRunNameIn(name, Path.cwd())
+            console.print(f"[info]{escape(item)}: {JobName(species)} has run here, so this search is {name}, its next "
+                          f"attempt.[/info]")
+        taken.add(name)
+        job = CrestJob(molecule, name, charge, multiplicity, label, options, intent.constrain or "",
+                       intent.forceConstant or DEFAULT_FORCE_CONSTANT, intent.cpus or Defaults.CPU, intent.memoryRatio,
+                       intent.wallTime, intent.partition, intent.cluster)
+        job.Apply()
+        errors, warnings = job.Check()
+        if errors:
+            agent.Skip(item, "; ".join(errors))
+            continue
+        for warning in warnings:
+            agent.Warn(f"{item}: {warning}")
+        jobs.append(job)
+
+    trackedJobs: list[TrackedJob] = []
+    for job in jobs:
+        if Submit(job, trackedJobs):
+            agent.Result(job.Result())
+            console.print(f"[info]{escape(job.name)}: {escape(job.method)}, charge {job.charge}, multiplicity "
+                          f"{job.multiplicity}: {escape(job.CommandLine())}[/info]")
+    if agent.dryRun and jobs:
+        command = [arg for arg in sys.argv[1:] if arg != "--dry-run"]
+        agent.Next(agent.CommandLine(command), "Submit what was previewed.", show=False)
+    return _AfterSubmission(trackedJobs)
 
 
 def _DispatchOptimize(intent: OptimizationIntent) -> list[TrackedJob]:
@@ -222,6 +408,7 @@ def _DispatchOptimize(intent: OptimizationIntent) -> list[TrackedJob]:
         if not read.coordinateList:
             agent.Skip(source.name, "No coordinates found")
             return []
+        _WarnFrames(source)
     # A copy: the job's settings are written onto it (as the builder's screen does)
     molecule = copy.copy(read)
     spinReason = StartingSpin(molecule, reason)
@@ -263,17 +450,8 @@ def _DispatchOptimize(intent: OptimizationIntent) -> list[TrackedJob]:
             return []
 
     # Charge and multiplicity: given, else the prior job's or the SMILES', else asked (an .xyz carries neither)
-    def Whole(value: str, what: str) -> int:
-        try:
-            return int(value)
-        except ValueError:
-            raise agent.UsageError(f"The {what} must be a whole number (got '{value}').") from None
-    known = (prior or build is not None) and molecule.multiplicity
-    charge = (intent.charge if intent.charge is not None else int(molecule.charge) if known
-              else Whole(AskStr("Charge", "0", key="charge"), "charge"))
-    multiplicity = (intent.multiplicity if intent.multiplicity is not None
-                    else int(molecule.multiplicity) if known
-                    else Whole(AskStr("Multiplicity", "1", key="mult"), "multiplicity"))
+    charge, multiplicity = _ChargeAndMultiplicity(intent.charge, intent.multiplicity, molecule,
+                                                  prior or build is not None)
     spin = (SpinState(intent.spin) if intent.spin else SpinState.OSS if molecule.spinState == SpinState.OSS
             else SpinState.CSS)
 
@@ -527,6 +705,7 @@ def _DispatchXyz(intent: XyzIntent) -> None:
         if not molecule.coordinateList:
             agent.Skip(str(path), "No coordinates found")
             continue
+        _WarnFrames(path)
         target = fileCreation(baseName, Defaults.coordExtension)
         WriteXyz(molecule, target)
         agent.Written(target)
@@ -554,7 +733,8 @@ def _DispatchInfo(intent: InfoIntent) -> None:
     """`cu -info`: each file's facts (one map each), a table for people, records for --json, and what to run next."""
     from rich.table import Table
     from rich.box import SQUARE
-    from .info import FileFacts, Optimizes
+    from .info import Optimizes
+    from .datafile import Facts, ForReport
     table = Table(box=SQUARE, show_lines=False)
     for column in ("File", "Program", "Status", "Formula", "Charge/Mult", "Method", "Energy (Eh)", "Imag.", "Conv."):
         table.add_column(column)
@@ -563,26 +743,43 @@ def _DispatchInfo(intent: InfoIntent) -> None:
         if not Path(path).is_file():
             agent.Skip(str(path), "No such file")
             continue
+        # An output's facts come from its data file (<root>.cudf) while that's current, else from the output, which
+        # is then recorded there. The report leaves out the blocks kept only there (the geometry, every frequency)
         try:
-            facts = FileFacts(Path(path))
+            facts, dataFile = Facts(Path(path))
         except (OSError, ValueError) as error:
             agent.Skip(str(path), f"Couldn't be read: {error}")
             continue
+        facts = ForReport(facts)
+        if dataFile is not None:
+            facts["dataFile"] = str(dataFile)
         agent.Result(facts)
-        convergence = facts.get("convergence")
-        table.add_row(facts["file"], facts.get("program", "—"), facts.get("status", facts["kind"].title()),
-                      facts.get("formula", "—"),
-                      f"{facts['charge']} / {facts['multiplicity']}" if "multiplicity" in facts else "—",
-                      escape(f"{facts['method']}/{facts['basis']}" if facts.get("basis") else facts.get("method", "—")),
-                      f"{facts['energy']:.6f}" if "energy" in facts else "—",
-                      str(len(facts["imaginaryFrequencies"])) if "imaginaryFrequencies" in facts else "—",
-                      f"{convergence['met']}/{convergence['total']}" if convergence else "—")
+        # One row per stage of a staged output (its file's cells on the first), else one
+        stages = facts["stages"] if facts["kind"] == "output" and "stages" in facts else [facts]
+        for stage in stages:
+            first = stage is stages[0]
+            convergence = stage.get("convergence")
+            label = facts["file"] if len(stages) == 1 else f"{facts['file']} ({stage['stage']}/{len(stages)})"
+            table.add_row(label if first else f"  ({stage['stage']}/{len(stages)})",
+                          facts.get("program", "—") if first else "",
+                          stage.get("status", facts["kind"].title()),
+                          facts.get("formula", "—") if first else "",
+                          (f"{facts['charge']} / {facts['multiplicity']}" if "multiplicity" in facts else "—")
+                          if first else "",
+                          escape(f"{stage['method']}/{stage['basis']}" if stage.get("basis")
+                                 else stage.get("method", "—")),
+                          f"{stage['energy']:.6f}" if "energy" in stage
+                          else f"{stage['lowestEnergy']:.6f}" if "lowestEnergy" in stage else "—",
+                          str(len(stage["imaginaryFrequencies"])) if "imaginaryFrequencies" in stage else "—",
+                          f"{convergence['met']}/{convergence['total']}" if convergence else "—")
         # As given, so the next commands find it from here
         name = str(path)
-        if facts["kind"] == "output" and (facts.get("status") == "Error" or facts.get("outOfSteps")):
+        if facts["kind"] == "output" and (facts.get("status") == "Error"
+                                          or any(stage.get("outOfSteps") for stage in stages)):
             reRun.append(name)
-        # Without its single point file, by the partner rule -gv and the SI Scraper use (analysis.SpcPartners)
-        elif (facts.get("status") == "Normal" and Optimizes(facts)
+        # Its last stage optimizes, without its single point file, by the partner rule -gv and the SI Scraper use
+        # (analysis.SpcPartners): a job that ran its single point as a later stage has it
+        elif (facts["kind"] == "output" and facts.get("status") == "Normal" and Optimizes(facts)
               and SpcPartners([Path(path)], Defaults.singlePointExtra.lstrip("_"))[2]):
             singlePoint.append(name)
     console.print(table)
@@ -594,11 +791,13 @@ def _DispatchInfo(intent: InfoIntent) -> None:
 
 
 def _DispatchMethods() -> None:
-    """`cu -methods`: the Optimization and Benchmark Methods in force here (an agent picks -opt's --method from these)."""
+    """`cu -methods`: the Optimization, Benchmark and Conformer Search Methods in force here (an agent picks -opt's and
+    -crest's --method from these)."""
     from .catalog  import ParseRouteTemplate
     from .fileops  import StageProblem, extensionGetter, PROGRAMS
     from .jobs     import OptMethods
-    from .keylists import KeylistSource, OPTIMIZATION, BENCHMARK
+    from .keylists import KeylistSource, OPTIMIZATION, BENCHMARK, CONFORMER_SEARCH
+    from .crest    import Level, Methods, OptionsProblem, Solvation
 
     def Entry(name: str, route: str) -> dict:
         template = ParseRouteTemplate(route)
@@ -622,6 +821,21 @@ def _DispatchMethods() -> None:
         if not records:
             console.print("[info]  None (Config › Job Keylists)[/info]")
         agent.Result({"section": section, "level": level, "methods": records})
+    # CREST's option lines (no level has the section: the default search)
+    source = KeylistSource(CONFORMER_SEARCH)
+    level = source[0].label if source else "Default"
+    console.print(f"[operation]{CONFORMER_SEARCH} ({level})[/operation]")
+    records = []
+    for name, options in Methods().items():
+        record = {"name": name, "options": options, "level": Level(options) or "CREST's Default (GFN2-xTB)",
+                  "solvation": Solvation(options) or "Gas Phase"}
+        problem = OptionsProblem(options)
+        if problem:
+            record["problem"] = problem
+        records.append(record)
+        note = f" [warning]({escape(problem)})[/warning]" if problem else ""
+        console.print(f"[info]  {escape(name)}: {escape(options)}{note}[/info]")
+    agent.Result({"section": CONFORMER_SEARCH, "level": level, "methods": records})
 
 
 def _DispatchSI(intent: SIIntent) -> None:

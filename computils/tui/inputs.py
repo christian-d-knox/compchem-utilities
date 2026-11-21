@@ -1,7 +1,8 @@
 """Input Builders (Home's Input Builders list): screens that build a new input and submit it. The Optimization builder
 is two steps: Coordinates (an .xyz, a prior job's geometry, pasted rows, or a SMILES' RDKit
 conformer), then the Job, its
-settings beside an editable preview of the input. The saved input is submitted the way Run as Written submits one."""
+settings beside an editable preview of the input. The saved input is submitted the way Run as Written submits one. The
+Conformer Search builder (tui/crestscreen.py) shares the Coordinates step."""
 import copy
 from pathlib import Path
 
@@ -131,8 +132,10 @@ class CoordinatesScreen(SmilesBuilder, Screen):
         *NAV_BINDINGS,
     ]
 
-    def __init__(self) -> None:
+    def __init__(self, target: str = "Optimization") -> None:
         super().__init__()
+        # The builder these coordinates are for: Optimization, or Conformer Search (its Job step is crestscreen's)
+        self.target = target
         self.folder = Path.cwd()
         self.paths: list[Path] = []
         # What ⏎ continues with: the molecule read from the highlighted file (or the pasted text), and for a prior job
@@ -145,7 +148,7 @@ class CoordinatesScreen(SmilesBuilder, Screen):
         self.rank, self._shownBuild = 1, None
 
     def compose(self) -> ComposeResult:
-        yield Static(TitleLine("Optimization: Coordinates"), id="title")
+        yield Static(TitleLine(f"{self.target}: Coordinates"), id="title")
         yield FrameRule("┌┐", "Source", split=LEFT_WIDTH - 1, id="inputs-top")
         with Horizontal(id="inputs-body"):
             with Column(id="inputs-left", classes="side"):
@@ -377,6 +380,10 @@ class CoordinatesScreen(SmilesBuilder, Screen):
             return
         if not self.Ready():
             self.app.bell()
+            return
+        if self.target == "Conformer Search":
+            from .crestscreen import ConformerSearchScreen
+            self.app.push_screen(ConformerSearchScreen(self.molecule, self.reason, self.source == "prior"))
             return
         self.app.push_screen(OptimizationScreen(self.molecule, self.reason, self.source == "prior"))
 

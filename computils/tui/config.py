@@ -19,7 +19,8 @@ from ..catalog  import MethodKey, ParseRouteTemplate, UnknownSelectors
 from ..defaults import DELETE, Defaults, tomlValue, writeToml
 from ..fileops  import PROGRAMS, RESERVED_ORCA_BLOCKS, TAG_DIRECTIVE, ExtractFromText, StageProblem, extensionGetter
 from ..jobs     import RenderStages
-from ..keylists import (BENCHMARK, FILE_PREAMBLE, KEYLISTS_FILE, MIXED_BASIS, OPTIMIZATION, ORCA_BLOCKS,
+from ..keylists import (BENCHMARK, CONFORMER_SEARCH, FILE_PREAMBLE, KEYLISTS_FILE, MIXED_BASIS, OPTIMIZATION,
+                        ORCA_BLOCKS, DefaultBody,
                         SECTIONS as KEYLIST_SECTIONS, FileProblems, Keylist, KeylistSource, LevelSections, Levels,
                         RemoveSection, ReplaceSection, RouteAt, SectionBody, WriteKeylists)
 from ..molecule import Molecule
@@ -46,7 +47,7 @@ KEYLIST_ENTRIES = [("‹ Config", KEYLISTS_BACK)] + [(name, KEYLIST + name) for 
 # The project files edited here as whole files (jobRelatedKeylists is edited by section)
 FILE_KEYS = [name for name in PROJECT_FILES if name != KEYLISTS_FILE]
 # Set by first-time setup only (the TUI opens only once it has run), or power-user edits made by hand in the file
-HIDDEN = {"hpcType", "submissionList", "gaussianNonVariant", "orcaNonVariant"}
+HIDDEN = {"hpcType", "submissionList", "gaussianNonVariant", "orcaNonVariant", "crestNonVariant"}
 READ_ONLY = {"binDirectory", "projectMarker", "botToken", "chatID", "broadcastGroupChatID", "broadcastThreshold"}
 MASKED = {"botToken", "chatID", "broadcastGroupChatID"}
 # Keys with a fixed set of values: ␣ cycles through them
@@ -59,6 +60,7 @@ FILE_NOTES = {
     BENCHMARK: "The benchmark suite, one route per entry: entry 0 is Single Point's default.",
     MIXED_BASIS: "Gen/GenECP basis sets and ECPs for mixed-basis Gaussian jobs.",
     ORCA_BLOCKS: "ORCA %blocks, pulled into ORCA jobs by {tag} tokens in the method routes.",
+    CONFORMER_SEARCH: "Named CREST option lines, listed by the Conformer Search builder (cu -crest --method).",
     "spinstates.txt": "Per-molecule CSS/OSS overrides for singlets (glob  css|oss).",
 }
 # How route cards work, in the method sections' Example panel: (syntax, meaning) rows, then a closing line
@@ -138,6 +140,26 @@ Tag: its %name, or the # @NAME
 (or # @tag NAME) line above it.
 Use them in routes:
 {cpcm} {toluene} {tddft}""",
+    CONFORMER_SEARCH: """\
+# @gfn2
+--gfn2 --ewin 8 --rthr 0.5 ...
+
+# @gfn2-water
+--gfn2 --alpb water --ewin 10
+
+# @large
+--gfn2//gfnff --ewin 8
+
+# @metal
+--gfn2 --cmetal --noreftopo
+
+One line of CREST options per
+entry, named by the # @NAME line
+above it (else its first flag).
+CompUtils writes --T, --chrg,
+--uhf and --cinp (the
+constraints) itself: they can't
+be written here.""",
     MIXED_BASIS: """\
 C H N O 0
 6-31G(d)
@@ -477,6 +499,19 @@ class ConfigScreen(Screen):
             if byCenter:
                 lines.append(Styled(f"{byCenter} Group(s) by Center Number (Written As-Is)", "info"))
             short = f"{len(elements)} Element{'s' if len(elements) != 1 else ''} · {len(ecp)} ECP"
+        elif name == CONFORMER_SEARCH:
+            # Each search's level and solvation, and a flag CompUtils writes itself
+            from ..crest import Level, OptionsProblem, Solvation
+            short = f"{len(value)} Search{'es' if len(value) != 1 else ''}"
+            lines.append(Text(short if value else "No Searches: the Default Search Applies"))
+            for label, options in value.items():
+                lines.append(Text(f"  {label} → {Level(options) or 'GFN2-xTB (Default)'} · "
+                                  f"{Solvation(options) or 'Gas Phase'}"))
+                if OptionsProblem(options):
+                    problems.append(f"✗ {label}: {OptionsProblem(options)}")
+            declared = [found.lower() for found in regex.findall(rf"(?m)^\s*{TAG_DIRECTIVE}", body)]
+            problems += [f"⚠ @{found} Names {declared.count(found)} Entries (Second Is {found}-2)"
+                         for found in dict.fromkeys(declared) if declared.count(found) > 1]
         else:
             lines.append(Text(f"Tags: {', '.join(value) or 'None'}"))
             for source, used in self.UsedTags().items():
@@ -502,6 +537,22 @@ class ConfigScreen(Screen):
         return (f"Renders As: {label}" + (f", Stage {stage} of {stages}" if stages > 1 else ""),
                 self.RendersAs(route, stage if stages > 1 else None))
 
+    def CrestPreview(self, text: str, row: int) -> tuple[str, Text] | None:
+        """The Conformer Search editor's Renders As strip: the crest command the entry on the cursor's line writes, for
+        a stand-in molecule (charge 0, a singlet, the config's CPUs)."""
+        from ..crest import CrestJob, Level, OptionsProblem, Solvation
+        located = RouteAt(CONFORMER_SEARCH, text, row)
+        if located is None:
+            return None
+        label, _, _, options = located
+        molecule = Molecule(Path("preview.xyz"), "preview", 0, 1, [], Defaults.coordExtension, "preview")
+        job = CrestJob(molecule, "8a_CREST", 0, 1, label, options, cpus=Defaults.CPU)
+        lines = [Styled(f"{Level(options) or 'GFN2-xTB (Default)'} · {Solvation(options) or 'Gas Phase'}", "info"),
+                 Text(job.CommandLine())]
+        if OptionsProblem(options):
+            lines.append(ProblemText([f"✗ {OptionsProblem(options)}"]))
+        return f"Renders As: {label}", Text("\n").join(lines)
+
     def EditSection(self, label: str, name: str) -> None:
         """A level's section in the TextEditor. A level without it starts from the section in force (closing it
         unchanged adds nothing)."""
@@ -510,7 +561,8 @@ class ConfigScreen(Screen):
         start = body
         if missing:
             inForce = self.InForce(name)
-            start = self.Value(SECTION_TEXT, (inForce, name)) if inForce else ""
+            # No level has it: the default CompUtils uses then (the default suite, the default search)
+            start = self.Value(SECTION_TEXT, (inForce, name)) if inForce else DefaultBody(name)
             start = "" if start in (None, DELETE) else start
 
         def Done(text) -> None:
@@ -519,7 +571,7 @@ class ConfigScreen(Screen):
             self.SetPending(SECTION_TEXT, (label, name), text.strip("\r\n"))
             self.Redraw()
         preview = ((lambda text, row: self.RoutePreview(name, text, row)) if name in (OPTIMIZATION, BENCHMARK)
-                   else None)
+                   else (lambda text, row: self.CrestPreview(text, row)) if name == CONFORMER_SEARCH else None)
         self.app.push_screen(TextEditor(f"{name} · {label}", start,
                                         lambda text: self.SectionSummary(name, text)[1], FILE_EXAMPLES[name],
                                         preview), Done)
@@ -564,7 +616,8 @@ class ConfigScreen(Screen):
             for name in self.keys:
                 inForce = self.InForce(name)
                 body = self.Value(SECTION_TEXT, (inForce, name)) if inForce else None
-                short = self.SectionSummary(name, body)[0] if inForce else ("Default" if name == BENCHMARK else "None")
+                short = (self.SectionSummary(name, body)[0] if inForce
+                         else ("Default" if name in (BENCHMARK, CONFORMER_SEARCH) else "None"))
                 table.add_row(name, inForce or "—", Text(Cut(short, self.valueWidth)))
         elif kind.startswith(KEYLIST):
             # One section: a row per level, • on the one in force

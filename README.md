@@ -26,6 +26,9 @@ accessed from the command line or from a full-screen terminal interface.
   `--Link1--`, e.g. ModRed → Stability → OptTS), each later stage reading the geometry and orbitals from the checkpoint.
 - **Classifies spin states.** Closed-shell singlets, broken-symmetry (open-shell) singlets and higher multiplicities are
   told apart from the previous route, `<S**2>` and stability analyses, or from your own overrides.
+- **Runs CREST conformer searches.** From a finished job's geometry, an .xyz or a SMILES: the lab's options as named
+  methods, constraints written the way ModRed lines are (`B 12 15` holds a bond at its starting length), and the
+  conformers, ensemble and energies read back from CREST's output.
 - **Follows your jobs.** Every submitted job is tracked. The Job Stalker reports each stage as it runs (optimization
   convergence, wave-function stability, normal or error termination), and optional Telegram notifications text you
   when jobs end.
@@ -53,7 +56,9 @@ system (set to use conda-forge only), then automatically create the CompUtils co
 (`compUtils.yml`; `compUtilsWindows.yml` on Windows, `compUtilsMac.yml` on a Mac) and install CompUtils inside of
 it. It asks nothing, and never accepts any terms on your behalf. If your
 lab already has its own `profile.toml` file, CompUtils asks for it during first-time setup (`cu -profile FILE` applies
-one later).
+one later). An AI agent driving CompUtils can do the first-time setup for you: on your own computer it needs nothing
+(high color, no cluster, no notifications), and on the cluster it asks you, through the agent, for your lab profile,
+the cluster and whether you want notifications.
 
 - **Linux:** activate the environment (`con`, an alias the installer adds, or `conda activate compUtils`), then `cu`.
 - **Windows:** the installer writes a `cu` command (`cu.cmd` in `%LOCALAPPDATA%\Programs\CompUtils`, added to your user
@@ -80,7 +85,7 @@ The environments also carry `openpyxl`, so an AI agent can build Excel workbooks
 | `cu -r FILE…` | Submits input files directly |
 | `cu -sp FILE…` | Generates and submits single point files based on completed jobs (`--route ROUTE` for a route of your own) |
 | `cu -b FILE…` | Generates and submits multiple single point files per file, according to benchmarking list |
-| `cu -re FILE…` | Regenerates and resubmits a failed job (`--then-sp` with the `--sp-*` flags: each re-run optimization's single point once it ends) |
+| `cu -re FILE…` | Re-runs a job from its last geometry, with the route it ran or a corrected one (`--route`, or `--method` for an Optimization Method), named as a re-run (8a_re, 8a_re2) so it feeds the species' data file (`--then-sp` with the `--sp-*` flags: each re-run optimization's single point once it ends) |
 | `cu -cu FILE…` | Generates cube files from Gaussian .chk or .fchk via cubegen |
 | `cu -form FILE…` | Runs formchk on Gaussian checkpoint files |
 | `cu -gv [FILE…]` | Runs GoodVibes (default: every output in cwd), then writes output to Excel. A consistency check runs first and stops on mismatched methods, solvation, dispersion or SP geometries; `--gv-allow` waives them where intended (e.g. benchmarks) |
@@ -94,8 +99,9 @@ The environments also carry `openpyxl`, so an AI agent can build Excel workbooks
 | `cu --update-plugin` | Updates the lab's agent plugin (a git clone) on your own computer, with your GitHub sign-in |
 | `cu -attributions` | Shows the disclaimer and credits |
 | `cu -opt FILE` | Writes and submits an optimization of one molecule (an .xyz or a prior job, or `--smiles 'SMILES' --name NAME`: RDKit builds its 3D geometry), as the Optimization builder does; `--then-sp` with `--sp-method NAME` (or `--sp-route`) and `--sp-*` resources has the Neva-Touch Scheduler submit that single point when it ends |
+| `cu -crest FILE` | Writes and submits a CREST conformer search of each molecule (an .xyz, a prior job, or `--smiles 'SMILES' --name NAME`), as the Conformer Search builder does: `--method NAME` (a Conformer Search Method) or `--route 'OPTIONS'`, `--constrain 'B 12 15;B 15 21'` (bonds held at their starting lengths; also `A`, `D`, `atoms`, `elements`, `fix`), `--force-constant`. The search of 8a is 8a_CREST, whose output feeds `8a.cudf`; its conformers come back to `8a_CREST-scratch/`. `cu -re 8a_CREST.out` searches again, corrected or as it ran |
 | `cu -si` | Writes SI_coordinates.txt from the folder's outputs, as the SI Scraper does |
-| `cu -info FILE…` | Shows what outputs and inputs say: status, energies, frequencies, convergence |
+| `cu -info FILE…` | Shows what outputs and inputs say: status, energies, frequencies, convergence, an optimization's constraints and a Gaussian TS's eigenvector, stage by stage for a staged job. Each job's results are kept in its data file, `<root>.cudf` (8a.out, 8a_re.out and 8a_SP.out all feed `8a.cudf`): one section per stage of work, each the final successful attempt, also written whenever a tracked job ends |
 | `cu -xyz FILE…` | Writes each file's last geometry (an output's, or an input's own) as `NAME.xyz`; `--smiles 'SMILES' --name NAME` writes a SMILES' RDKit conformer |
 | `cu -methods` | Lists the Optimization and Benchmark Methods in force in this folder |
 | `cu -agent [TOPIC]` | Prints the skill that teaches an AI agent to use CompUtils (see below) |
@@ -106,7 +112,7 @@ The environments also carry `openpyxl`, so an AI agent can build Excel workbooks
 | `-nbo` | Appends an NBO7-styled section to generated input (tested only for Gaussian at time of writing) |
 | `-ovr N` | Starts single points or benchmarking from entry N in the benchmarking list |
 | `--wall-time HOURS`, `--partition NAME`, `--cluster NAME` | The jobs' own SLURM settings, for any job command (default: the config's; `--cluster` only where the cluster's header sends `-M`) |
-| `--cpus N`, `--memory GB` | The generated inputs' CPUs and memory per core, for `-sp`, `-b`, `-re` and `-opt` (default: the config's, memory as each method needs) |
+| `--cpus N`, `--memory GB` | The generated inputs' CPUs and memory per core, for `-sp`, `-b`, `-re`, `-opt` and `-crest` (default: the config's, memory as each method needs) |
 | `--dry-run` | Writes the inputs and job scripts without submitting them |
 | `--json` | Prints one machine-readable report (for scripts and AI agents) |
 | `--help` | Lists flags and their usage |

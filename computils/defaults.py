@@ -108,12 +108,14 @@ class Defaults:
     singlePointExtra = "_SP"
     reRunExtra = "_re"
     scratchFolderExtra = "-scratch"
+    crestExtra = "_CREST"
     coordExtension = ".xyz"
     gaussianExtension = ".gjf"
     orcaExtension = ".inp"
     cubeExtension = ".cube"
     queueExtension = ".cmd"
     outputExtension = ".out"
+    dataExtension = ".cudf"
     # What runs where
     methodNames = ["B3LYP","M062X","M06","M06L","B2PLYP","wB97XD","DLPNO-CCSD(T)","BLYP"]
     targetProgram = ["G16","G16","G16","G16","G16","G16","O","G16"]
@@ -141,6 +143,14 @@ class Defaults:
     # Result files copied from scratch into <job name><scratchFolderExtra>/ however the job ends (the .out comes back
     # through SLURM -o)
     orcaResultSuffixes = [".gbw", ".property.txt", ".hess", ".xyz", "_trj.xyz", ".engrad"]
+    # A CREST job's environment only: runCrest writes the threads, the scratch copy, the copy-back and the run itself.
+    # OMP_STACKSIZE is OpenMP's stack per thread (xtb's documentation: a few GB), not the job's memory
+    crestNonVariant = ["\n# CREST's OpenMP settings\n",
+                       "export OMP_STACKSIZE=4G\nexport OMP_MAX_ACTIVE_LEVELS=1\nulimit -s unlimited\n\n"]
+    # The crest a job runs: empty for CompUtils' own environment's (its bin first on PATH, so xtb is found too)
+    crestExecutable = ""
+    # CREST's result files (fixed names), copied from scratch into <job name><scratchFolderExtra>/ however the job ends
+    crestResultFiles = ["crest_conformers.xyz", "crest_best.xyz", "crest.energies", "crest_rotamers.xyz"]
     # Formatting related
     coreLineVariants = ["%nproc","%nprocshared","%pal"]
     ramLineVariants = ["%mem","%maxcore"]
@@ -181,11 +191,12 @@ class Defaults:
             "potCube", "denCube", "valenceCube", "spinCube",
             "coreLineVariants", "ramLineVariants", "terminationVariants",
             "gaussianNonVariant", "orcaNonVariant", "orcaResultSuffixes",
+            "crestNonVariant", "crestExecutable", "crestResultFiles",
         ],
         "extensions.toml": [
-            "singlePointExtra", "reRunExtra", "scratchFolderExtra",
+            "singlePointExtra", "reRunExtra", "scratchFolderExtra", "crestExtra",
             "coordExtension", "gaussianExtension", "orcaExtension",
-            "cubeExtension", "queueExtension", "outputExtension",
+            "cubeExtension", "queueExtension", "outputExtension", "dataExtension",
         ],
         "notifications.toml": [
             "isNotifications",
@@ -232,7 +243,8 @@ class Defaults:
         "wallTime": "Default wall time (hours).",
         "cluster": "Default cluster for job submission. REQUIRED — program will error at startup if unset.",
         "partition": "Default partition for job submission. REQUIRED — program will error at startup if unset.",
-        "hpcType": "HPC identity: a built-in cluster (Bridges2, Stampede3) or one from your lab profile. REQUIRED.",
+        "hpcType": "HPC identity: a built-in cluster (Bridges2, Stampede3) or one from your lab profile; Local on a "
+                   "computer with no cluster. REQUIRED.",
         "stalkDuration": "How long (minutes) before job stalking times out without looping.",
         "stalkFrequency": "How often (minutes) to ping the queue while stalking.",
         "submissionList": "SLURM header lines for job submission. Set automatically by hpcType.",
@@ -252,15 +264,24 @@ class Defaults:
         "gaussianNonVariant": "Gaussian16 SLURM script boilerplate written verbatim into job files.",
         "orcaNonVariant": "ORCA 6.X SLURM script environment (modules), written verbatim into job files before the run.",
         "orcaResultSuffixes": "ORCA result files (<job name><suffix>) copied back from scratch, however the job ends.",
+        "crestNonVariant": "CREST SLURM script environment (OpenMP settings, modules), written verbatim into job files "
+                           "before the run.",
+        "crestExecutable": "The crest a CREST job runs: empty for CompUtils' own environment's, else a command or path "
+                           "(load its module in crestNonVariant).",
+        "crestResultFiles": "CREST's result files copied back from scratch into <job name><scratchFolderExtra>/, "
+                            "however the job ends.",
         "singlePointExtra": "Filename suffix appended to single-point calculation jobs.",
         "reRunExtra": "Filename suffix appended to re-run jobs.",
-        "scratchFolderExtra": "Suffix of the folder (<job name><suffix>/) an ORCA job's result files are copied into.",
+        "scratchFolderExtra": "Suffix of the folder (<job name><suffix>/) an ORCA or CREST job's result files are "
+                              "copied into.",
+        "crestExtra": "Filename suffix of a CREST conformer search (8a_CREST.out feeds 8a's data file).",
         "coordExtension": "Coordinate file extension.",
         "gaussianExtension": "Gaussian16 input file extension.",
         "orcaExtension": "ORCA 6.X input file extension.",
         "cubeExtension": "Cube file extension.",
         "queueExtension": "Job queue/submission script extension.",
         "outputExtension": "Program output file extension.",
+        "dataExtension": "CompUtils data file extension (<root name><extension>: a summary of what its outputs say).",
         "isNotifications": "Master switch: set to true to enable Telegram notifications.",
         "botToken": "Telegram bot API token (from @BotFather). Treat as a secret.",
         "chatID": "Your personal Telegram chat ID (auto-detected during setup).",
@@ -288,6 +309,7 @@ class Defaults:
     _WARNINGS: dict[str, str] = {
         "gaussianNonVariant": _warningBox,
         "orcaNonVariant": _warningBox,
+        "crestNonVariant": _warningBox,
     }
 
     # Keys whose list values should always render as multiline arrays for readability.
@@ -725,6 +747,10 @@ class Cluster:
     submissionList: list[str]
     settings: dict[str, Any] = field(default_factory=dict)
 
+
+# A computer with no cluster (a person's own: Windows, a Mac), as unattended setup records it (wizards.UnattendedSetup):
+# set up, so nothing asks again, but nothing submits from it (sbatch isn't there; jobs.SubmitJob skips)
+LOCAL_INSTALL = "Local"
 
 # The public clusters. A lab's own (e.g. with its private partition) come from its lab profile (profile.py)
 BUILTIN_CLUSTERS = (

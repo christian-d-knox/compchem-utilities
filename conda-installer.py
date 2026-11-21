@@ -626,8 +626,8 @@ def WriteLauncher(conda: Path, name: str) -> Path:
 # CompUtils is --package: the installed branch (its latest, so the code comes
 # up to date with the environment; pip records the branch, which cu --update
 # follows) or a local install's folder.
-# The swap waits until nothing on this machine runs from the environment, then
-# renames it aside (instant, reversible), clones -next into its place and
+# The swap waits until nothing on this machine runs from the environment (nor a
+# tracked CREST job running its crest on a compute node), then renames it aside (instant, reversible), clones -next into its place and
 # checks that; a failure renames the old one back. While it swaps, a guard file
 # (<prefix>.swapping) tells job scripts' Neva-Touch Scheduler hooks to wait.
 
@@ -733,6 +733,34 @@ def InUse(prefix: Path) -> bool:
     return False
 
 
+def CrestJobsRunning(prefix: Path, stateFile: Path) -> bool:
+    """Whether a CREST job CompUtils submitted still runs this environment's crest on a compute node, where the process
+    check above can't see it: its tracked record (<binDirectory>/tracked-jobs.json, beside the environments/ folder this
+    job's state file is in) names this prefix (runsFrom), and squeue still lists it. A store or squeue that can't be
+    read holds nothing up."""
+    try:
+        store = json.loads((stateFile.parent.parent / "tracked-jobs.json").read_text())
+    except (OSError, ValueError):
+        return False
+    here = os.path.normcase(os.path.realpath(str(prefix)))
+    byCluster = {}
+    for record in (store.get("jobs", store) if isinstance(store, dict) else store):
+        if not isinstance(record, dict) or not record.get("runsFrom") or record.get("state") == "ENDED":
+            continue
+        if os.path.normcase(os.path.realpath(record["runsFrom"])) == here:
+            byCluster.setdefault(record.get("cluster", ""), []).append(str(record.get("jobID", "")))
+    for cluster, ids in byCluster.items():
+        command = ["squeue", "-h", "-o", "%i", "-j", ",".join(ids)] + (["-M", cluster] if cluster else [])
+        try:
+            listed = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                    universal_newlines=True, timeout=60).stdout.split()
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if any(jobID in listed for jobID in ids):
+            return True
+    return False
+
+
 class JobFailed(Exception):
     pass
 
@@ -780,7 +808,7 @@ def SwapIn(conda: Path, prefix: Path, built: Path, args, state: State, pipSpecs=
     guard = Path(str(prefix) + ".swapping")
     RemoveEnv(conda, aside)
     while True:
-        if InUse(prefix):
+        if InUse(prefix) or CrestJobsRunning(prefix, args.background):
             if state.Read().get("phase") != WAITING:
                 state.Phase(WAITING)
             time.sleep(WAIT_SECONDS)

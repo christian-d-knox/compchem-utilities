@@ -16,7 +16,7 @@ ACTION_FLAGS = {
     "init": Action.INIT_PROJECT,
     "profile": Action.PROFILE, "refresh": Action.REFRESH, "attributions": Action.ATTRIBUTIONS,
     "neva_touch": Action.NEVA_TOUCH, "info": Action.INFO, "methods": Action.METHODS, "optimize": Action.OPTIMIZE,
-    "si": Action.SI_SCRAPER, "agent": Action.AGENT, "xyz": Action.XYZ,
+    "si": Action.SI_SCRAPER, "agent": Action.AGENT, "xyz": Action.XYZ, "crest": Action.CREST,
 }
 
 
@@ -64,6 +64,10 @@ def BuildParser() -> argparse.ArgumentParser:
                              help="Write and submit an optimization of one molecule (an .xyz, a prior input or "
                                   "output, or --smiles in place of FILE), as the TUI's Optimization builder does. See "
                                   "'optimization' below.")
+    actionGroup.add_argument('-crest', '--crest', nargs='*', metavar="FILE",
+                             help="Write and submit a CREST conformer search of each molecule (an .xyz, a prior input "
+                                  "or output, or --smiles in place of FILE), as the TUI's Conformer Search builder "
+                                  "does. See 'conformer search' below.")
     actionGroup.add_argument('-si', '--si', action='store_true',
                              help="Write SI_coordinates.txt from this folder's outputs, as the TUI's SI Scraper does. "
                                   "See 'si scraper' below.")
@@ -107,10 +111,11 @@ def BuildParser() -> argparse.ArgumentParser:
     optGroup = parser.add_argument_group("optimization (-opt)")
     optGroup.add_argument('--method', metavar="NAME",
                           help="An Optimization Method by name (cu -methods lists them), or \"From Source\" for a prior "
-                               "job's own route. Asked when not given.")
+                               "job's own route. Asked when not given. With -re: the re-run's corrected route.")
     optGroup.add_argument('--route', metavar="ROUTE",
                           help="A route of your own instead (as in Config › Job Keylists). With -sp: instead of "
-                               "Benchmark Methods' entry.")
+                               "Benchmark Methods' entry. With -re: a corrected route for the re-run (from the last "
+                               "geometry, named as a re-run).")
     optGroup.add_argument('--charge', type=int, default=None, help="Default: the prior job's; asked for an .xyz.")
     optGroup.add_argument('--mult', type=int, default=None, metavar="MULTIPLICITY",
                           help="Default: the prior job's; asked for an .xyz.")
@@ -143,8 +148,20 @@ def BuildParser() -> argparse.ArgumentParser:
                           help="The single point's cluster, SLURM's -M (default: the optimization's).")
     optGroup.add_argument('--sp-nbo', action='store_true', help="The single point writes the NBO keylist (Gaussian).")
     optGroup.add_argument('--sp-checkpoint', action='store_true', help="The single point writes a checkpoint (Gaussian).")
+    # -crest's own settings (the Conformer Search builder's rows); --method/--route/--charge/--mult/--name/--cpus/--memory
+    # are -opt's flags, read the same way
+    crestGroup = parser.add_argument_group(
+        "conformer search (-crest; also --method NAME: a Conformer Search Method, --route OPTIONS: CREST's options "
+        "typed in full, --charge, --mult, --name SPECIES, --cpus, --memory)")
+    crestGroup.add_argument('--constrain', default=None, metavar="LINES",
+                            help="Constraints, ';' between lines (or a file): 'B i j' a bond, 'A i j k' an angle, "
+                                 "'D i j k l' a dihedral (each held at the starting geometry's value unless one follows), "
+                                 "'atoms 11-14', 'elements Pd', 'fix 2,4'. Atoms numbered from 1. With -re on a CREST "
+                                 "output: replaces the ones it ran with.")
+    crestGroup.add_argument('--force-constant', type=float, default=None, metavar="EH/BOHR2",
+                            help="The constraints' force constant (default: 1.0).")
     # A SMILES instead of a file (smiles.py): -opt's molecule, or -xyz's geometry
-    smilesGroup = parser.add_argument_group("from a SMILES (-opt, -xyz)")
+    smilesGroup = parser.add_argument_group("from a SMILES (-opt, -xyz, -crest)")
     smilesGroup.add_argument('--smiles', default=None, metavar="SMILES",
                              help="Build the molecule from a SMILES with RDKit instead of reading a file (quote it): "
                                   "its charge and multiplicity come from the SMILES (formal charges; radicals + 1).")
@@ -303,6 +320,18 @@ def ParseCLI(argv: list[str]) -> Intent:
     draft.smiles, draft.rdkitConformers, draft.rdkitConformer = args.smiles, args.rdkit_conformers, args.rdkit_conformer
     if args.xyz is not None:
         draft.optName = args.name
+    # -crest's settings: -opt's flags where they mean the same, its own constraints. A CREST output's re-run takes the
+    # constraints too
+    if args.crest is not None:
+        draft.optMethod, draft.optRoute, draft.optName = args.method, args.route, args.name
+        draft.optCharge, draft.optMultiplicity = args.charge, args.mult
+        if args.spin is not None or args.modred:
+            raise agent.UsageError("--spin and --modred go with -opt (xTB has no broken-symmetry singlets; CREST takes "
+                                   "--constrain).")
+    if args.constrain is not None:
+        path = Path(args.constrain.strip()).expanduser()
+        draft.crestConstrain = path.read_text() if path.is_file() else args.constrain
+    draft.crestForceConstant = args.force_constant
     # The inputs' own resources (-opt, -sp, -b, -re; Validate refuses them elsewhere: an input as written has its own)
     draft.cpus, draft.memoryRatio = args.cpus, args.memory
     # The Neva-Touch Scheduler's next job: -opt's, and each optimizing re-run's
@@ -326,12 +355,17 @@ def ParseCLI(argv: list[str]) -> Intent:
             path = Path(lines.strip()).expanduser()
             draft.optModRed[int(stage)] = (path.read_text() if path.is_file()
                                            else "\n".join(line.strip() for line in lines.split(";") if line.strip()))
-    elif any(value is not None for value in (args.method, args.charge, args.mult, args.spin,
-                                             args.name if args.xyz is None else None)) or args.modred:
+    elif args.rerun is not None and args.method is not None:
+        # -re's corrected route, by Optimization Method
+        draft.reRunMethod = args.method
+    if args.optimize is None and args.crest is None and (any(value is not None for value in (
+            args.method if args.rerun is None else None, args.charge, args.mult, args.spin,
+            args.name if args.xyz is None else None)) or args.modred):
         if not args.neva_touch:
-            raise agent.UsageError("--method, --charge, --mult, --spin, --name and --modred go with -opt.")
+            raise agent.UsageError("--charge, --mult, --name go with -opt or -crest; --spin and --modred with -opt; "
+                                   "--method with -opt, -crest or -re.")
     # -sp's route of your own (a Neva-Touch Scheduler chain step's too)
-    if args.route is not None and args.optimize is None:
+    if args.route is not None and args.optimize is None and args.crest is None:
         from .catalog import UnknownSelectors
         unknown = UnknownSelectors(args.route)
         if unknown:
