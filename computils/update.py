@@ -6,7 +6,8 @@ installed commit is compared with the branch's latest on GitHub. A local install
 checkout) is never replaced by GitHub's: it is updated where it lives (git pull).
 
 DailyCheck is the automatic side: the first --json report of a day on a machine says what is newer (an agent relays it
-to its human), so nobody, person or agent, ever has to ask."""
+to its human), so nobody, person or agent, ever has to ask. It also reminds the agent, every day, to update its plugin
+on the human's own computer (plugin.py): the plugin's repository is private, so no cluster can see its news."""
 import datetime
 import importlib.metadata
 import json
@@ -139,11 +140,18 @@ def SourceLines(source: Source, latest: Commit | str) -> list[str]:
     return lines + ["Up to date." if UpToDate(source, latest) else "A newer version is available."]
 
 
-def DailyCheck() -> dict | None:
+PLUGIN_REMINDER = {"command": "cu --update-plugin",
+                   "why": "A daily reminder, not news: CompUtils can't see the agent plugin's private repository, so "
+                          "the plugin is checked, and updated if it's behind, on the human's own computer."}
+
+
+def DailyCheck(remindPlugin: bool = True) -> dict | None:
     """What is newer on GitHub than this install, checked at most once per calendar day on this machine (the date is
     in <binDirectory>/update-check.json, written before checking, so a slow or failed check still counts): the report's
-    `updates` (Main, --json runs only), or None (checked today already, nothing newer, a local install, a background
-    environment job running, GitHub unreachable). Never acts: updating is the person's call."""
+    `updates` (Main, --json runs only), or None (checked today already). The code and environment news is left out for
+    a local install, a background environment job running, or GitHub unreachable; never acts: updating CompUtils is
+    the person's call. `plugin` (PLUGIN_REMINDER) is in every day's first report, unless remindPlugin is False (the
+    plugin's own update run): the agent updates its plugin by itself (plugin.py)."""
     from .defaults import Defaults
     folder = Path(Defaults.binDirectory).expanduser()
     if not folder.is_dir():
@@ -161,13 +169,14 @@ def DailyCheck() -> dict | None:
     except OSError:
         # Unrecorded, it would check on every run: better not at all
         return None
+    reminder = {"plugin": dict(PLUGIN_REMINDER)} if remindPlugin else {}
     source = InstalledSource()
     if source.localPath:
-        return None
+        return reminder or None
     global _timeout
     _timeout = CHECK_TIMEOUT
     try:
-        return _Updates(source)
+        return {**(_Updates(source) or {}), **reminder} or None
     finally:
         _timeout = API_TIMEOUT
 

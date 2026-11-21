@@ -521,5 +521,11 @@ class HomeScreen(Screen):
         if self.action == Action.XYZ:
             self.app.WriteXyz(XyzIntent(files=files))
             return
+        # Single Point, Benchmark, Re-Run and Run as Written: the job screens (the Opt builder's template); GoodVibes and
+        # Cube Files: the Builder
+        from .jobscreens import JOB_ACTIONS, JobScreen
+        if self.action in JOB_ACTIONS:
+            self.app.push_screen(JobScreen(self.action, files))
+            return
         from .builder import BuilderScreen
         self.app.push_screen(BuilderScreen(self.action, files))

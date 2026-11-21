@@ -1,4 +1,6 @@
-"""Builder: one template for every job action, showing only what the action uses."""
+"""Builder: GoodVibes and Cube Files, one framed form showing only what the action uses.
+Single Point, Benchmark, Re-Run and Run as Written have their job screens (jobscreens.py, the Optimization
+builder's template)."""
 from pathlib import Path
 
 from rich.text import Text
@@ -6,24 +8,20 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Checkbox, Input, OptionList, Static
+from textual.widgets import Checkbox, Input, Static
 
 from ..actions  import Action, CubeOption
 from ..analysis import (ALLOW_ALL, CHECK_CATEGORIES, DEFAULT_CONCENTRATION, DEFAULT_CUTOFF, DEFAULT_SCALE,
                          DEFAULT_TEMPERATURE, CheckArguments, GoodVibesArguments, SelectionSuffix, SpcPartners)
-from ..catalog  import Catalog
 from ..defaults import Defaults
 from ..intent   import IntentDraft
 from .common    import (NAME, NAV_BINDINGS, TEXT, Column, FrameRule, KeyHint, NavFooter, Notice, OptionRow, Setting,
                         SettingsList)
 from .home      import ACTION_LABELS, TitleLine
-from .inspect   import MethodIndices, PreviewMolecule, PreviewRowFor, ProgramName, RowText, Styled
+from .inspect   import Styled
 
 RESOURCE_KEYS = [("CPU", "CPU"), ("memoryRatio", "Memory Ratio"), ("wallTime", "WallTime"), ("partition", "Partition")]
-USES_METHODS = (Action.SINGLE_POINT, Action.BENCHMARK)
-USES_GENERATION = (Action.SINGLE_POINT, Action.BENCHMARK, Action.RERUN)
 SHOWN_NAMES = 6                  # the Files section lists this many names, then "… +N More"
-_FILE = Binding.Group("File", compact=True)
 
 
 def NameList(paths: list[Path]) -> str:
@@ -69,21 +67,9 @@ class FilesPane(Static):
         self.screen.action_back()
 
 
-class MethodList(OptionList):
-    # Space chooses, like every other list; enter submits, as from every Builder field. Bound here (not only on the
-    # screen) so the footer shows them: the list's hidden enter and the form's hidden ←/→ scrolling would shadow them.
-    # ←/→ change the file Benchmark previews across its methods
-    BINDINGS = [
-        Binding("space", "select", "Choose", key_display="␣"),
-        Binding("left", "screen.preview_file(-1)", "File", group=_FILE),
-        Binding("right", "screen.preview_file(1)", "File", group=_FILE),
-        Binding("enter", "screen.submit", "Submit"),
-    ]
-
-
 class BuilderScreen(Screen):
-    # Start on the first real input: the method list, or the options for actions without one
-    AUTO_FOCUS = "#methods, #options, #settings .-current"
+    # Start on the first real input: Cube Files' options, GoodVibes' settings
+    AUTO_FOCUS = "#options, #settings .-current"
     BINDINGS = [
         Binding("escape", "back", "Back"),
         Binding("enter", "submit", "Submit"),
@@ -99,11 +85,6 @@ class BuilderScreen(Screen):
         screen opened this one and waits for it (dismissed with whether the run succeeded) instead of going Home."""
         super().__init__()
         self.action, self.files, self.preset, self.returns = action, files, preset or {}, returns
-        self.methodIndex = 0          # -ovr: Benchmark starts here, Single Point uses only this one
-        self.previewIndex = 0         # the highlighted method row
-        self.previewFile = 0          # Benchmark: the file previewed across its methods
-        self.molecules = {}
-        self.rows = {}                # (method index, file name) -> PreviewRow
         self.ready = False            # the draft is valid and at least one job would run
         self.valueErrors = []         # GoodVibes: typed values that aren't numbers
         self.selectionErrors = []     # GoodVibes: problems fixed by changing the selection (esc Change)
@@ -132,12 +113,9 @@ class BuilderScreen(Screen):
         yield NavFooter()
 
     def JobSections(self) -> ComposeResult:
-        """The sections of a SLURM job action: Methods, Options, Resources, Route Preview (each only if the action uses it)."""
-        if self.action in USES_METHODS:
-            yield FrameRule("├┤", "Methods (Benchmark Methods)")
-            yield MethodList(*self.MethodPrompts(), id="methods", classes="side")
+        """Cube Files' sections: Options, Resources."""
         # One tab stop per row: ←/→ move between the checkboxes (OptionRow). There is no Stalk option: every submitted
-        # job is tracked, and the Results pop-up offers the Job Stalker. Run as Written has no options left
+        # job is tracked, and the Results pop-up offers the Job Stalker
         if self.action == Action.CUBE:
             yield FrameRule("├┤", "Options")
             with Horizontal(id="options-pane", classes="side"):
@@ -145,22 +123,10 @@ class BuilderScreen(Screen):
                     for option in CubeOption:
                         yield Checkbox(option.value, id=f"cube-{option.value}", compact=True)
                 yield Input(placeholder="MO Range, e.g. 10-15", id="range", disabled=True)
-        elif self.action in USES_GENERATION:
-            yield FrameRule("├┤", "Options")
-            with Horizontal(id="options-pane", classes="side"):
-                with OptionRow(id="options"):
-                    yield Checkbox("Checkpoint", id="checkpoint", compact=True)
-                    yield Checkbox("NBO", id="nbo", compact=True)
-        if self.action != Action.RUN:
-            yield FrameRule("├┤", "Resources")
-            yield Static(self.ResourceLine(), id="resources", classes="side")
-        if self.action in USES_GENERATION:
-            yield FrameRule("├┤", id="preview-rule")
-            yield Static(id="preview", classes="side")
+        yield FrameRule("├┤", "Resources")
+        yield Static(self.ResourceLine(), id="resources", classes="side")
 
     def on_mount(self) -> None:
-        if self.action in USES_GENERATION:
-            self.molecules = {path.name: PreviewMolecule(path)[0] for path in self.files}
         if self.preset:
             settings = self.query_one("#settings", SettingsList)
             for key, value in self.preset.items():
@@ -181,17 +147,6 @@ class BuilderScreen(Screen):
 
     # ─── Content ──────────────────────────────────────────────────────
 
-    def MethodPrompts(self) -> list[Text]:
-        prompts = []
-        for index, entry in enumerate(Catalog.benchmarkLines):
-            chosen = index == self.methodIndex
-            skipped = index < self.methodIndex if self.action == Action.BENCHMARK else not chosen
-            line = Text(f"({'•' if chosen else ' '}) {index}  {entry}   {ProgramName(Catalog.templates[index].method)}")
-            if skipped:
-                line.stylize("dim")
-            prompts.append(line)
-        return prompts
-
     def ResourceLine(self) -> Text:
         # • marks values that project.toml overrides
         parts, anyOverride = [], False
@@ -207,42 +162,11 @@ class BuilderScreen(Screen):
             parts.append(Styled("• Set by project.toml", "info"))
         return Text.assemble(*parts)
 
-    def Row(self, index: int, name: str):
-        if (index, name) not in self.rows:
-            self.rows[index, name] = PreviewRowFor(self.action, self.molecules[name], index)
-        return self.rows[index, name]
-
     def JobCount(self) -> tuple[int, int]:
         """(jobs that would be submitted, jobs that would be skipped)."""
         if self.action == Action.GOODVIBES:
             return len(self.Structures()[0]), 0
-        if self.action == Action.CUBE:
-            return len(self.files) * len(self.CubeOptions()), 0
-        if self.action == Action.RUN:
-            return len(self.files), 0
-        rows = [self.Row(index, path.name) for index in MethodIndices(self.action, self.methodIndex) for path in self.files]
-        skipped = sum(1 for row in rows if row.problem)
-        return len(rows) - skipped, skipped
-
-    def PreviewText(self) -> Text:
-        # Benchmark: one file, a row per method it will run (▸ the highlighted method). Otherwise: a row per file
-        if self.action == Action.BENCHMARK:
-            name = self.files[self.previewFile].name
-            rows = [(f"{'▸' if index == self.previewIndex else ' '} {index:<3}", self.Row(index, name))
-                    for index in MethodIndices(self.action, self.methodIndex)]
-        else:
-            index = self.previewIndex if self.action in USES_METHODS else 0
-            width = max(len(path.name) for path in self.files) + 2
-            rows = [(f"{row.spin:<5}{path.name.ljust(width)}", row)
-                    for path in self.files for row in [self.Row(index, path.name)]]
-        return Text("\n").join(Text(prefix) + RowText(row) for prefix, row in rows)
-
-    def PreviewLabel(self) -> str:
-        if self.action == Action.BENCHMARK:
-            name = self.files[self.previewFile].name
-            count = f" · File {self.previewFile + 1} of {len(self.files)}" if len(self.files) > 1 else ""
-            return f"Route Preview: {name} ({self.Row(self.methodIndex, name).spin}){count}"
-        return f"Route Preview: Method {self.previewIndex}" if self.action in USES_METHODS else "Route Preview (From Each File)"
+        return len(self.files) * len(self.CubeOptions()), 0
 
     def Structures(self) -> tuple[list[Path], list[Path], list[Path]]:
         """GoodVibes: (structures, their single point files, structures without one), as the run will see them."""
@@ -304,23 +228,15 @@ class BuilderScreen(Screen):
         return [option for option in CubeOption if self.query_one(f"#cube-{option.value}", Checkbox).value]
 
     def Draft(self) -> IntentDraft:
-        draft = IntentDraft(action=self.action, files=list(self.files), indexOverride=self.methodIndex)
+        draft = IntentDraft(action=self.action, files=list(self.files))
         if self.action == Action.GOODVIBES:
             return self.GoodVibesDraft(draft)
-        if self.action == Action.CUBE:
-            draft.cubeOptions = self.CubeOptions()
-            draft.orbitalRange = self.query_one("#range", Input).value.strip() or None
-            return draft
-        if self.action in USES_GENERATION:
-            draft.checkpoint = self.query_one("#checkpoint", Checkbox).value
-            draft.nbo7 = self.query_one("#nbo", Checkbox).value
+        draft.cubeOptions = self.CubeOptions()
+        draft.orbitalRange = self.query_one("#range", Input).value.strip() or None
         return draft
 
     def Refresh(self) -> None:
         """Re-validate live: Submit stays disabled while the draft has errors or no job would run."""
-        if self.action in USES_GENERATION:
-            self.query_one("#preview-rule", FrameRule).label = self.PreviewLabel()
-            self.query_one("#preview", Static).update(self.PreviewText())
         count, skipped = self.JobCount()
         errors = self.Draft().Validate()
         if self.action == Action.GOODVIBES:
@@ -341,17 +257,6 @@ class BuilderScreen(Screen):
         self.refresh_bindings()
 
     # ─── Events ───────────────────────────────────────────────────────
-
-    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
-        self.previewIndex = event.option_index
-        self.Refresh()
-
-    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
-        self.methodIndex = event.option_index
-        methods = self.query_one("#methods", OptionList)
-        for index, prompt in enumerate(self.MethodPrompts()):
-            methods.replace_option_prompt_at_index(index, prompt)
-        self.Refresh()
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         # Range needs its orbital range
@@ -376,10 +281,7 @@ class BuilderScreen(Screen):
         self.dismiss(False)
 
     def check_action(self, action: str, parameters) -> bool | None:
-        # ⏎ Submit shows dimmed in the footer while nothing can be submitted; ←→ File only for a multi-file Benchmark
-        if action == "preview_file":
-            return self.action == Action.BENCHMARK and len(self.files) > 1
-        # One ⏎ hint: Run for GoodVibes, Submit otherwise
+        # ⏎ Submit shows dimmed in the footer while nothing can be submitted. One ⏎ hint: Run for GoodVibes, Submit otherwise
         if action in ("submit", "run") and (action == "run") != (self.action == Action.GOODVIBES):
             return False
         return None if action in ("submit", "run") and not self.ready else True
@@ -396,10 +298,6 @@ class BuilderScreen(Screen):
     def action_run(self) -> None:
         self.action_submit()
 
-    def action_preview_file(self, step: int) -> None:
-        self.previewFile = (self.previewFile + step) % len(self.files)
-        self.Refresh()
-
     def action_help(self) -> None:
         if self.action == Action.GOODVIBES:
             Notice(self.app, "Help", "\n".join([
@@ -408,6 +306,5 @@ class BuilderScreen(Screen):
                 "enter Run GoodVibes", "esc Back to the File List", "ctrl+q Quit"]))
             return
         Notice(self.app, "Help", "\n".join([
-            "tab / shift+tab Move Between Sections", "↑/↓ Move in the Method List", "←/→ Move Between Options",
-            "space Toggle an Option or Choose the Method", "←/→ Change the Previewed File (Benchmark)",
-            "enter Submit", "esc Back to the File List", "ctrl+q Quit"]))
+            "tab / shift+tab Move Between Sections", "←/→ Move Between Options", "space Toggle an Option",
+            "Range: Type the Orbitals, e.g. 10-15", "enter Submit", "esc Back to the File List", "ctrl+q Quit"]))

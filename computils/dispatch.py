@@ -15,9 +15,9 @@ from .catalog   import Catalog
 from .molecule  import Molecule
 from .intent    import (
     Intent,
-    RunIntent, SinglePointIntent, BenchmarkIntent, ReRunIntent,
+    RunIntent, SinglePointIntent, BenchmarkIntent, ReRunIntent, ThenSP,
     CubeIntent, FormCheckIntent, ExcelIntent, GoodVibesIntent,
-    FirstTimeSetupIntent, UpdateIntent, InitProjectIntent, ProfileIntent, RefreshIntent, StalkIntent,
+    FirstTimeSetupIntent, UpdateIntent, PluginUpdateIntent, InitProjectIntent, ProfileIntent, RefreshIntent, StalkIntent,
     AttributionsIntent, NevaTouchIntent, EnvironmentIntent, InfoIntent, MethodsIntent, OptimizationIntent, SIIntent,
     AgentIntent, XyzIntent,
 )
@@ -51,6 +51,9 @@ def Dispatch(intent: Intent) -> list[TrackedJob]:
         case GoodVibesIntent():       _DispatchGoodVibes(intent)
         case FirstTimeSetupIntent():  _DispatchFirstTimeSetup(intent)
         case UpdateIntent():          _DispatchUpdate(intent)
+        case PluginUpdateIntent():
+            from .plugin import UpdatePlugin
+            UpdatePlugin(intent.folder)
         case EnvironmentIntent():     _DispatchEnvironment(intent)
         case InitProjectIntent():     _DispatchInitProject(intent)
         case ProfileIntent():         _DispatchProfile(intent)
@@ -144,7 +147,46 @@ def _DispatchBenchmark(intent: BenchmarkIntent) -> list[TrackedJob]:
     return _GenerateBatch(intent, genBench)
 
 
+def _ScheduledSinglePoint(asked: ThenSP, partition: str | None, cluster: str | None, required: bool):
+    """(the Neva-Touch Scheduler's single point, whether to stop) from --then-sp's flags (-opt's, -re's): a Benchmark
+    Methods entry by name (the first by default) or a route of your own; its partition and cluster follow the job's,
+    the rest the config's. No Benchmark Methods: a failure when it was asked for, else no next job."""
+    from .optimize import CustomMethod, SinglePointChoices, SinglePointStep
+    spChoices = SinglePointChoices()
+    if asked.route:
+        spTemplate, _, problem = CustomMethod(asked.route)
+        if spTemplate is None:
+            raise agent.UsageError(f"--sp-route: {problem}.")
+        spName, spRoute = "Custom", asked.route
+    elif not spChoices:
+        if required:
+            agent.Fail("The Neva-Touch Scheduler needs Benchmark Methods for its single point (Config › Job "
+                       "Keylists), or --sp-route.")
+            return None, True
+        return None, False
+    else:
+        wanted = (asked.method or "").lower()
+        choice = (next((value for value in spChoices.values() if value[0].lower() == wanted), None) if wanted
+                  else next(iter(spChoices.values())))
+        if choice is None:
+            raise agent.UsageError(f"No Benchmark Methods entry named '{asked.method}'. Here: "
+                                   f"{', '.join(value[0] for value in spChoices.values())} (cu -methods).")
+        spName, spRoute = choice[0], choice[3]
+    step = SinglePointStep(spName, spRoute, asked.cpus or Defaults.CPU, asked.memory, asked.wallTime,
+                           asked.partition or partition, asked.cluster or cluster, asked.nbo, asked.checkpoint)
+    if step.nbo and not step.NboApplies():
+        agent.Warn(f"--sp-nbo is Gaussian's ($NBO keylist): the SP ({step.name}) runs in ORCA, so none is written.")
+    return step, False
+
+
 def _DispatchReRun(intent: ReRunIntent) -> list[TrackedJob]:
+    # --then-sp: each re-run that optimizes gets the single point as its next job (runJob writes its chain file)
+    if intent.thenSP is not None:
+        step, stop = _ScheduledSinglePoint(intent.thenSP, intent.partition, intent.cluster, required=True)
+        if stop:
+            return []
+        if step is not None:
+            intent.thenSteps = [step.ChainStep()]
     return _GenerateBatch(intent, genReRun, "_failed")
 
 
@@ -245,34 +287,16 @@ def _DispatchOptimize(intent: OptimizationIntent) -> list[TrackedJob]:
     # The Neva-Touch Scheduler: the SP once the opt ends normally (qol.toml's autoNTS unless told; on with any --sp-
     # flag), a Benchmark Methods entry by name (the first by default) or a route of your own. Its partition and cluster
     # follow the opt's, the rest the config's
-    spChoices = SinglePointChoices()
     given = intent.spMethod or intent.spRoute
     scheduled = (Defaults.autoNTS or bool(given)) if intent.thenSP is None else intent.thenSP
     then = None
     if scheduled:
-        if intent.spRoute:
-            spTemplate, _, problem = CustomMethod(intent.spRoute)
-            if spTemplate is None:
-                raise agent.UsageError(f"--sp-route: {problem}.")
-            spName, spRoute = "Custom", intent.spRoute
-        elif not spChoices:
-            if intent.thenSP or given:
-                agent.Fail("The Neva-Touch Scheduler needs Benchmark Methods for its single point (Config › Job "
-                           "Keylists), or --sp-route.")
-                return []
-            scheduled = False
-        else:
-            wanted = (intent.spMethod or "").lower()
-            choice = next((value for value in spChoices.values() if value[0].lower() == wanted),
-                          None) if wanted else next(iter(spChoices.values()))
-            if choice is None:
-                raise agent.UsageError(f"No Benchmark Methods entry named '{intent.spMethod}'. Here: "
-                                       f"{', '.join(value[0] for value in spChoices.values())} (cu -methods).")
-            spName, spRoute = choice[0], choice[3]
-        if scheduled:
-            then = SinglePointStep(spName, spRoute, intent.spCpus or Defaults.CPU, intent.spMemory,
-                                   intent.spWallTime, intent.spPartition or intent.partition,
-                                   intent.spCluster or intent.cluster, intent.spNbo, intent.spCheckpoint)
+        then, stop = _ScheduledSinglePoint(
+            ThenSP(intent.spMethod, intent.spRoute, intent.spCpus, intent.spMemory, intent.spWallTime,
+                   intent.spPartition, intent.spCluster, intent.spNbo, intent.spCheckpoint),
+            intent.partition, intent.cluster, required=bool(intent.thenSP or given))
+        if stop:
+            return []
     job = OptimizationJob(molecule, intent.name or molecule.rootName, charge, multiplicity, spin, template, extension,
                           intent.cpus or Defaults.CPU, intent.memoryRatio, intent.checkpoint, dict(intent.modred),
                           then, nbo=intent.nbo7, wallTime=intent.wallTime, partition=intent.partition,
@@ -280,8 +304,6 @@ def _DispatchOptimize(intent: OptimizationIntent) -> list[TrackedJob]:
     job.Apply()
     if job.nbo and not job.NboApplies():
         agent.Warn(f"-nbo is Gaussian's ($NBO keylist): {label} runs in ORCA, so none is written.")
-    if then is not None and then.nbo and not then.NboApplies():
-        agent.Warn(f"--sp-nbo is Gaussian's ($NBO keylist): the SP ({then.name}) runs in ORCA, so none is written.")
     errors, warnings, fileProblem = job.Check()
     if fileProblem:
         errors.append(fileProblem)

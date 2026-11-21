@@ -146,7 +146,7 @@ def Chained(template: RouteTemplate, extension: str) -> bool:
 
 # Where the SP's coordinates go: they are the optimization's last geometry, unknown until it ends, so a preview marks
 # the place and never shows the starting ones (never display something known to be potentially wrong)
-COORDINATES_MARKER = "‹{atoms} Atoms: the Optimization's Last Geometry›"
+COORDINATES_MARKER = "‹{atoms} Atoms: the {source}'s Last Geometry›"
 
 
 def SlurmOverrides(wallTime: str | None, partition: str | None, cluster: str | None) -> dict[str, str | None]:
@@ -232,16 +232,17 @@ class SinglePointStep:
             problem = StagesProblem(self.template, molecule, MoleculeElements(molecule.coordinateList))
         return errors, problem
 
-    def InputText(self, optimization: Molecule, optName: str) -> str:
+    def InputText(self, optimization: Molecule, optName: str, source: str = "Optimization") -> str:
         """The SP's input as genFile will write it once the optimization ends, its coordinates marked
-        (COORDINATES_MARKER), never the starting ones. The route renders for the spin chosen now; the SP's is
-        classified from the optimization's output then (spin.ClassifySpin)."""
+        (COORDINATES_MARKER, naming the job it follows: source), never the starting ones. The route renders for the
+        spin chosen now; the SP's is classified from the optimization's output then (spin.ClassifySpin)."""
         molecule = self.Molecule(optimization, optName)
         memory = self.memory if self.memory is not None else self.DefaultMemory(optimization, optName)
         text = JobInputText(molecule, self.checkpoint, self.NboApplies(), self.cpus, memory)
         coordinates = "".join(molecule.coordinateList or [])
         if coordinates:
-            text = text.replace(coordinates, COORDINATES_MARKER.format(atoms=len(molecule.coordinateList)) + "\n")
+            text = text.replace(coordinates, COORDINATES_MARKER.format(atoms=len(molecule.coordinateList),
+                                                                       source=source) + "\n")
         return text
 
     def ChainStep(self) -> ChainStep:

@@ -11,6 +11,21 @@ from .         import agent
 from .molecule import Molecule
 from .prompts import AskStr
 
+# Every job's name, in one place: the workflows below write these, and the TUI's job screens (planned.py) list them
+def SinglePointName(molecule: Molecule) -> str:
+    """A single point's job name: 8a -> 8a_SP (singlePointExtra). A benchmark's first method's too."""
+    return molecule.baseName + Defaults.singlePointExtra
+
+def BenchmarkName(molecule: Molecule, index: int, template) -> str:
+    """A benchmark job's name past its first method: 8a-2-B3LYP_SP (the index, the method, SMD when solvated)."""
+    isSMD = regex.search("smd", template.base, regex.IGNORECASE)
+    methodName = template.method.replace("(", "").replace(")", "")
+    return f"{molecule.rootName}-{index}-{methodName}{'SMD' if isSMD else ''}{Defaults.singlePointExtra}"
+
+def ReRunName(molecule: Molecule) -> str:
+    """A re-run's job name: 8a -> 8a_re, and a re-run of a re-run increments (8a_re -> 8a_re2, never 8a_re_re)."""
+    return IncrementSuffix(molecule.baseName, Defaults.reRunExtra)
+
 # Also runs the first job of a benchmark, which passes its BenchmarkIntent (same fields)
 def genSinglePoint(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
     startTime = time.monotonic()
@@ -19,7 +34,7 @@ def genSinglePoint(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> 
     # Benchmark Methods' entry chosen by -ovr
     template = (ParseRouteTemplate(intent.route) if getattr(intent, "route", None)
                 else Catalog.templates[intent.indexOverride])
-    Retarget(molecule, molecule.baseName + Defaults.singlePointExtra, template)
+    Retarget(molecule, SinglePointName(molecule), template)
 
     # Calls the separate file generation method, feeds directly into runJob. Skip this job if generation failed
     if genFile(molecule, intent):
@@ -35,10 +50,7 @@ def genBench(molecule: Molecule, intent: BenchmarkIntent, trackedJobs: list) -> 
     startTime = time.monotonic()
     for index in range(intent.indexOverride + 1, len(Catalog.templates)):
         template = Catalog.templates[index]
-        isSMD = regex.search("smd", template.base, regex.IGNORECASE)
-        methodName = template.method.replace("(", "").replace(")", "")
-        filemaskExtra = f"-{index}-{methodName}{'SMD' if isSMD else ''}{Defaults.singlePointExtra}"
-        Retarget(molecule, molecule.rootName + filemaskExtra, template)
+        Retarget(molecule, BenchmarkName(molecule, index, template), template)
         # Only this benchmark variant is skipped on failure; the molecule's other methods still run
         if not genFile(molecule, intent):
             continue
@@ -90,9 +102,8 @@ def genReRun(molecule: Molecule, intent: ReRunIntent, trackedJobs: list) -> None
     if template is None:
         agent.Skip(molecule.baseName, problem)
         return
-    # A re-run of a re-run increments instead of stacking: mol_re -> mol_re2, not mol_re_re. The program was set by
-    # ReRunTemplate, which a verbatim route's first token may not name
-    Retarget(molecule, IncrementSuffix(molecule.baseName, Defaults.reRunExtra), template, molecule.extensionType)
+    # The program was set by ReRunTemplate, which a verbatim route's first token may not name
+    Retarget(molecule, ReRunName(molecule), template, molecule.extensionType)
 
     # Calls the separate file generation method, feeds directly into runJob. Skip this job if generation failed
     if genFile(molecule, intent):

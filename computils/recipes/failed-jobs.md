@@ -15,6 +15,11 @@
 
        {cu} -re 8a.out --dry-run --json
 
+   An optimization re-run can have its single point submitted when it ends, as `-opt --then-sp` does (the same
+   `--sp-*` flags; a re-run that doesn't optimize gets no next job):
+
+       {cu} -re 8a.out --then-sp --sp-method wb97xd --dry-run --json
+
 4. A job that left the queue without a termination line was cancelled, ran out of wall time, or never wrote output:
    tell the human. When the human no longer needs ended jobs listed:
 

@@ -165,30 +165,3 @@ def RowText(row: PreviewRow) -> Text:
     return line
 
 
-def PreviewRowFor(action: Action, molecule: Molecule, index: int) -> PreviewRow:
-    """The route one job would get, from the template its workflow would choose (Re-run shares genReRun's ReRunTemplate).
-    The template is rendered directly: the preview never sets molecule.template, nor mutates the Catalog."""
-    row = PreviewRow(spin=molecule.spinState.name)
-    if action == Action.RERUN:
-        # No matching entry: the route verbatim (only the U/RO reference can be added), with an ORCA job's own blocks
-        template, row.problem = ReRunTemplate(molecule)
-        if template is None:
-            return row
-    else:
-        template = Catalog.templates[index]
-        molecule.extensionType = extensionGetter(template.method)
-    if not molecule.coordinateList:
-        # dispatch skips files with no geometry
-        RenderedRow(row, template, molecule, set())
-        row.problem = "No Coordinates Found"
-        return row
-    # The same check genFile skips jobs with, without its prompt for a missing project file
-    return RenderedRow(row, template, molecule, MoleculeElements(molecule.coordinateList))
-
-
-def MethodIndices(action: Action, index: int) -> list[int]:
-    """Benchmark method indices that will run. -b -ovr N runs methods N..end (genBench); -sp -ovr N runs only N."""
-    match action:
-        case Action.BENCHMARK:    return list(range(index, len(Catalog.templates)))
-        case Action.SINGLE_POINT: return [index]
-        case _:                   return [0]

@@ -91,16 +91,20 @@ COMMANDS = [
                  ("method", "charge", "mult", "replace-input"), ("builder-opt",)),
     AgentCommand("sp", ("singlePoint",), Action.SINGLE_POINT,
                  "Write and submit each output's single point (Benchmark Methods' first entry; -ovr N picks another, "
-                 "--route gives a route of your own).",
+                 "--route gives a route of your own; --cpus N and --memory GB set its resources).",
                  "-sp 8a.out --dry-run --json", "written[], submitted[], skipped[] with reasons.",
                  tui=(f"action-{Action.SINGLE_POINT.value}",)),
     AgentCommand("bench", ("bench",), Action.BENCHMARK,
-                 "Write and submit a benchmark suite: one single point per Benchmark Method.",
+                 "Write and submit a benchmark suite: one single point per Benchmark Method (-ovr N starts at method "
+                 "N; --cpus N and --memory GB set every job's resources, memory otherwise as each method needs).",
                  "-b 8a.out --dry-run --json", "written[], submitted[], skipped[] per method variant.",
                  tui=(f"action-{Action.BENCHMARK.value}",)),
     AgentCommand("rerun", ("rerun",), Action.RERUN,
-                 "Re-run failed jobs from their last geometry, with the route they ran (named 8a_re, 8a_re2...).",
-                 "-re 8a.out --dry-run --json", "written[], submitted[].", tui=(f"action-{Action.RERUN.value}",)),
+                 "Re-run failed jobs from their last geometry, with the route they ran (named 8a_re, 8a_re2...); "
+                 "--cpus N and --memory GB set their resources. --then-sp (with -opt's --sp-* flags) has the "
+                 "Neva-Touch Scheduler submit each re-run optimization's single point when it ends (NAME.chain.json).",
+                 "-re 8a.out --then-sp --dry-run --json", "written[] (and each chain file), submitted[].",
+                 tui=(f"action-{Action.RERUN.value}",)),
     AgentCommand("run", ("run",), Action.RUN,
                  "Submit inputs exactly as written (each gets a job script; every job is tracked).",
                  "-r 8a.gjf --json", "submitted[].", tui=(f"action-{Action.RUN.value}",)),
@@ -152,6 +156,11 @@ COMMANDS = [
     AgentCommand("update", ("update", "update_branch"), Action.UPDATE,
                  "Update CompUtils' own code from GitHub (ask the human first). Afterwards, regenerate this skill.",
                  "-up --json", "", ("reinstall",), ("screen-update",)),
+    AgentCommand("update-plugin", ("update_plugin", "plugin_dir"), Action.UPDATE_PLUGIN,
+                 "Update the lab's agent plugin's git clone on the human's own computer (run locally with "
+                 "This Computer's cu, never over ssh; at each day's updates.plugin reminder, without asking).",
+                 "--update-plugin --json", "results[0].plugin: {folder, branch, before, after, updated, changed, "
+                 "reload}; warnings name the files that need a reload (Ctrl+R)."),
     AgentCommand("init", ("init",), Action.INIT_PROJECT,
                  "Mark this folder as a project root (.computils/: project-level config and keylists).", "-init --json",
                  "", ("nested-project", "move-*")),
@@ -209,17 +218,24 @@ def _LocalSection(local: LocalInstall | None) -> list[str]:
     lines = ["## This Computer", ""]
     if local is None:
         return lines + ["<this computer>", ""]
+    # Without CompUtils there, the plugin is the human's to update (its own hook may do it too)
+    byHand = ("- The plugin (`updates.plugin`): updated by hand. Tell the human once in the conversation, in one line, "
+              "that it can be updated with `git -C PLUGIN_FOLDER pull --ff-only` (its folder: "
+              "`~/path/to/your-plugin`); don't run it yourself.")
     if local.declined:
         return lines + ["The human chose not to install CompUtils on their own computer. Don't offer it again unless "
-                        "they ask: the cluster's CompUtils is the one you use.", ""]
+                        "they ask: the cluster's CompUtils is the one you use.", "", byHand, ""]
     if not local.cu:
         return lines + ["Not set up yet. Once, install CompUtils on the "
                         "human's computer with their OK, or record that they don't want it; then regenerate this skill "
-                        "with what it says.", ""]
+                        "with what it says.", "", byHand, ""]
     return lines + ["CompUtils is installed on the human's computer too. This is the record setup wrote: never check "
                     "for it or install it again.", "",
                     f"- `cu` there (run locally, never over ssh): `{local.cu}`",
-                    f"- its Python, with openpyxl, for workbooks: `{local.python}`", ""]
+                    f"- its Python, with openpyxl, for workbooks: `{local.python}`",
+                    f"- the plugin (`updates.plugin`): run `{local.cu} --update-plugin --json` locally, without asking. "
+                    "Exit 5: GitHub couldn't be reached, so try again at tomorrow's reminder. Exit 7: tell the human "
+                    "what it says.", ""]
 
 
 def SkillText(host: str = HOST_PLACEHOLDER, digest: str | None = None, commit: str | None = None,
@@ -282,6 +298,12 @@ def SkillText(host: str = HOST_PLACEHOLDER, digest: str | None = None, commit: s
         "A report may also carry `updates` (cu checks GitHub by itself, at most once a day on each machine): tell the "
         "human what is newer and ask. Run its `command` on that machine (over ssh for the cluster, locally for this "
         "computer) only on their go. Never check for updates yourself.",
+        "",
+        "`updates.plugin` is different: a daily reminder, not news (the plugin's repository is private, so the "
+        "cluster can't see it). Follow This Computer's plugin line at once, without asking: the human has agreed to "
+        "it. Say nothing unless the plugin changed. If the result's `warnings` ask for a reload (files Antigravity "
+        "reads only when it starts), ask the human to press Ctrl+R when convenient; never press it or send keystrokes "
+        "yourself.",
         "",
         *_LocalSection(local),
         "## Rules",
@@ -421,9 +443,11 @@ One JSON object on stdout, at the end of every run. Empty fields are left out.
 - `question`: {key, text, type (bool|str|float|choice), options, default}: answer with --answer KEY=VALUE. A choice
   takes the option's text or its index.
 - `next`: [{command, why}]: what to run next.
-- `updates`: {code: {branch, installed, latest}, environment: {name, verdict}, command, why}: in the first report of
-  a day on a machine, only when something is newer on GitHub (cu checks by itself, at most once a day). Tell the
-  human and run `command` there only on their go: updating is always theirs to decide.
+- `updates`: {code: {branch, installed, latest}, environment: {name, verdict}, command, why, plugin: {command, why}}:
+  in the first report of a day on a machine (cu checks by itself, at most once a day). code and environment only when
+  something is newer on GitHub: tell the human and run `command` there only on their go, since updating CompUtils is
+  always theirs to decide. plugin is a reminder every day: the agent plugin is updated on the human's own computer
+  (the skill's This Computer section says how), without asking.
 - `notices`: things that happened outside this command (an environment update that finished...).
 - `error`: a usage error's message, or a crash's last traceback line.
 """

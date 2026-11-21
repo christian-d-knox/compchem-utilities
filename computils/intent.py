@@ -49,6 +49,8 @@ class JobIntent(Intent):
     wallTime/partition/cluster: the jobs' own SLURM settings (--wall-time/--partition/--cluster, a builder's rows;
     None: the config's), carried in a Neva-Touch Scheduler hook for a re-run. chain: the job's chain file
     (nevatouch.ChainPath), whose next step the hook submits (None: Benchmark Methods' first entry, nextCpus/...).
+    thenSteps: a batch's next job (nevatouch.ChainStep records, e.g. -re --then-sp, the Re-Run screen's Then: SP):
+    runJob writes each job that optimizes its own chain file and hook, and gives the others none.
     """
     files:           list[Path]
     stalk:           bool            = False
@@ -67,6 +69,24 @@ class JobIntent(Intent):
     partition:       Optional[str]   = None
     cluster:         Optional[str]   = None
     chain:           Optional[str]   = None
+    thenSteps:       list            = field(default_factory=list)
+
+
+@dataclass
+class ThenSP:
+    """The Neva-Touch Scheduler's next job as asked for on the command line (--then-sp and the --sp-* flags), resolved
+    to a chain step when dispatched (optimize.SinglePointStep). method: a Benchmark Methods entry by name (None: the
+    first) or route: one of your own; partition/cluster None follow the job's own."""
+    method:     Optional[str]   = None
+    route:      Optional[str]   = None
+    cpus:       Optional[int]   = None
+    memory:     Optional[float] = None
+    wallTime:   Optional[str]   = None
+    partition:  Optional[str]   = None
+    cluster:    Optional[str]   = None
+    nbo:        bool            = False
+    checkpoint: bool            = False
+
 
 # Subclass of JobIntent, specific for runJob() by Action()
 @dataclass
@@ -91,9 +111,9 @@ class BenchmarkIntent(JobIntent):
 class ReRunIntent(JobIntent):
     """`cu -re <pattern>` — regenerate failed-job input, then submit.
 
-    Method detection is now automatic via ExtractRouteLine + IdentifyMethod.
-    """
-    pass
+    Method detection is now automatic via ExtractRouteLine + IdentifyMethod. thenSP: --then-sp's next job for each
+    re-run that optimizes (None: none)."""
+    thenSP: Optional[ThenSP] = None
 
 
 @dataclass
@@ -149,6 +169,13 @@ class FirstTimeSetupIntent(Intent):
 class UpdateIntent(Intent):
     """`cu --update` — re-install CompUtils from GitHub."""
     branch: Optional[str] = None
+
+
+@dataclass
+class PluginUpdateIntent(Intent):
+    """`cu --update-plugin` — fast-forward the agent plugin's git clone on this computer (plugin.py). folder None: the
+    default install folder."""
+    folder: Optional[Path] = None
 
 
 @dataclass
@@ -345,6 +372,7 @@ class IntentDraft:
     cpus:            Optional[int]   = None
     memoryRatio:     Optional[float] = None
     nevaTouchStep:   str             = ""
+    thenSteps:       list            = field(default_factory=list)
     nevaTouchJob:    str             = ""
     reRuns:          int             = 0
     firstStage:      int             = 1
@@ -377,6 +405,9 @@ class IntentDraft:
 
     # UPDATE
     updateBranch: Optional[str] = None  # None: the branch CompUtils was installed from
+
+    # UPDATE_PLUGIN: the plugin's folder (None: plugin.DefaultFolder())
+    pluginDir: Optional[Path] = None
 
     # ENVIRONMENT: the job ('' status) and the variant ('' the running one)
     environmentJob:     str = ""
@@ -493,8 +524,22 @@ class IntentDraft:
         if self.nevaTouch and self.nevaTouch not in NTS_STEPS:
             errors.append(f"Unknown Neva-Touch Scheduler step '{self.nevaTouch}'.")
 
+        if self.pluginDir is not None and self.action != Action.UPDATE_PLUGIN:
+            errors.append("--plugin-dir goes with --update-plugin.")
+
         if self.action == Action.ENVIRONMENT and self.environmentJob not in ("", "refresh", "rebuild", "install"):
             errors.append(f"-env takes refresh, rebuild or install, then an environment (got '{self.environmentJob}').")
+
+        generates = (Action.SINGLE_POINT, Action.BENCHMARK, Action.RERUN, Action.OPTIMIZE, Action.NEVA_TOUCH)
+        if (self.cpus is not None or self.memoryRatio is not None) and self.action not in generates:
+            errors.append("--cpus and --memory go with -sp, -b, -re or -opt (an input as written has its own).")
+        if self.action in (Action.SINGLE_POINT, Action.BENCHMARK, Action.RERUN):
+            if self.cpus is not None and self.cpus < 1:
+                errors.append("--cpus must be 1 or more.")
+            if self.memoryRatio is not None and self.memoryRatio <= 0:
+                errors.append("--memory must be above 0.")
+        if self.action == Action.RERUN:
+            errors += self.ThenSPProblems()
 
         if self.action == Action.OPTIMIZE:
             if len(self.files) != 1 and self.smiles is None:
@@ -536,6 +581,33 @@ class IntentDraft:
 
         return errors
 
+    def ThenSPProblems(self) -> list[str]:
+        """The --sp-* flags' checks (-opt's and -re's)."""
+        errors = []
+        if self.optSpMethod and self.optSpRoute:
+            errors.append("--sp-method or --sp-route, not both.")
+        if self.optSpCpus is not None and self.optSpCpus < 1:
+            errors.append("--sp-cpus must be 1 or more.")
+        if self.optSpMemory is not None and self.optSpMemory <= 0:
+            errors.append("--sp-memory must be above 0.")
+        if self.optSpWallTime is not None and not (self.optSpWallTime.isdigit() and int(self.optSpWallTime) > 0):
+            errors.append(f"--sp-wall-time takes whole hours above 0 (got '{self.optSpWallTime}').")
+        for value, flag in ((self.optSpPartition, "--sp-partition"), (self.optSpCluster, "--sp-cluster")):
+            if value is not None and (not value.strip() or any(c.isspace() for c in value)):
+                errors.append(f"{flag} takes one name, with no spaces (got '{value}').")
+        return errors
+
+    def ThenSP(self) -> "ThenSP | None":
+        """--then-sp's next job (on with any --sp-* flag unless --no-then-sp), None when off."""
+        given = any(value is not None for value in (self.optSpMethod, self.optSpRoute, self.optSpCpus,
+                                                    self.optSpMemory, self.optSpWallTime, self.optSpPartition,
+                                                    self.optSpCluster)) or self.optSpNbo or self.optSpCheckpoint
+        on = self.optThenSP if self.optThenSP is not None else given
+        if not on:
+            return None
+        return ThenSP(self.optSpMethod, self.optSpRoute, self.optSpCpus, self.optSpMemory, self.optSpWallTime,
+                      self.optSpPartition, self.optSpCluster, self.optSpNbo, self.optSpCheckpoint)
+
     def Finalize(self) -> Intent:
         """Caller MUST have validated first.
 
@@ -548,6 +620,8 @@ class IntentDraft:
                 return ExcelIntent(inputFile=self.excelInputFile)
             case Action.UPDATE:
                 return UpdateIntent(branch=self.updateBranch)
+            case Action.UPDATE_PLUGIN:
+                return PluginUpdateIntent(folder=self.pluginDir)
             case Action.ENVIRONMENT:
                 return EnvironmentIntent(job=self.environmentJob, variant=self.environmentVariant)
             case Action.REFRESH:
@@ -572,6 +646,11 @@ class IntentDraft:
                     spCluster=self.optSpCluster, spNbo=self.optSpNbo, spCheckpoint=self.optSpCheckpoint,
                     smiles=self.smiles, rdkitConformers=self.rdkitConformers, rdkitConformer=self.rdkitConformer or 1,
                     stalk=self.stalk, stalkLoop=self.stalkLoop)
+            case Action.RERUN:
+                intent = ReRunIntent(**{entry.name: getattr(self, entry.name) for entry in fields(ReRunIntent)
+                                        if entry.name != "thenSP"})
+                intent.thenSP = self.ThenSP()
+                return intent
             case Action.XYZ:
                 return XyzIntent(files=list(self.files), smiles=self.smiles, name=self.optName,
                                  rdkitConformers=self.rdkitConformers, rdkitConformer=self.rdkitConformer or 1)

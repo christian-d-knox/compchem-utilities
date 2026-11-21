@@ -34,13 +34,11 @@ from .common    import (NAV_BINDINGS, NUMBER, TEXT, Column, FrameRule, KeyHint, 
 from .home      import TitleLine
 from .inspect   import SPAN_STYLES, Formula, JobSummary, OutputExtensions, PreviewMolecule, RouteSpans, Styled
 from .lists     import Cut, ProblemText, TextEditor
+from .rows      import (COORDINATE_ROW, FILE_NAME, LEFT_WIDTH, FillValue, ListValue, MethodRows, OutputRows, ProgramOf,
+                        RendersAsText, ResourceRows, RouteMeaning)
+from .steps     import OPT_STEP, SP_STEP, STEP_TITLES, SchedulerSteps, StepRule
 
-LEFT_WIDTH = 30          # the settings column, its borders included (the frame's junction sits on its right edge)
 STATUS_STYLES = {"Normal": "good", "Error": "error", "Unknown": "warning", "Input": "info"}
-FILE_NAME = r"[\w.\-]"   # the characters a job name takes
-SLURM_NAME = r"[\w.,\-]" # a partition's or cluster's (SLURM takes a comma-separated list of either)
-# A method's name in its row, beside "(•) " and its program: the settings column less the list's scrollbar
-METHOD_NAME_WIDTH = LEFT_WIDTH - 17
 # The ModRed editor's example (32 columns)
 MODRED_EXAMPLE = """\
 B 1 2 F
@@ -74,80 +72,6 @@ the route reads.
 Typing here keeps the stage as
 you wrote it: ^r in the Stages
 view brings back the settings'."""
-# A geometry row in an input (collapsed in Renders As)
-COORDINATE_ROW = r"^\s*[A-Z][a-z]?\S*\s+-?\d+\.\d+\s+-?\d+\.\d+\s+-?\d+\.\d+"
-# The Job screen's steps (step tabs on the top rule): the optimization, then the Neva-Touch Scheduler's next job
-OPT_STEP, SP_STEP = "opt", "sp"
-STEP_TITLES = {OPT_STEP: "Optimization", SP_STEP: "Then: SP"}
-# SLURM rows: their config key
-SLURM_KEYS = {"wall-time": "wallTime", "partition": "partition", "cluster": "cluster"}
-
-
-def ProgramOf(extensionType: str) -> str:
-    return "ORCA" if extensionType == Defaults.orcaExtension else "G16"
-
-
-# ─── Shared rows (the Optimization builder's steps; the SP and Benchmark builders next) ─
-
-def MethodRows(choices: dict, problems: dict[str, str], choice: str, customKey: str, customProblem: str = "",
-               label: str = "Method") -> list[Setting]:
-    """A method list: one line per choice ({key: (label, template, input extension, route)}), its program in its own
-    column (names cut to the room left), a greyed row saying why, then Custom. The first usable one starts chosen."""
-    width = min(max((len(name) for name, *_ in choices.values()), default=0), METHOD_NAME_WIDTH)
-    rows = [Setting(key, "", problems.get(key, ""), on=False, choice=choice,
-                    fixed=f"{Cut(name, width).ljust(width)}  {ProgramOf(extension)}",
-                    available=template is not None and key not in problems)
-            for key, (name, template, extension, route) in choices.items()]
-    rows.append(Setting(customKey, "", customProblem, fixed="Custom", on=False, choice=choice))
-    next(row for row in rows if row.available).on = True
-    rows[0].label = label
-    return rows
-
-
-def ResourceRows(prefix: str = "", cpus: int | None = None) -> list[Setting]:
-    """CPUs, memory per core (pre-filled per method by the screen), then the SLURM rows, from the config: only the
-    lines the cluster's submission header has (Bridges2's sends no -M, so it has no Cluster row)."""
-    rows = [Setting(f"{prefix}cpus", "CPUs", value=str(cpus or Defaults.CPU), accepts=r"\d"),
-            Setting(f"{prefix}memory", "Memory per Core", value="", unit="GB", accepts=NUMBER),
-            Setting(f"{prefix}wall-time", "Wall Time", value=str(Defaults.wallTime), unit="Hours", accepts=r"\d"),
-            Setting(f"{prefix}partition", "Partition", value=Defaults.partition, accepts=SLURM_NAME),
-            Setting(f"{prefix}cluster", "Cluster", value=Defaults.cluster, accepts=SLURM_NAME)]
-    return [row for row in rows if row.key.removeprefix(prefix) not in SLURM_KEYS
-            or HeaderSends(SLURM_KEYS[row.key.removeprefix(prefix)])]
-
-
-def OutputRows(prefix: str = "") -> list[Setting]:
-    """Checkpoint (%chk) and NBO (the $NBO keylist, read by the last stage: pop=nbo7read), both Gaussian's."""
-    return [Setting(f"{prefix}checkpoint", "Checkpoint", on=False), Setting(f"{prefix}nbo", "NBO", on=False)]
-
-
-def RouteMeaning(route: str) -> Text | str:
-    """What the chosen method runs, under its name (qol.toml: routeUnderEachMethod): a line per stage, numbered when
-    there are several, each cut (…) to the column, so the list never bleeds (the Stages view shows them whole).
-    Text: a str "[oss: guess=mix]" would be read as markup."""
-    if not (Defaults.routeUnderEachMethod and route):
-        return ""
-    stages = route.split(STAGE_JOIN)
-    width = LEFT_WIDTH - 7
-    lines = ([Cut(f"{number} {stage}", width) for number, stage in enumerate(stages, 1)] if len(stages) > 1
-             else [Cut(route, width)])
-    return Text("\n".join(lines))
-
-
-def ListValue(settings: SettingsList, key: str) -> str | None:
-    """A row's typed value, None when the list has no such row (a SLURM line the header lacks)."""
-    rows = [row for row in settings.rows if row.setting.key == key]
-    return rows[0].value.strip() if rows else None
-
-
-def FillValue(row, default: str, last: dict, key: str) -> None:
-    """Pre-fill a row (memory per its method, a partition following the Opt's): a value still at the last pre-fill
-    (or empty) follows the new one; a typed value is kept. last: each row's last pre-fill, by key."""
-    if row.value in ("", last.get(key, "")) and row.value != default:
-        row.SetValue(default)
-    last[key] = default
-
-
 class LeaveText(TextArea):
     """A text box in a builder: esc leaves it for the settings (⏎ types a newline here, as in every text box)."""
     BINDINGS = [Binding("escape", "screen.leave_text", "Done")]
@@ -514,25 +438,7 @@ class StageTable(DataTable):
         return int(key.rsplit("-", 1)[1])
 
 
-class StepRule(FrameRule):
-    """The Job screen's top rule, whose left label is its step tabs (Optimization · Then: SP): a click on a tab's name
-    opens that step, as [ ] do (mouse parity). spans: each tab's (start, end, step) within the label."""
-    spans: list[tuple[int, int, str]] = []
-
-    class Picked(Message):
-        def __init__(self, step: str) -> None:
-            super().__init__()
-            self.step = step
-
-    def on_click(self, event) -> None:
-        # The label starts after the corner, a rule and a space ("┌─ ")
-        x = event.x - 3
-        step = next((step for start, end, step in self.spans if start <= x < end), None)
-        if step is not None:
-            self.post_message(self.Picked(step))
-
-
-class OptimizationScreen(Screen):
+class OptimizationScreen(SchedulerSteps, Screen):
     """The job's settings (name, charge, multiplicity, spin, method, resources) beside the input they make, shown stage
     by stage (the Stages view) or whole (the Full Preview, p). A stage follows the settings until it is typed in (in its
     editor or the Full Preview); it is then kept as typed, marked Edited, until ^r regenerates it. ModRed lines typed
@@ -624,25 +530,6 @@ class OptimizationScreen(Screen):
             Setting("nts", "Neva-Touch Scheduler", "", on=Defaults.autoNTS),
         ]
 
-    def SinglePointSettings(self) -> list[Setting]:
-        """The Then: SP step: the next job (a choice: later kinds are more rows), its method (Benchmark Methods, then
-        Custom), resources and SLURM settings (partition and cluster follow the Opt's until typed), checkpoint, NBO."""
-        noMethods = "" if self.spChoices else "No Benchmark Methods: Add Them in Config › Job Keylists"
-        methods = MethodRows(self.spChoices, self.spProblems, "sp-method", "sp-custom", noMethods)
-        chosen = next(setting for setting in methods if setting.on)
-        self.spLastMethod = chosen.key
-        route = self.spChoices[chosen.key][3] if chosen.key in self.spChoices else ""
-        if chosen.key in self.spChoices:
-            chosen.meaning = RouteMeaning(route)
-        return [
-            Setting("next-sp", "Next Job", "The Opt's Last Geometry", fixed="Single Point", on=True,
-                    choice="next"),
-            *methods,
-            Setting("sp-route", "  └ Route", value=route, accepts=TEXT, under="sp-custom"),
-            *ResourceRows("sp-"),
-            *OutputRows("sp-"),
-        ]
-
     def SlurmValue(self, key: str) -> str | None:
         return ListValue(self.settings, key)
 
@@ -700,11 +587,6 @@ class OptimizationScreen(Screen):
     @property
     def spSettings(self) -> SettingsList:
         return self.query_one("#sp-settings", SettingsList)
-
-    @property
-    def stepSettings(self) -> SettingsList:
-        """The settings of the step shown."""
-        return self.spSettings if self.step == SP_STEP else self.settings
 
     @property
     def preview(self) -> PreviewArea:
@@ -814,7 +696,7 @@ class OptimizationScreen(Screen):
             job.Apply()
             FillValue(settings.Row("memory"), f"{job.DefaultMemory():g}", self.prefilled, "memory")
             # The Neva-Touch Scheduler's next job, read from its step's rows (after Apply: it renders this molecule)
-            self.then, thenErrors = self.ReadSinglePoint(name) if self.scheduled else (None, [])
+            self.then, thenErrors = self.ReadSinglePoint(molecule, name) if self.scheduled else (None, [])
             job.then = self.then
             # Its checks: CPUs, electrons, ModRed lines (atom numbers outside the geometry stop it; empty lines are only
             # a warning), the SLURM settings, the project files, then the next job's (named as its step)
@@ -851,113 +733,10 @@ class OptimizationScreen(Screen):
             else Text.assemble(steps, ready, " · ", KeyHint(self.app, "⏎", "Save and Submit")))
         self.refresh_bindings()
 
-    # ─── The Neva-Touch Scheduler's next job (the Then: SP step) ──────
+    # ─── The Neva-Touch Scheduler's next job (steps.SchedulerSteps: the Then: SP step) ──
 
-    @property
-    def scheduled(self) -> bool:
-        """Whether the Neva-Touch Scheduler submits a next job once this opt ends."""
-        return self.settings.Applies(self.settings.Row("nts"))
-
-    def SinglePointMethod(self) -> tuple[str, str, str, str]:
-        """(name, route as written, input extension, why there is none) for the SP's chosen method."""
-        sp = self.spSettings
-        chosen = sp.Chosen("sp-method")
-        if chosen != "sp-custom":
-            name, _, extension, route = self.spChoices[chosen]
-            return name, route, extension, ""
-        route = sp.Row("sp-route").value.strip()
-        template, extension, problem = CustomMethod(route)
-        return "Custom", route, extension, problem
-
-    def ReadSinglePoint(self, optName: str) -> tuple[SinglePointStep | None, list[str]]:
-        """The next job from its step's rows (None, and why, when its method can't be made). Partition and cluster
-        follow the Opt's until typed; memory is pre-filled per method, as the Opt's is; Checkpoint and NBO are
-        Gaussian's."""
-        sp = self.spSettings
-        for key in ("partition", "cluster"):
-            value = ListValue(self.settings, key)
-            if value is not None:
-                row = sp.Row(f"sp-{key}")
-                FillValue(row, value, self.prefilled, f"sp-{key}")
-                row.SetMeaning("Follows the Opt" if row.value.strip() == value else "")
-        name, route, extension, problem = self.SinglePointMethod()
-        gaussian = extension == Defaults.gaussianExtension
-        for key in ("sp-checkpoint", "sp-nbo"):
-            if sp.Row(key).available != gaussian:
-                sp.SetAvailable(key, gaussian)
-        nbo = sp.Row("sp-nbo")
-        nbo.SetMeaning("Gaussian Only" if not gaussian
-                       else Text(f"Last Stage Reads {Defaults.nboKeylist}") if nbo.on else "")
-        sp.Row("sp-checkpoint").SetMeaning("" if gaussian else "Gaussian Only")
-        if problem:
-            return None, [f"Then SP: {problem}"]
-        step = SinglePointStep(name, route)
-        FillValue(sp.Row("sp-memory"), f"{step.DefaultMemory(self.molecule, optName):g}", self.prefilled, "sp-memory")
-        try:
-            step.cpus = int(sp.Row("sp-cpus").value)
-            step.memory = float(sp.Row("sp-memory").value or 0) or None
-        except ValueError:
-            step.cpus, step.memory = 0, None
-        errors = [] if step.memory is not None else ["Then SP: Memory Must Be a Number Above 0"]
-        step.wallTime, step.partition, step.cluster = (ListValue(sp, "sp-wall-time"), ListValue(sp, "sp-partition"),
-                                                       ListValue(sp, "sp-cluster"))
-        step.nbo, step.checkpoint = sp.Applies(nbo), sp.Applies(sp.Row("sp-checkpoint"))
-        return step, errors
-
-    def ShowSchedulerRow(self) -> None:
-        """The Opt's Neva-Touch Scheduler row says what comes next, and how to open it (its step tab)."""
-        row = self.settings.Row("nts")
-        if not self.scheduled:
-            row.SetMeaning("Then: a Next Job, Once This One Ends")
-            return
-        name = self.then.name if self.then is not None else "?"
-        meaning = Text.assemble(Text(f"Then: Single Point · {name} · "), KeyHint(self.app, "]", "Opens It"))
-        if self.job is not None and self.job.spProblem:
-            meaning.append_text(Text.assemble("\n", Styled(f"⚠ {self.job.spProblem}", "warning")))
-        row.SetMeaning(meaning)
-
-    # ─── The step tabs ────────────────────────────────────────────────
-
-    def Steps(self) -> list[str]:
-        return [OPT_STEP, SP_STEP] if self.scheduled else [OPT_STEP]
-
-    def ShowSteps(self) -> None:
-        """The top rule's step tabs: the step shown in bold and underlined, the others dimmed; a lone step plain."""
-        rule = self.query_one("#inputs-top", StepRule)
-        steps = self.Steps()
-        label, spans = Text(), []
-        for step in steps:
-            if label:
-                label.append(" · ")
-            title = STEP_TITLES[step]
-            start = label.cell_len
-            label.append(title, style="" if len(steps) == 1 else "bold underline" if step == self.step else "dim")
-            spans.append((start, start + len(title), step))
-        rule.spans, rule.label = spans, label
-
-    def SwitchStep(self, step: str) -> None:
-        """Show one step's settings, and its stages on the right (the fold: the Opt's rows are hidden on Then: SP)."""
-        if step not in self.Steps():
-            step = OPT_STEP
-        changed, self.step = step != self.step, step
-        self.settings.display = step == OPT_STEP
-        self.spSettings.display = step == SP_STEP
-        if changed:
-            # Back where the step was left: its current row in view (the Opt's: the Scheduler row, ticked)
-            settings = self.stepSettings
-            settings.Choose(settings.current, focus=True)
-            self.call_after_refresh(settings.current.scroll_visible, animate=False)
-        self.ShowSteps()
-        self.ShowRightColumn()
-        self.refresh_bindings()
-
-    def on_step_rule_picked(self, event: StepRule.Picked) -> None:
-        self.SwitchStep(event.step)
-
-    def action_step(self, delta: int) -> None:
-        steps = self.Steps()
-        if len(steps) > 1:
-            self.SwitchStep(steps[(steps.index(self.step) + delta) % len(steps)])
+    def SchedulerWarning(self) -> str:
+        return self.job.spProblem if self.job is not None else ""
 
     def Regenerate(self) -> None:
         """Each stage as the settings write it (optimize.OptimizationJob.StageTexts: cu -opt writes the same). Edited
@@ -1070,38 +849,10 @@ class OptimizationScreen(Screen):
                 base = self.then.template.stages[number - 1].base
         elif self.job is not None and self.fullEdit is None and number <= len(self.job.template.stages):
             base = self.job.template.stages[number - 1].base
-        lines = stages[number - 1].replace("\r\n", "\n").split("\n")
-        link0 = [line.strip() for line in lines if line.startswith("%")]
-        rows, atoms = [], 0
-        if link0 and self.ViewExtension() == Defaults.gaussianExtension:
-            rows.append(Styled(" · ".join(link0), "info"))
-            lines = [line for line in lines if not line.startswith("%")]
-        for line in lines + [""]:
-            if regex.match(COORDINATE_ROW, line):
-                atoms += 1
-                continue
-            if atoms:
-                rows.append(Styled(f"‹{atoms} Atoms›", "info"))
-                atoms = 0
-            if not line.strip():
-                continue
-            # The next job's coordinates, marked (optimize.COORDINATES_MARKER): its geometry is the Opt's last
-            if line.startswith("‹"):
-                rows.append(Styled(line, "info"))
-                continue
-            marker = line[:1]
-            if marker in "#!" and base:
-                route = Text(marker + " ")
-                for part, origin in RouteSpans(line[1:].strip(), base):
-                    route.append_text(Styled(part, SPAN_STYLES[origin]))
-                rows.append(route)
-            else:
-                rows.append(Text(line))
-        if self.step == SP_STEP:
-            # Spin is the one thing the preview can't know: it is classified from the Opt's output when it ends
-            rows.append(Styled("Spin (U/RO, [oss: …]) Is Classified From the Optimization's Output When It Ends",
-                               "warning"))
-        return Text("\n").join(rows)
+        # The next job's spin is the one thing the preview can't know: it is classified from the Opt's output then
+        note = ("Spin (U/RO, [oss: …]) Is Classified From the Optimization's Output When It Ends"
+                if self.step == SP_STEP else "")
+        return RendersAsText(stages[number - 1], self.ViewExtension(), base, note)
 
     def ShowRendersAs(self) -> None:
         number = self.table.StageAt()
@@ -1227,16 +978,6 @@ class OptimizationScreen(Screen):
             return
         chosen = self.settings.Chosen("method")
         route = (self.customRoute or row.value) if chosen == "custom" else self.methods[chosen][3]
-        if row.value != route:
-            row.SetValue(route)
-
-    def ShowSinglePointRoute(self) -> None:
-        """The next job's Route row, as the Opt's: the chosen method's route, or Custom's as last typed."""
-        row = self.spSettings.Row("sp-route")
-        if row.target.has_focus:
-            return
-        chosen = self.spSettings.Chosen("sp-method")
-        route = (self.spCustomRoute or row.value) if chosen == "sp-custom" else self.spChoices[chosen][3]
         if row.value != route:
             row.SetValue(route)
 
