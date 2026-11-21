@@ -130,7 +130,9 @@ def _Run(argv: list[str]) -> None:
             return
     # Setup deferred (-env before anyone set cu up): the cluster's startup checks below need it, so they wait too
     elif not Defaults.needsFirstTimeSetup:
-        if not appliesProfile and sys.stdin.isatty():
+        # Only a person at a terminal is offered a changed profile: an agent's run (--json) hears of a newer one through
+        # the relay (plugin.py) and asks its human
+        if not appliesProfile and prompts.interactive:
             from .profile import CheckProfileSource
             CheckProfileSource()
         # Files the endings of tracked jobs that left the queue since the last run, so a stalker's first ping only

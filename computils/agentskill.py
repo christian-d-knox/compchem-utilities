@@ -188,13 +188,17 @@ COMMANDS = [
     AgentCommand("update", ("update", "update_branch"), Action.UPDATE,
                  "Update CompUtils' own code from GitHub (ask the human first). Afterwards, regenerate this skill.",
                  "-up --json", "", ("reinstall",), ("screen-update",)),
-    AgentCommand("update-plugin", ("update_plugin", "plugin_dir", "plugin_updater", "plugin_repo", "plugin_branch"),
+    AgentCommand("update-plugin", ("update_plugin", "plugin_dir", "plugin_updater", "plugin_repo", "plugin_branch",
+                                   "plugin_profile", "profile_digest", "profile_dest", "cluster_host", "cluster_cu"),
                  Action.UPDATE_PLUGIN,
                  "Update the lab's agent plugin's git clone on the human's own computer (run locally with This "
                  "Computer's cu, never over ssh; at each day's updates.plugin reminder, its command as given, without "
                  "asking).",
                  "--update-plugin --json", "results[0].plugin: {folder, branch, before, after, updated, changed, "
-                 "reload}; warnings name the files that need a reload."),
+                 "reload, profile}; warnings name the files that need a reload. profile {file, dest, cluster, "
+                 "local, copied, applied}: the plugin's lab profile is newer than the cluster's (cluster) or this "
+                 "computer's (local); copied: cu put it on the cluster already; applied: where it was applied.",
+                 ("apply-lab-profile",)),
     AgentCommand("init", ("init",), Action.INIT_PROJECT,
                  "Mark this folder as a project root (.computils/: project-level config and keylists).", "-init --json",
                  "", ("nested-project", "move-*")),
@@ -226,6 +230,35 @@ HUMAN_ONLY_TUI = {"screen-config": "Config is edited by people (an agent reads i
 
 def Command(key: str) -> AgentCommand | None:
     return next((command for command in COMMANDS if command.key == key), None)
+
+
+HOST_RECORD = "agent-host.json"
+
+
+def RememberHost(host: str) -> None:
+    """Record the ssh alias the human's computer reaches this machine by (`cu -agent --ssh-host`, when the skill is
+    generated), so the daily reminder can name it: the computer then relays a newer lab profile by itself."""
+    from .defaults import Defaults
+    import json
+    try:
+        (Path(Defaults.binDirectory).expanduser() / HOST_RECORD).write_text(json.dumps({"sshHost": host}),
+                                                                           encoding="utf-8")
+    except OSError:
+        pass
+
+
+def RememberedHost() -> str:
+    from .defaults import Defaults
+    import json
+    try:
+        return str(json.loads((Path(Defaults.binDirectory).expanduser() / HOST_RECORD).read_text(encoding="utf-8"))
+                   .get("sshHost", ""))
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def CuPath() -> str:
+    return _CuPath()
 
 
 def _CuPath() -> str:
@@ -269,7 +302,11 @@ def _LocalSection(local: LocalInstall | None) -> list[str]:
                     f"- `cu` there (run locally, never over ssh): `{local.cu}`",
                     f"- its Python, with openpyxl, for workbooks: `{local.python}`",
                     f"- the plugin (`updates.plugin`): run its command locally with `{local.cu}` in place of `cu`, and "
-                    "`--json`, without asking. "
+                    "`--json`, without asking. When the lab profile in the plugin is newer, it copies it to the "
+                    "cluster itself and asks `apply-lab-profile` (exit 3): put that to the human, then run the same "
+                    "command with `--answer apply-lab-profile=y` (or `n`). Only if `plugin.profile.copied` is false "
+                    "(the command named no cluster), copy it yourself (`scp 'FILE' HOST:'DEST'`) and ask the human "
+                    "before running `cu -profile 'DEST' --json` there. "
                     "Exit 5: GitHub couldn't be reached, so try again at tomorrow's reminder. Exit 7: tell the human "
                     "what it says.", ""]
 

@@ -185,6 +185,11 @@ class PluginUpdateIntent(Intent):
     updater: Optional[str] = None
     repo: Optional[str] = None
     branch: Optional[str] = None
+    profile: Optional[str] = None
+    profileDigest: Optional[str] = None
+    profileDest: Optional[str] = None
+    clusterHost: Optional[str] = None
+    clusterCu: Optional[str] = None
 
 
 @dataclass
@@ -452,6 +457,11 @@ class IntentDraft:
     pluginUpdater: Optional[str] = None
     pluginRepo: Optional[str] = None
     pluginBranch: Optional[str] = None
+    pluginProfile: Optional[str] = None
+    profileDigest: Optional[str] = None
+    profileDest: Optional[str] = None
+    clusterHost: Optional[str] = None
+    clusterCu: Optional[str] = None
 
     # ENVIRONMENT: the job ('' status) and the variant ('' the running one)
     environmentJob:     str = ""
@@ -575,7 +585,10 @@ class IntentDraft:
 
         if self.action != Action.UPDATE_PLUGIN:
             for flag, value in (("--plugin-dir", self.pluginDir), ("--plugin-updater", self.pluginUpdater),
-                                ("--plugin-repo", self.pluginRepo), ("--plugin-branch", self.pluginBranch)):
+                                ("--plugin-repo", self.pluginRepo), ("--plugin-branch", self.pluginBranch),
+                                ("--plugin-profile", self.pluginProfile), ("--profile-digest", self.profileDigest),
+                                ("--profile-dest", self.profileDest), ("--cluster-host", self.clusterHost),
+                                ("--cluster-cu", self.clusterCu)):
                 if value is not None:
                     errors.append(f"{flag} goes with --update-plugin.")
 
@@ -717,7 +730,9 @@ class IntentDraft:
                 return UpdateIntent(branch=self.updateBranch)
             case Action.UPDATE_PLUGIN:
                 return PluginUpdateIntent(folder=self.pluginDir, updater=self.pluginUpdater, repo=self.pluginRepo,
-                                          branch=self.pluginBranch)
+                                          branch=self.pluginBranch, profile=self.pluginProfile,
+                                          profileDigest=self.profileDigest, profileDest=self.profileDest,
+                                          clusterHost=self.clusterHost, clusterCu=self.clusterCu)
             case Action.ENVIRONMENT:
                 return EnvironmentIntent(job=self.environmentJob, variant=self.environmentVariant)
             case Action.REFRESH:

@@ -143,7 +143,10 @@ whether a newer CompUtils (or environment) is on GitHub (`updates`); the agent t
 your lab profile names an agent plugin (`agentPluginFolder`, `agentPluginUpdater`, `agentPluginRepo`,
 `agentPluginBranch`), the same report reminds the agent to update it on your own computer (`updates.plugin`: a
 private repository the cluster can't see), which it does by itself with `cu --update-plugin`, asking you to reload
-the agent's app when a file it reads only at startup changed.
+the agent's app when a file it reads only at startup changed. A lab that keeps its profile in that plugin
+(`agentPluginProfile`, its path there) gets it relayed the same way: when the plugin's copy is newer than the
+cluster's, `cu --update-plugin` on your computer copies it to your cluster account and asks you before applying it
+there (over ssh, by the alias your skill was generated with).
 
 ## Configuration
 

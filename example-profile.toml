@@ -26,6 +26,8 @@ isNotifications = true
 # agentPluginUpdater = "scripts/update.py"        # its own updater, relative to the folder; prints one JSON record
 # agentPluginRepo = "https://github.com/your-lab/your-plugin.git"
 # agentPluginBranch = "main"
+# agentPluginProfile = "lab-profile.toml"         # this profile's path in the plugin, if the plugin carries it: a newer
+#                                                 # one is relayed to each labmate's cluster account, asking first
 benchmarkMethods = [
     "M062X 6-311+G(d,p)",
     "B3LYP 6-311+G(d,p) EmpiricalDispersion=GD3BJ",

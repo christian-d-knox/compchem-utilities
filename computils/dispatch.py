@@ -54,7 +54,9 @@ def Dispatch(intent: Intent) -> list[TrackedJob]:
         case UpdateIntent():          _DispatchUpdate(intent)
         case PluginUpdateIntent():
             from .plugin import Plugin, UpdatePlugin
-            UpdatePlugin(Plugin.Configured(intent.folder, intent.updater, intent.repo, intent.branch))
+            UpdatePlugin(Plugin.Configured(intent.folder, intent.updater, intent.repo, intent.branch, intent.profile,
+                                           intent.profileDigest, intent.profileDest, intent.clusterHost,
+                                           intent.clusterCu))
         case EnvironmentIntent():     _DispatchEnvironment(intent)
         case InitProjectIntent():     _DispatchInitProject(intent)
         case ProfileIntent():         _DispatchProfile(intent)
@@ -926,6 +928,9 @@ def _DispatchAgent(intent: AgentIntent) -> None:
     host = intent.sshHost or socket.getfqdn()
     if intent.topic in ("", "skill"):
         text = SkillText(host, local=intent.local or LocalInstall())
+        if intent.sshHost:
+            from .agentskill import RememberHost
+            RememberHost(intent.sshHost)
     elif intent.topic == "topics":
         text = "".join(f"{name}\n" for name in TopicNames())
     else:

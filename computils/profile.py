@@ -12,6 +12,13 @@ example-profile.toml:
 Applying a profile writes its settings (and the active cluster's) into the global TOML files, as a wizard's answers
 would be. A copy is kept at <binDirectory>/profile.toml: its clusters are read from it on every Load, and its header
 remembers the source file, so a changed source is offered on the next run (CheckProfileSource).
+
+A profile kept in the lab's agent plugin (the profile's own agentPluginProfile: its path in the plugin's repository)
+is relayed by the human's own computer, the one that can read that private repository: the cluster's daily reminder
+(plugin.Reminder) names this account's relay file (RelayPath, in a folder only this account can read) and the digest of
+the newest profile here (CurrentDigest); `cu --update-plugin` on the computer compares the plugin's copy with it, and
+the agent copies a changed one up with scp and asks the human before applying it (`cu -profile RELAY_FILE`). Applied
+from there, it is the source a later relay replaces.
 """
 import hashlib
 import os
@@ -35,6 +42,10 @@ _NOT_SETTINGS = {"hpcType", "submissionList", "binDirectory", "colorMode"}
 _NOTE_LINE = "#@ A copy of your lab profile, kept by CompUtils. Edit the original, then run: cu -profile"
 _SOURCE_PREFIX = "#@source "
 _DECLINED_PREFIX = "#@declined "
+# Where the human's computer relays a newer lab profile to (in binDirectory; the folder is this account's alone, since
+# a profile can hold the bot token and scp leaves the file's mode to the umask)
+RELAY_FOLDER = "lab-profile"
+RELAY_FILE = "profile.toml"
 
 
 @dataclass
@@ -58,8 +69,53 @@ def _CopyPath() -> Path:
     return Path(Defaults.binDirectory) / PROFILE_FILE
 
 
-def _Digest(text: str) -> str:
+def Digest(text: str) -> str:
+    """A profile text's digest (read_text's text: line endings already \n, so a Windows checkout's matches)."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+_Digest = Digest
+
+
+def RelayPath(create: bool = False) -> Path:
+    """This account's relay file. create: make its folder, readable by this account only (the reminder does, before
+    naming it)."""
+    folder = Path(Defaults.binDirectory).expanduser().resolve() / RELAY_FOLDER
+    if create:
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            folder.chmod(0o700)
+        except OSError:
+            pass
+    return folder / RELAY_FILE
+
+
+def AppliedDigest() -> str:
+    """The digest of the profile applied here ('' without one)."""
+    copy = _ReadCopy()
+    return Digest(copy.body) if copy is not None else ""
+
+
+def LocalDeclined() -> str:
+    """The digest of a relayed profile the human declined on this machine ('' none)."""
+    copy = _ReadCopy()
+    return copy.declined if copy is not None else ""
+
+
+def DeclineLocal(digest: str) -> None:
+    copy = _ReadCopy()
+    if copy is not None:
+        copy.declined = digest
+        _WriteCopy(copy)
+
+
+def CurrentDigest() -> str:
+    """The digest of the newest lab profile on this machine: a relayed one waiting to be applied, else the applied one
+    ('' without either). The human's computer relays a profile whose digest differs."""
+    try:
+        return Digest(RelayPath().read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return AppliedDigest()
 
 
 def _ReadCopy() -> InstalledCopy | None:

@@ -178,6 +178,7 @@ class Defaults:
     agentPluginUpdater = ""
     agentPluginRepo = ""
     agentPluginBranch = ""
+    agentPluginProfile = ""
 
     # What files contain what keys
     _FILE_GROUPS: dict[str, list[str]] = {
@@ -214,6 +215,7 @@ class Defaults:
             "colorMode", "bareCommandOpensTUI", "trackedJobHours", "routeUnderEachMethod", "autoNTS",
             "ntsReRunLimit", "rdkitConformers",
             "agentPluginFolder", "agentPluginUpdater", "agentPluginRepo", "agentPluginBranch",
+            "agentPluginProfile",
         ]
     }
 
@@ -310,6 +312,8 @@ class Defaults:
         "agentPluginUpdater": "The plugin's own updater, a script in its folder that prints one JSON record.",
         "agentPluginRepo": "The plugin's git repository (its clone URL), for the human's command when it isn't cloned.",
         "agentPluginBranch": "The branch the plugin's clone follows.",
+        "agentPluginProfile": "The lab profile's path inside the plugin's repository, when the plugin carries it: the"
+            " human's computer relays a newer one to the cluster (cu --update-plugin), asking before it is applied.",
     }
 
     # Expected Python type for each config key, used by _CoerceValue to validate values loaded from user-editable TOML.

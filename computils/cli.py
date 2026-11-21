@@ -216,6 +216,18 @@ def BuildParser() -> argparse.ArgumentParser:
                         help="With --update-plugin, its git repository (default: the lab profile's).")
     parser.add_argument('--plugin-branch', default=None, metavar="NAME",
                         help="With --update-plugin, the branch its clone follows (default: the lab profile's).")
+    parser.add_argument('--plugin-profile', default=None, metavar="PATH",
+                        help="With --update-plugin, the lab profile's path in the plugin (default: the lab profile's).")
+    parser.add_argument('--profile-digest', default=None, metavar="DIGEST",
+                        help="With --update-plugin, the digest of the cluster's newest lab profile (the reminder's).")
+    parser.add_argument('--cluster-host', default=None, metavar="ALIAS",
+                        help="With --update-plugin, the cluster's ssh alias, to relay a newer lab profile (the "
+                             "reminder's).")
+    parser.add_argument('--cluster-cu', default=None, metavar="PATH",
+                        help="With --update-plugin, cu's path on the cluster (the reminder's).")
+    parser.add_argument('--profile-dest', default=None, metavar="FILE",
+                        help="With --update-plugin, where on the cluster a newer lab profile is copied to (the "
+                             "reminder's).")
     parser.add_argument('--update-branch', type=str, default=None, help="With --update, install from this branch (default: the one CompUtils was installed from, else dev).")
 
     # For agents and scripts (agent.py): any action
@@ -409,6 +421,11 @@ def ParseCLI(argv: list[str]) -> Intent:
     draft.pluginUpdater = args.plugin_updater
     draft.pluginRepo    = args.plugin_repo
     draft.pluginBranch  = args.plugin_branch
+    draft.pluginProfile = args.plugin_profile
+    draft.profileDigest = args.profile_digest
+    draft.profileDest   = args.profile_dest
+    draft.clusterHost   = args.cluster_host
+    draft.clusterCu     = args.cluster_cu
 
     # Sub-prompts — preserved from current CLI behavior. With --json, or with nobody at a terminal to answer (an agent's
     # ssh call), -st is one snapshot: never a loop, so never the loop question (nor with --dismiss or --wait)
