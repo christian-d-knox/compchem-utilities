@@ -292,7 +292,8 @@ SECTIONS = [
                "https://www.anaconda.com/docs/getting-started/miniconda/main"),
         Credit("conda-forge", "Every package in the environment comes from its channel.", "The conda-forge community",
                "Recipes BSD-3-Clause; each package keeps its own license", "https://conda-forge.org"),
-        Credit("Git", "Installs CompUtils from GitHub (pip install git+..., cu --update).", "Linus Torvalds, Junio C "
+        Credit("Git", "Installs CompUtils from GitHub (pip install git+..., cu --update), and updates the agent "
+               "plugin's git clone (cu --update-plugin).", "Linus Torvalds, Junio C "
                "Hamano and the Git contributors", "GPL-2.0-only", "https://git-scm.com"),
         Credit("GitHub", "Hosts CompUtils; updates read its REST API for the latest commit and the branches.",
                "GitHub, Inc.", "GitHub Terms of Service (REST API use under GitHub's API terms)",

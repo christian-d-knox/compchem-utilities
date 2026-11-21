@@ -81,7 +81,6 @@ class CompUtilsApp(App):
     #form { height: auto; }
     .side { border: none; border-left: solid $secondary; border-right: solid $secondary; padding: 0 1; height: auto; }
     #form Checkbox { margin-right: 2; }
-    #methods { height: auto; max-height: 12; }
     #range { width: 24; height: 1; border: none; }
     /* GoodVibes settings: [X] label, value + unit, meaning; the current row is highlighted while the list has focus */
     #settings, #sp-settings { height: auto; }
@@ -125,6 +124,7 @@ class CompUtilsApp(App):
     /* The Optimization builder's Stages view: the stage table as tall as its rows (up to 10), then the highlighted
        stage's Renders As under a titled rule (as the TextEditor's Check and Example), taking the rest and scrolling */
     #stage-table, #stage-table:focus { height: auto; max-height: 10; border: none; padding: 0 1; }
+    #job-table, #job-table:focus { height: auto; max-height: 12; border: none; padding: 0 1; }
     #renders-as { height: 1fr; border-top: solid $secondary; border-title-align: left; padding: 0 1; }
 
     /* The config editor: the table takes the height the details strip leaves */

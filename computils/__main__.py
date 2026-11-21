@@ -43,7 +43,7 @@ def Main() -> int:
         agent.Crashed()
     # At most once a day, a report also says what is newer on GitHub (never in a hook: no one reads its report)
     if agent.jsonOutput and argv[:1] != ["--neva-touch"]:
-        _DailyUpdateCheck()
+        _DailyUpdateCheck(remindPlugin="--update-plugin" not in argv)
     code = agent.Finish()
     # A Neva-Touch Scheduler hook records its own outcome on the tracked job; its exit code means only "crashed or not"
     # (a stalker's fallback, nevatouch.FireStep, reads it that way)
@@ -52,15 +52,17 @@ def Main() -> int:
     return code
 
 
-def _DailyUpdateCheck() -> None:
-    """update.DailyCheck into the report, and a line for whoever reads stderr. Never worth failing a report over."""
+def _DailyUpdateCheck(remindPlugin: bool = True) -> None:
+    """update.DailyCheck into the report, and a line for whoever reads stderr when CompUtils itself has news (the
+    plugin's reminder is the agent's alone). Never worth failing a report over."""
     try:
         from .update import DailyCheck
-        updates = DailyCheck()
+        updates = DailyCheck(remindPlugin)
     except Exception:
         return
     if updates:
         agent.report.updates = updates
+    if updates and updates.get("command"):
         console.print(f"[info]Update available: {updates['why']} Run `{updates['command']}` when you're ready."
                       "[/info]", highlight=False)
 
@@ -101,9 +103,10 @@ def _Run(argv: list[str]) -> None:
     opensTUI = argv in (["-tui"], ["--tui"]) or (not argv and Defaults.bareCommandOpensTUI)
     appliesProfile = argv[:1] in (["-profile"], ["--profile"])
 
-    # The environment's status and updates (-env) concern the installation, not the cluster: a run nobody can answer
-    # reads them before setup too (an agent on a computer used only for workbooks, where nobody set cu up)
-    deferSetup = not prompts.interactive and argv[:1] in (["-env"], ["--environment"])
+    # The environment's status and updates (-env), and the agent plugin's update (--update-plugin), concern the
+    # installation, not the cluster: a run nobody can answer does them before setup too (an agent on a computer used
+    # only for workbooks, where nobody set cu up)
+    deferSetup = not prompts.interactive and argv[:1] in (["-env"], ["--environment"], ["--update-plugin"])
     # Setup is a conversation with a person: a run nobody can answer stops here, saying who must run what
     if not prompts.interactive and not deferSetup and (Defaults.needsFirstTimeSetup
                                                        or Defaults.colorMode not in ("lowColor", "hexCode")):

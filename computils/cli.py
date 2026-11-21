@@ -11,7 +11,8 @@ from . import agent
 ACTION_FLAGS = {
     "run": Action.RUN, "singlePoint": Action.SINGLE_POINT, "bench": Action.BENCHMARK, "cube": Action.CUBE,
     "rerun": Action.RERUN, "formcheck": Action.FORM_CHECK, "excel": Action.EXCEL, "goodvibes": Action.GOODVIBES,
-    "first": Action.FIRST_TIME_SETUP, "update": Action.UPDATE, "environment": Action.ENVIRONMENT,
+    "first": Action.FIRST_TIME_SETUP, "update": Action.UPDATE, "update_plugin": Action.UPDATE_PLUGIN,
+    "environment": Action.ENVIRONMENT,
     "init": Action.INIT_PROJECT,
     "profile": Action.PROFILE, "refresh": Action.REFRESH, "attributions": Action.ATTRIBUTIONS,
     "neva_touch": Action.NEVA_TOUCH, "info": Action.INFO, "methods": Action.METHODS, "optimize": Action.OPTIMIZE,
@@ -44,6 +45,9 @@ def BuildParser() -> argparse.ArgumentParser:
                              help="Run GoodVibes interactively on the given outputs (default: every output here), then convert to xlsx.")
     actionGroup.add_argument('-first','--first', action='store_true', help="Re-run first-time setup.")
     actionGroup.add_argument('-up', '--update', action='store_true', help="Update CompUtils from GitHub.")
+    actionGroup.add_argument('--update-plugin', action='store_true',
+                             help="Update the h2p-computils agent plugin on this computer (its git clone, with your "
+                                  "GitHub sign-in): run on your own computer, not the cluster.")
     actionGroup.add_argument('-env', '--environment', nargs='*', metavar="ARG",
                              help="Show the CompUtils environments' status. 'refresh|rebuild|install [ENVIRONMENT]' "
                                   "updates one in the background (default: the one CompUtils runs from), e.g. "
@@ -114,14 +118,15 @@ def BuildParser() -> argparse.ArgumentParser:
                           help="A singlet's spin (default: spinstates.txt, else the prior job's, else CSS).")
     optGroup.add_argument('--name', default=None,
                           help="The job's name (default: the file's). Needed with --smiles: also -xyz's file name.")
-    optGroup.add_argument('--cpus', type=int, default=None, help="CPUs (default: the config's).")
+    optGroup.add_argument('--cpus', type=int, default=None,
+                          help="CPUs of the inputs written (-opt, -sp, -b, -re; default: the config's).")
     optGroup.add_argument('--memory', type=float, default=None, metavar="GB",
-                          help="Memory per core in GB (default: as the method needs).")
+                          help="Memory per core in GB (-opt, -sp, -b, -re; default: as the method needs).")
     optGroup.add_argument('--modred', action='append', default=[], metavar="STAGE=LINES",
                           help="A ModRedundant stage's lines: a file, or lines separated by ';' (e.g. 1='B 1 2 F').")
     optGroup.add_argument('--then-sp', action=argparse.BooleanOptionalAction, default=None,
                           help="The Neva-Touch Scheduler submits the single point when the optimization ends "
-                               "(default: qol.toml's autoNTS).")
+                               "(-opt: default qol.toml's autoNTS; -re: each re-run that optimizes, default off).")
     optGroup.add_argument('--sp-cpus', type=int, default=None, help="The single point's CPUs (default: the config's).")
     optGroup.add_argument('--sp-memory', type=float, default=None, metavar="GB",
                           help="The single point's memory per core in GB (default: as its method needs).")
@@ -183,6 +188,8 @@ def BuildParser() -> argparse.ArgumentParser:
     parser.add_argument('--first-stage', type=int, default=1, help=argparse.SUPPRESS)
     # A Neva-Touch Scheduler hook's chain file (nevatouch.ChainPath; written into the hook, not listed)
     parser.add_argument('--chain', default=None, help=argparse.SUPPRESS)
+    parser.add_argument('--plugin-dir', type=Path, default=None, metavar="FOLDER",
+                        help="With --update-plugin, the plugin's folder (default: ~/.gemini/config/plugins/h2p-computils).")
     parser.add_argument('--update-branch', type=str, default=None, help="With --update, install from this branch (default: the one CompUtils was installed from, else dev).")
 
     # For agents and scripts (agent.py): any action
@@ -296,14 +303,22 @@ def ParseCLI(argv: list[str]) -> Intent:
     draft.smiles, draft.rdkitConformers, draft.rdkitConformer = args.smiles, args.rdkit_conformers, args.rdkit_conformer
     if args.xyz is not None:
         draft.optName = args.name
-    if args.optimize is not None:
-        draft.cpus, draft.memoryRatio = args.cpus, args.memory
-        draft.optMethod, draft.optRoute, draft.optName = args.method, args.route, args.name
-        draft.optCharge, draft.optMultiplicity, draft.optSpin = args.charge, args.mult, args.spin
+    # The inputs' own resources (-opt, -sp, -b, -re; Validate refuses them elsewhere: an input as written has its own)
+    draft.cpus, draft.memoryRatio = args.cpus, args.memory
+    # The Neva-Touch Scheduler's next job: -opt's, and each optimizing re-run's
+    thenFlags = any(value is not None for value in (args.then_sp, args.sp_cpus, args.sp_memory, args.sp_method,
+                                                    args.sp_route, args.sp_wall_time, args.sp_partition,
+                                                    args.sp_cluster)) or args.sp_nbo or args.sp_checkpoint
+    if args.optimize is not None or args.rerun is not None:
         draft.optThenSP, draft.optSpCpus, draft.optSpMemory = args.then_sp, args.sp_cpus, args.sp_memory
         draft.optSpMethod, draft.optSpRoute, draft.optSpWallTime = args.sp_method, args.sp_route, args.sp_wall_time
         draft.optSpPartition, draft.optSpCluster = args.sp_partition, args.sp_cluster
         draft.optSpNbo, draft.optSpCheckpoint = args.sp_nbo, args.sp_checkpoint
+    elif thenFlags and not args.neva_touch:
+        raise agent.UsageError("--then-sp and --sp-* go with -opt or -re.")
+    if args.optimize is not None:
+        draft.optMethod, draft.optRoute, draft.optName = args.method, args.route, args.name
+        draft.optCharge, draft.optMultiplicity, draft.optSpin = args.charge, args.mult, args.spin
         for entry in args.modred:
             stage, separator, lines = entry.partition("=")
             if not separator or not stage.strip().isdigit():
@@ -312,13 +327,9 @@ def ParseCLI(argv: list[str]) -> Intent:
             draft.optModRed[int(stage)] = (path.read_text() if path.is_file()
                                            else "\n".join(line.strip() for line in lines.split(";") if line.strip()))
     elif any(value is not None for value in (args.method, args.charge, args.mult, args.spin,
-                                             args.name if args.xyz is None else None,
-                                             args.then_sp, args.sp_cpus, args.sp_memory, args.sp_method, args.sp_route,
-                                             args.sp_wall_time, args.sp_partition, args.sp_cluster)) \
-            or args.modred or args.sp_nbo or args.sp_checkpoint:
+                                             args.name if args.xyz is None else None)) or args.modred:
         if not args.neva_touch:
-            raise agent.UsageError("--method, --charge, --mult, --spin, --name, --modred, --then-sp and --sp-* go with "
-                                   "-opt.")
+            raise agent.UsageError("--method, --charge, --mult, --spin, --name and --modred go with -opt.")
     # -sp's route of your own (a Neva-Touch Scheduler chain step's too)
     if args.route is not None and args.optimize is None:
         from .catalog import UnknownSelectors
@@ -351,6 +362,7 @@ def ParseCLI(argv: list[str]) -> Intent:
             raise agent.UsageError(f"{flag} has nothing to set: {Defaults.hpcType}'s submission header has no line for "
                                    f"it (slurm.toml's submissionList).")
     draft.updateBranch  = args.update_branch
+    draft.pluginDir     = args.plugin_dir
 
     # Sub-prompts — preserved from current CLI behavior. With --json, or with nobody at a terminal to answer (an agent's
     # ssh call), -st is one snapshot: never a loop, so never the loop question (nor with --dismiss or --wait)

@@ -80,7 +80,7 @@ The environments also carry `openpyxl`, so an AI agent can build Excel workbooks
 | `cu -r FILE…` | Submits input files directly |
 | `cu -sp FILE…` | Generates and submits single point files based on completed jobs (`--route ROUTE` for a route of your own) |
 | `cu -b FILE…` | Generates and submits multiple single point files per file, according to benchmarking list |
-| `cu -re FILE…` | Regenerates and resubmits a failed job |
+| `cu -re FILE…` | Regenerates and resubmits a failed job (`--then-sp` with the `--sp-*` flags: each re-run optimization's single point once it ends) |
 | `cu -cu FILE…` | Generates cube files from Gaussian .chk or .fchk via cubegen |
 | `cu -form FILE…` | Runs formchk on Gaussian checkpoint files |
 | `cu -gv [FILE…]` | Runs GoodVibes (default: every output in cwd), then writes output to Excel. A consistency check runs first and stops on mismatched methods, solvation, dispersion or SP geometries; `--gv-allow` waives them where intended (e.g. benchmarks) |
@@ -91,6 +91,7 @@ The environments also carry `openpyxl`, so an AI agent can build Excel workbooks
 | `cu -first` | Re-runs first-time setup |
 | `cu -refresh [project]` | Rewrites the config files in the current layout, keeping your values |
 | `cu --update` | Updates CompUtils from GitHub |
+| `cu --update-plugin` | Updates the lab's Antigravity plugin (`h2p-computils`, a git clone in `~/.gemini/config/plugins/`) on your own computer, with your GitHub sign-in |
 | `cu -attributions` | Shows the disclaimer and credits |
 | `cu -opt FILE` | Writes and submits an optimization of one molecule (an .xyz or a prior job, or `--smiles 'SMILES' --name NAME`: RDKit builds its 3D geometry), as the Optimization builder does; `--then-sp` with `--sp-method NAME` (or `--sp-route`) and `--sp-*` resources has the Neva-Touch Scheduler submit that single point when it ends |
 | `cu -si` | Writes SI_coordinates.txt from the folder's outputs, as the SI Scraper does |
@@ -105,6 +106,7 @@ The environments also carry `openpyxl`, so an AI agent can build Excel workbooks
 | `-nbo` | Appends an NBO7-styled section to generated input (tested only for Gaussian at time of writing) |
 | `-ovr N` | Starts single points or benchmarking from entry N in the benchmarking list |
 | `--wall-time HOURS`, `--partition NAME`, `--cluster NAME` | The jobs' own SLURM settings, for any job command (default: the config's; `--cluster` only where the cluster's header sends `-M`) |
+| `--cpus N`, `--memory GB` | The generated inputs' CPUs and memory per core, for `-sp`, `-b`, `-re` and `-opt` (default: the config's, memory as each method needs) |
 | `--dry-run` | Writes the inputs and job scripts without submitting them |
 | `--json` | Prints one machine-readable report (for scripts and AI agents) |
 | `--help` | Lists flags and their usage |
@@ -131,7 +133,10 @@ for every workspace; Claude Code: `~/.claude/skills/computils/`).
 
 The skill also records whether CompUtils is installed on your own computer (`--local-cu PATH --local-python PATH`,
 or `--no-local`), so the agent never asks again. Once a day, the first `--json` report on a machine also says
-whether a newer CompUtils (or environment) is on GitHub (`updates`); the agent tells you, and you decide.
+whether a newer CompUtils (or environment) is on GitHub (`updates`); the agent tells you, and you decide. The same
+report reminds the agent to update the lab's plugin on your own computer (`updates.plugin`: its repository is
+private, so the cluster can't see it), which it does by itself with `cu --update-plugin`, asking you to reload
+Antigravity (Ctrl+R) when a file it reads only at startup changed.
 
 ## Configuration
 

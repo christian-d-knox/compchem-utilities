@@ -456,7 +456,9 @@ class SettingsList(Vertical):
             yield SettingRow(setting, self.stacked, self.widest, self.inputClass)
 
     def on_mount(self) -> None:
-        self.Choose(self.rows[0])
+        # An empty list (a step a screen doesn't have) has no row to choose
+        if self.rows:
+            self.Choose(self.rows[0])
 
     @property
     def rows(self) -> list[SettingRow]:

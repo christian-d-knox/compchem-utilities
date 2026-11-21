@@ -20,6 +20,7 @@ class Action(Enum):
     GOODVIBES        = "goodvibes"  # -gv
     FIRST_TIME_SETUP = "first"      # -first
     UPDATE           = "update"     # -up
+    UPDATE_PLUGIN    = "plugin"     # --update-plugin: the agent plugin's git clone on this computer (plugin.py)
     ENVIRONMENT      = "env"        # -env
     INIT_PROJECT     = "init"       # -init
     PROFILE          = "profile"    # -profile

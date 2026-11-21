@@ -487,7 +487,7 @@ What CompUtils is installed with, runs on and talks to.
 
 ### Git
 
-- **Use:** Installs CompUtils from GitHub (pip install git+..., cu --update).
+- **Use:** Installs CompUtils from GitHub (pip install git+..., cu --update), and updates the agent plugin's git clone (cu --update-plugin).
 - **By:** Linus Torvalds, Junio C Hamano and the Git contributors
 - **License:** GPL-2.0-only
 - **Link:** https://git-scm.com

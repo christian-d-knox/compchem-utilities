@@ -11,7 +11,8 @@ from .keylists import Keylist, Where, MIXED_BASIS, OPTIMIZATION, ORCA_BLOCKS
 from .molecule import Molecule
 from .intent import JobIntent
 from .stalk    import TrackedJob, Stage, jobLocation, TrackJobs, NTS_LOG
-from .nevatouch import HookCommand, HookLines, JOB_ID
+from .actions   import NTS_SP
+from .nevatouch import HookCommand, HookLines, JOB_ID, ChainPath, WriteChain
 from .          import agent
 
 # The optimization methods (name -> route, in order): jobRelatedKeylists' Optimization Methods from the nearest level
@@ -513,13 +514,7 @@ def runJob(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
     # Sets up all the basic filenames for the rest of submission
     outputName = fileCreation(molecule.baseName, Defaults.outputExtension)
     queueName = fileCreation(molecule.baseName, Defaults.queueExtension)
-    # The Neva-Touch Scheduler's hook: the step this job takes once it ends, with the next job's resources
     outputPath = Path(outputName).resolve()
-    hookCommand = (HookCommand(intent.nevaTouch, outputPath, intent.nextCpus, intent.nextMemoryRatio, intent.reRuns,
-                               intent.firstStage, intent.wallTime, intent.partition, intent.cluster, intent.chain)
-                   if intent.nevaTouch else [])
-    hook = (HookLines(hookCommand, outputPath.parent, outputPath.parent / fileCreation(molecule.baseName, NTS_LOG))
-            if hookCommand else "")
 
     # Empty file guard
     if not HasContent(molecule.fullPath):
@@ -533,6 +528,28 @@ def runJob(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
         cpus, jobRam = ExtractResources(data, molecule.extensionType)
         stageCount = StageCount(data, molecule.extensionType)
         planned = PlannedKinds(data, molecule.extensionType)
+        inputText = ExtractOrcaInput(data) if molecule.extensionType == Defaults.orcaExtension else ""
+        optimizes = any(JobChecks(route, molecule.extensionType, inputText).optimizes
+                        for route in InputRoutes(data, molecule.extensionType))
+
+    # The Neva-Touch Scheduler's hook: the step this job takes once it ends, with the next job's resources. A batch's
+    # next job (thenSteps, e.g. -re --then-sp) is written into each job's own chain file, for a job that optimizes: a
+    # single point isn't followed by another
+    nevaTouch, chain = intent.nevaTouch, intent.chain
+    if intent.thenSteps:
+        if optimizes:
+            chainPath = ChainPath(Path(molecule.fullPath).resolve())
+            WriteChain(chainPath, intent.thenSteps)
+            nevaTouch, chain = NTS_SP, str(chainPath)
+        else:
+            nevaTouch, chain = "", None
+            console.print(f"[info]{molecule.baseName} doesn't optimize: the Neva-Touch Scheduler has no next job for "
+                          "it.[/info]")
+    hookCommand = (HookCommand(nevaTouch, outputPath, intent.nextCpus, intent.nextMemoryRatio, intent.reRuns,
+                               intent.firstStage, intent.wallTime, intent.partition, intent.cluster, chain)
+                   if nevaTouch else [])
+    hook = (HookLines(hookCommand, outputPath.parent, outputPath.parent / fileCreation(molecule.baseName, NTS_LOG))
+            if hookCommand else "")
 
     slurmHandler(molecule, queueName, outputName, cpus, jobRam, intent.wallTime, intent.partition, intent.cluster)
 
@@ -569,12 +586,12 @@ def runJob(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
         return
     jobID, cluster = submitted
     console.print(f"[good]Submitted job {molecule.baseName} to {program} (ID {jobID})[/good]")
-    agent.Submitted(molecule.baseName, jobID, cluster, str(outputPath), intent.nevaTouch)
+    agent.Submitted(molecule.baseName, jobID, cluster, str(outputPath), nevaTouch)
     tracked = TrackedJob(jobID, cluster, molecule.baseName, str(outputPath),
                          jobLocation(intent.partition, intent.cluster), molecule.extensionType,
                          time.time(), [Stage(planned=planned[index] if index < len(planned) else "")
                                        for index in range(stageCount)],
-                         nevaTouch=intent.nevaTouch, reRuns=intent.reRuns, firstStage=intent.firstStage,
+                         nevaTouch=nevaTouch, reRuns=intent.reRuns, firstStage=intent.firstStage,
                          hookCommand=[jobID if word == JOB_ID else word for word in hookCommand])
     # Recorded now, not after the batch: a quick job's Neva-Touch Scheduler hook looks for its record
     TrackJobs([tracked])
