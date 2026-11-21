@@ -1,8 +1,0 @@
-# project.toml -- the screen gallery's project overrides (sparse: the rest follow the global config), so the
-# builders' Resources show their project markers.
-
-# Number of CPU cores to request per job.
-CPU = 24
-
-# Partition for jobs in this project.
-partition = "RM-512"

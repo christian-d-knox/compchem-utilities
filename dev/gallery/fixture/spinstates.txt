@@ -1,3 +1,0 @@
-# spinstates.txt -- the screen gallery's per-molecule CSS/OSS overrides.
-# Format: <molecule name or glob>  css|oss
-TS1*  oss
