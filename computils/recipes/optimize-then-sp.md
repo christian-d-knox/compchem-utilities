@@ -13,6 +13,12 @@ Scheduler). Every command below runs as `ssh {host} "cd FOLDER && COMMAND"`.
 
        {cu} -opt 8a.xyz --method wb97xd --charge 0 --mult 1 --then-sp --dry-run --json
 
+   No structure file yet? Give the SMILES instead, with a name: RDKit builds the 3D geometry (the lowest-energy of
+   several RDKit conformers; `rdkitConformers` in the results lists them), and the charge and multiplicity come
+   from the SMILES (formal charges; radicals) unless given. Show the human what was built before submitting.
+
+       {cu} -opt --smiles 'CC(=O)OC1CCCC1' --name cpa --method wb97xd --then-sp --dry-run --json
+
 3. Show the human the input (`written[0]`: inputs are small, read it) and the scheduled single point. On their
    go-ahead, run `next[0].command` (the same call, submitting; it answers replacing the previewed input).
 

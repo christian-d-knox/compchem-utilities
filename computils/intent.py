@@ -215,11 +215,13 @@ class OptimizationIntent(Intent):
     """`cu -opt FILE` — the Optimization builder without the TUI (optimize.py): one molecule from an .xyz or a prior
     input/output, a named Optimization Method (or 'From Source', or a full --route), written and submitted as the
     builder submits one. None means the builder's starting value (charge/multiplicity: the prior job's, else asked;
-    spin: spinstates.txt, else the prior job's classification, else CSS; thenSP: qol.toml's autoNTS). modred: stage
+    spin: spinstates.txt, else the prior job's classification, else CSS; thenSP: qol.toml's autoNTS). smiles: the
+    molecule from a SMILES instead (file None; smiles.py: an RDKit conformer, rdkitConformer by energy, its charge and
+    multiplicity the SMILES' unless given). modred: stage
     number -> its ModRed lines (a file, or lines separated by ';'). The scheduled SP (a Neva-Touch Scheduler chain
     step): spMethod (a Benchmark Methods name; None: the first) or spRoute, its resources (None: the config's, its
     memory as its method needs), and its SLURM settings (partition/cluster None: the opt's)."""
-    file:         Path
+    file:         Optional[Path]
     method:       Optional[str]   = None
     route:        Optional[str]   = None
     charge:       Optional[int]   = None
@@ -237,6 +239,9 @@ class OptimizationIntent(Intent):
     thenSP:       Optional[bool]  = None
     spCpus:       Optional[int]   = None
     spMemory:     Optional[float] = None
+    smiles:          Optional[str] = None
+    rdkitConformers: Optional[int] = None
+    rdkitConformer:  int           = 1
     spMethod:     Optional[str]   = None
     spRoute:      Optional[str]   = None
     spWallTime:   Optional[str]   = None
@@ -272,8 +277,16 @@ class AgentIntent(Intent):
 
 @dataclass
 class XyzIntent(Intent):
-    """`cu -xyz FILE...` — each file's last geometry (fileops.ReadMolecule) written as NAME.xyz (fileops.WriteXyz)."""
-    files: list[Path]
+    """`cu -xyz FILE...` — each file's last geometry (fileops.ReadMolecule) written as NAME.xyz (fileops.WriteXyz).
+    With smiles (and name, no files): that SMILES' RDKit conformer (smiles.py; rdkitConformer: by energy, 1 the
+    lowest; rdkitConformers None: qol.toml's) as name.xyz. replace: the person already chose to replace an existing
+    name.xyz (the TUI's pop-up shows it), so replace-xyz isn't asked."""
+    files:           list[Path]
+    smiles:          Optional[str] = None
+    name:            Optional[str] = None
+    rdkitConformers: Optional[int] = None
+    rdkitConformer:  int           = 1
+    replace:         bool          = False
 
 
 @dataclass
@@ -392,6 +405,11 @@ class IntentDraft:
     siOutput:   Optional[str]       = None
     siSpecies:  Optional[list[str]] = None
 
+    # A SMILES instead of a file (OPTIMIZE, XYZ: smiles.py); optName names what it makes for both
+    smiles:          Optional[str]   = None
+    rdkitConformers: Optional[int]   = None
+    rdkitConformer:  Optional[int]   = None
+
     # OPTIMIZE (files[0] is the source; cpus/memoryRatio/checkpoint are shared with the job actions)
     optMethod:       Optional[str]   = None
     optRoute:        Optional[str]   = None
@@ -418,8 +436,26 @@ class IntentDraft:
         if self.action is None:
             return ["No action selected."]
 
-        if self.action in FILE_ACTIONS and not self.files:
+        # -opt says it itself (a file, or --smiles)
+        if self.action in FILE_ACTIONS and not self.files and self.smiles is None and self.action != Action.OPTIMIZE:
             errors.append("No matching files for the given pattern.")
+
+        if self.smiles is not None:
+            if self.action not in (Action.OPTIMIZE, Action.XYZ):
+                errors.append("--smiles goes with -opt or -xyz.")
+            elif self.files:
+                errors.append(f"-{'opt' if self.action == Action.OPTIMIZE else 'xyz'} takes files or --smiles, not both.")
+            elif not self.smiles.strip():
+                errors.append("--smiles is empty.")
+            elif not self.optName:
+                errors.append("--smiles needs --name: a SMILES names no file (e.g. --name 'ethanol').")
+        elif self.rdkitConformers is not None or self.rdkitConformer is not None:
+            errors.append("--rdkit-conformers and --rdkit-conformer go with --smiles.")
+        if self.action == Action.XYZ and self.optName is not None and self.smiles is None:
+            errors.append("--name goes with -opt, or -xyz --smiles.")
+        for value, flag in ((self.rdkitConformers, "--rdkit-conformers"), (self.rdkitConformer, "--rdkit-conformer")):
+            if value is not None and value < 1:
+                errors.append(f"{flag} must be 1 or more.")
 
         if self.action == Action.CUBE:
             if not self.cubeOptions:
@@ -461,8 +497,8 @@ class IntentDraft:
             errors.append(f"-env takes refresh, rebuild or install, then an environment (got '{self.environmentJob}').")
 
         if self.action == Action.OPTIMIZE:
-            if len(self.files) != 1:
-                errors.append("-opt takes one file (one molecule per call: run it once per molecule).")
+            if len(self.files) != 1 and self.smiles is None:
+                errors.append("-opt takes one file, or --smiles (one molecule per call: run it once per molecule).")
             if self.optMethod and self.optRoute:
                 errors.append("-opt takes --method or --route, not both.")
             if self.optSpin is not None and self.optSpin not in ("css", "oss"):
@@ -527,14 +563,18 @@ class IntentDraft:
                                 species=self.siSpecies)
             case Action.OPTIMIZE:
                 return OptimizationIntent(
-                    file=self.files[0], method=self.optMethod, route=self.optRoute, charge=self.optCharge,
+                    file=self.files[0] if self.files else None, method=self.optMethod, route=self.optRoute, charge=self.optCharge,
                     multiplicity=self.optMultiplicity, spin=self.optSpin, name=self.optName, cpus=self.cpus,
                     memoryRatio=self.memoryRatio, checkpoint=self.checkpoint, nbo7=self.nbo7, wallTime=self.wallTime,
                     partition=self.partition, cluster=self.cluster, modred=dict(self.optModRed),
                     thenSP=self.optThenSP, spCpus=self.optSpCpus, spMemory=self.optSpMemory, spMethod=self.optSpMethod,
                     spRoute=self.optSpRoute, spWallTime=self.optSpWallTime, spPartition=self.optSpPartition,
                     spCluster=self.optSpCluster, spNbo=self.optSpNbo, spCheckpoint=self.optSpCheckpoint,
+                    smiles=self.smiles, rdkitConformers=self.rdkitConformers, rdkitConformer=self.rdkitConformer or 1,
                     stalk=self.stalk, stalkLoop=self.stalkLoop)
+            case Action.XYZ:
+                return XyzIntent(files=list(self.files), smiles=self.smiles, name=self.optName,
+                                 rdkitConformers=self.rdkitConformers, rdkitConformer=self.rdkitConformer or 1)
             case Action.NEVA_TOUCH:
                 return NevaTouchIntent(step=self.nevaTouchStep, output=self.files[0], jobID=self.nevaTouchJob,
                                        cpus=self.cpus, memoryRatio=self.memoryRatio, reRuns=self.reRuns,

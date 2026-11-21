@@ -56,9 +56,10 @@ def BuildParser() -> argparse.ArgumentParser:
                                   "invalid values become the current default). With 'project', also the nearest project.toml.")
     actionGroup.add_argument('-attributions', '--attributions', action='store_true',
                              help="Show the license, disclaimer and credits: every program, library, method and service CompUtils relies on, with licenses and citations.")
-    actionGroup.add_argument('-opt', '--optimize', nargs=1, metavar="FILE",
-                             help="Write and submit an optimization of one molecule (an .xyz, or a prior input or "
-                                  "output), as the TUI's Optimization builder does. See 'optimization' below.")
+    actionGroup.add_argument('-opt', '--optimize', nargs='*', metavar="FILE",
+                             help="Write and submit an optimization of one molecule (an .xyz, a prior input or "
+                                  "output, or --smiles in place of FILE), as the TUI's Optimization builder does. See "
+                                  "'optimization' below.")
     actionGroup.add_argument('-si', '--si', action='store_true',
                              help="Write SI_coordinates.txt from this folder's outputs, as the TUI's SI Scraper does. "
                                   "See 'si scraper' below.")
@@ -68,9 +69,9 @@ def BuildParser() -> argparse.ArgumentParser:
     actionGroup.add_argument('-info', '--info', nargs='+', metavar="FILE",
                              help="Show what each file says (status, charge, method, energy, thermal corrections, "
                                   "frequencies, convergence...), read once each. Read-only.")
-    actionGroup.add_argument('-xyz', '--xyz', nargs='+', metavar="FILE",
+    actionGroup.add_argument('-xyz', '--xyz', nargs='*', metavar="FILE",
                              help="Write each file's last geometry (an output's, or an input's own) as NAME.xyz, Gaussian "
-                                  "or ORCA.")
+                                  "or ORCA; or, with --smiles and --name, a SMILES' RDKit conformer.")
     actionGroup.add_argument('-methods', '--methods', action='store_true',
                              help="List the Optimization and Benchmark Methods in force here (project, else global).")
     # Handled in Main() before parsing; listed here for --help and so argparse rejects it alongside another action
@@ -111,7 +112,8 @@ def BuildParser() -> argparse.ArgumentParser:
                           help="Default: the prior job's; asked for an .xyz.")
     optGroup.add_argument('--spin', type=str.lower, default=None, metavar="css|oss",
                           help="A singlet's spin (default: spinstates.txt, else the prior job's, else CSS).")
-    optGroup.add_argument('--name', default=None, help="The job's name (default: the file's).")
+    optGroup.add_argument('--name', default=None,
+                          help="The job's name (default: the file's). Needed with --smiles: also -xyz's file name.")
     optGroup.add_argument('--cpus', type=int, default=None, help="CPUs (default: the config's).")
     optGroup.add_argument('--memory', type=float, default=None, metavar="GB",
                           help="Memory per core in GB (default: as the method needs).")
@@ -136,6 +138,15 @@ def BuildParser() -> argparse.ArgumentParser:
                           help="The single point's cluster, SLURM's -M (default: the optimization's).")
     optGroup.add_argument('--sp-nbo', action='store_true', help="The single point writes the NBO keylist (Gaussian).")
     optGroup.add_argument('--sp-checkpoint', action='store_true', help="The single point writes a checkpoint (Gaussian).")
+    # A SMILES instead of a file (smiles.py): -opt's molecule, or -xyz's geometry
+    smilesGroup = parser.add_argument_group("from a SMILES (-opt, -xyz)")
+    smilesGroup.add_argument('--smiles', default=None, metavar="SMILES",
+                             help="Build the molecule from a SMILES with RDKit instead of reading a file (quote it): "
+                                  "its charge and multiplicity come from the SMILES (formal charges; radicals + 1).")
+    smilesGroup.add_argument('--rdkit-conformers', type=int, default=None, metavar="N",
+                             help="How many RDKit conformers to build (default: qol.toml's rdkitConformers).")
+    smilesGroup.add_argument('--rdkit-conformer', type=int, default=None, metavar="RANK",
+                             help="Which RDKit conformer to use, by energy (default: 1, the lowest).")
     # -gv's settings (the GoodVibes Builder's rows): any of them, or a run nobody can answer, skips the wizard
     gvGroup = parser.add_argument_group("goodvibes (-gv; without these the wizard asks, unless nobody can answer)")
     gvGroup.add_argument('--qh', action=argparse.BooleanOptionalAction, default=None,
@@ -236,8 +247,10 @@ def ParseCLI(argv: list[str]) -> Intent:
 
     # File-bearing actions: expand globs if the shell didn't, collect all files
     if draft.action in FILE_ACTIONS:
-        # A bare -gv reads every output in the CWD, as GoodVibes itself is usually run
-        for entry in getattr(args, flag) or [f"*{Defaults.outputExtension}"]:
+        # A bare -gv reads every output in the CWD, as GoodVibes itself is usually run (-opt and -xyz take none with
+        # --smiles)
+        given = getattr(args, flag)
+        for entry in given or ([f"*{Defaults.outputExtension}"] if draft.action == Action.GOODVIBES else []):
             if any(c in entry for c in ("*", "?", "[")):
                 draft.files.extend(Path(p) for p in glob.glob(entry))
             else:
@@ -279,7 +292,11 @@ def ParseCLI(argv: list[str]) -> Intent:
         if args.spc is not None and args.spc.lower() == "none":
             raise agent.UsageError("-si needs the single point files (its SP lines are theirs): --spc none goes with -gv.")
         draft.singlePointPattern = args.spc.lstrip("_") if args.spc else None
-    if args.optimize:
+    # A SMILES instead of a file (-opt, -xyz); --name names what it makes
+    draft.smiles, draft.rdkitConformers, draft.rdkitConformer = args.smiles, args.rdkit_conformers, args.rdkit_conformer
+    if args.xyz is not None:
+        draft.optName = args.name
+    if args.optimize is not None:
         draft.cpus, draft.memoryRatio = args.cpus, args.memory
         draft.optMethod, draft.optRoute, draft.optName = args.method, args.route, args.name
         draft.optCharge, draft.optMultiplicity, draft.optSpin = args.charge, args.mult, args.spin
@@ -294,7 +311,8 @@ def ParseCLI(argv: list[str]) -> Intent:
             path = Path(lines.strip()).expanduser()
             draft.optModRed[int(stage)] = (path.read_text() if path.is_file()
                                            else "\n".join(line.strip() for line in lines.split(";") if line.strip()))
-    elif any(value is not None for value in (args.method, args.charge, args.mult, args.spin, args.name,
+    elif any(value is not None for value in (args.method, args.charge, args.mult, args.spin,
+                                             args.name if args.xyz is None else None,
                                              args.then_sp, args.sp_cpus, args.sp_memory, args.sp_method, args.sp_route,
                                              args.sp_wall_time, args.sp_partition, args.sp_cluster)) \
             or args.modred or args.sp_nbo or args.sp_checkpoint:
@@ -302,7 +320,7 @@ def ParseCLI(argv: list[str]) -> Intent:
             raise agent.UsageError("--method, --charge, --mult, --spin, --name, --modred, --then-sp and --sp-* go with "
                                    "-opt.")
     # -sp's route of your own (a Neva-Touch Scheduler chain step's too)
-    if args.route is not None and not args.optimize:
+    if args.route is not None and args.optimize is None:
         from .catalog import UnknownSelectors
         unknown = UnknownSelectors(args.route)
         if unknown:

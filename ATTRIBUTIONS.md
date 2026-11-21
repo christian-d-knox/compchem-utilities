@@ -422,7 +422,7 @@ Installed by compUtils.yml for features still to come; CompUtils doesn't use the
 
 ### RDKit (2026.9.2)
 
-- **Use:** Cheminformatics (planned): molecules from SMILES, conformers.
+- **Use:** Molecules from SMILES: 3D starting geometries (RDKit conformers: ETKDG embedding, MMFF94/UFF optimization).
 - **By:** Greg Landrum and the RDKit contributors
 - **License:** BSD-3-Clause
 - **Copyright:** Copyright (c) 2006-2015, Rational Discovery LLC, Greg Landrum, and Julie Penzotti and others

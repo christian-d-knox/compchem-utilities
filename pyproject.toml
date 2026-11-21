@@ -18,6 +18,7 @@ dependencies = [
     "regex",
     "xlsxwriter",
     "goodvibes>=3.2,<4",   # 4.x renamed -t, its output file and its table rules
+    "rdkit",               # SMILES -> 3D coordinates (smiles.py)
 ]
 
 [project.scripts]

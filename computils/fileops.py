@@ -967,8 +967,11 @@ def ReadMolecule(data, path: Path) -> Molecule:
     return molecule
 
 def WriteXyz(molecule: Molecule, outputFileName: Path) -> None:
+    # A generated geometry names where it came from in the comment line (never read back: ExtractXyz skips it)
+    conformer = molecule.conformer
+    comment = f"{conformer.Label()} from {conformer.smiles}" if conformer is not None else "Pointless Comment Line"
     with open(outputFileName, 'w') as outputFile:
-        outputFile.write(f"{len(molecule.coordinateList)}\nPointless Comment Line\n")
+        outputFile.write(f"{len(molecule.coordinateList)}\n{comment}\n")
         outputFile.writelines(molecule.coordinateList)
 
 # Handles extensions so I don't have to copypasta this

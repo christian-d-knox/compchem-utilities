@@ -16,7 +16,7 @@ from textual.worker import get_current_worker
 from ..actions  import Action, FILE_ACTIONS
 from ..intent   import FormCheckIntent, XyzIntent
 from ..project  import ChangeDirectory, FindProjectRoot
-from .common    import NAV_BINDINGS, NavFooter, Notice, SwapItems
+from .common    import NAV_BINDINGS, KeyHint, NavFooter, Notice, SwapItems
 from .inspect   import ActionExtensions, FileDetails, FileStatus, Styled
 
 ACTION_LABELS = {
@@ -58,7 +58,7 @@ HELP = {
     "actions": "↑/↓ Highlight an Action · space Choose It and Go to the Folders (the File List Below the Project Root) · enter Continue to the File List · space / enter on Input Builders or Scrapers: List Them (‹ Actions or esc to Go Back) · space / enter on Optimization: Build an Input from Coordinates · space / enter on SI Scraper: Open the SI Scraper · space / enter on Job Stalker: Open the Job Stalker ·space / enter on Config or Project Files: Open the Config Editor · space / enter on Attributions: Show the License, Disclaimer and Credits · 1 Collapse Actions",
     "folders": "↑/↓ Move · space / Click Open the Folder (It Becomes the CWD) and Go to the File List · ←/→ or Click the Arrow Fold · enter Continue · 2 Collapse Folders",
     "glob":    "Type a Pattern to Select Matching Files · enter / esc Return to the File List",
-    "files":   "space Select · a All · n None · / Glob · enter Continue to the Builder",
+    "files":   "space Select · a All · n None · / Glob · enter Continue to the Builder · s on Write XYZ: From a SMILES (RDKit Conformers, No File Needed)",
 }
 
 
@@ -182,9 +182,26 @@ class HomeScreen(Screen):
         Binding("2", "toggle_panel('folders')", "Folders", group=_COLLAPSE),
         # Not in the footer (no room at 84 columns): the glob box's placeholder says "/ to Focus"
         Binding("/", "focus_glob", "Glob", show=False),
+        # Only while Write XYZ is the action (check_action): its geometry from a SMILES (RDKit), no file needed. Hinted
+        # on the Files pane's title (RefreshHeader), as the footer has no room
+        Binding("s", "from_smiles", "From SMILES", show=False),
         Binding("question_mark", "help", "Help"),
         *NAV_BINDINGS,
     ]
+
+    def check_action(self, action: str, parameters) -> bool | None:
+        if action == "from_smiles":
+            return self.action == Action.XYZ
+        return True
+
+    def action_from_smiles(self) -> None:
+        """Write XYZ From SMILES: the pop-up builds its RDKit conformers; ⏎ writes NAME.xyz as cu -xyz --smiles does."""
+        from .fromsmiles import SmilesPopup
+
+        def Chosen(intent) -> None:
+            if intent is not None:
+                self.app.WriteXyz(intent)
+        self.app.push_screen(SmilesPopup(), Chosen)
 
     def __init__(self) -> None:
         super().__init__()
@@ -244,7 +261,10 @@ class HomeScreen(Screen):
         root = FindProjectRoot()
         project = f"Project: {root.name}" if root else "No Project"
         self.query_one("#title", Static).update(TitleLine("CompUtils", Styled(project, "info")))
-        self.query_one("#files-pane").border_title = f"{Path.cwd().name} · {' '.join(ActionExtensions(self.action))}"
+        title = f"{Path.cwd().name} · {' '.join(ActionExtensions(self.action))}"
+        # Write XYZ's s From SMILES is hinted here: Home's footer is full at 84 columns
+        self.query_one("#files-pane").border_title = (Text.assemble(title, " · ", KeyHint(self.app, "s", "From SMILES"))
+                                                      if self.action == Action.XYZ else title)
         # A screen item (Config, Project Files) highlighted names itself, and dims the file pane it doesn't use (4.1)
         screenItem = self.ScreenItemHighlighted()
         label = ITEM_LABELS[screenItem].removesuffix(" ›") if screenItem else ACTION_LABELS[self.action]
@@ -363,6 +383,7 @@ class HomeScreen(Screen):
             return
         previous = set(self.query_one("#files", FileList).selected)
         self.action = action
+        self.refresh_bindings()
         self.RefreshFiles(previous)
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
@@ -488,7 +509,8 @@ class HomeScreen(Screen):
             # From another pane, continuing without a selection just moves on to the file list
             fileList = self.query_one("#files", FileList)
             if fileList.has_focus:
-                Notice(self.app, "No Files Selected", "Select at least one file first (space, a, or a glob).", "warning")
+                Notice(self.app, "No Files Selected", "Select at least one file first (space, a, or a glob)."
+                       + (" Or press s to write one from a SMILES." if self.action == Action.XYZ else ""), "warning")
             fileList.focus()
             return
         # FormChk has no options, so it skips the builder

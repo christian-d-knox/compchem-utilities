@@ -157,14 +157,29 @@ def _DispatchOptimize(intent: OptimizationIntent) -> list[TrackedJob]:
     from .optimize import (FROM_SOURCE_NAME, CustomMethod, MethodChoices, MethodProblems, ModRedStages, OptimizationJob,
                            SinglePointChoices, SinglePointStep, StartingSpin)
     from .prompts  import AskBool, AskChoice, AskStr
-    source = Path(intent.file)
-    if not source.is_file():
-        agent.Skip(str(source), "No such file")
-        return []
-    read, reason, prior = SourceMolecule(source)
-    if not read.coordinateList:
-        agent.Skip(source.name, "No coordinates found")
-        return []
+    # The molecule: a file's (an .xyz, a prior input or output), or a SMILES' RDKit conformer (its charge and
+    # multiplicity the SMILES', named by --name)
+    build = None
+    if intent.smiles is not None:
+        from .smiles import SmilesMolecule
+        item = intent.name
+        read, build, problem = SmilesMolecule(intent.smiles, intent.name, intent.rdkitConformers, intent.rdkitConformer)
+        for warning in build.warnings if build is not None else []:
+            agent.Warn(f"{intent.smiles}: {warning}")
+        if read is None:
+            agent.Skip(intent.smiles, problem)
+            return []
+        reason, prior, source = "", False, None
+    else:
+        source = Path(intent.file)
+        item = source.name
+        if not source.is_file():
+            agent.Skip(str(source), "No such file")
+            return []
+        read, reason, prior = SourceMolecule(source)
+        if not read.coordinateList:
+            agent.Skip(source.name, "No coordinates found")
+            return []
     # A copy: the job's settings are written onto it (as the builder's screen does)
     molecule = copy.copy(read)
     spinReason = StartingSpin(molecule, reason)
@@ -202,19 +217,20 @@ def _DispatchOptimize(intent: OptimizationIntent) -> list[TrackedJob]:
             key = usable[names[chosen]]
         label, template, extension, _ = methods[key]
         if template is None or key in problems:
-            agent.Skip(source.name, f"{label}: {problems.get(key) or fromProblem}")
+            agent.Skip(item, f"{label}: {problems.get(key) or fromProblem}")
             return []
 
-    # Charge and multiplicity: given, else the prior job's, else asked (an .xyz carries neither)
+    # Charge and multiplicity: given, else the prior job's or the SMILES', else asked (an .xyz carries neither)
     def Whole(value: str, what: str) -> int:
         try:
             return int(value)
         except ValueError:
             raise agent.UsageError(f"The {what} must be a whole number (got '{value}').") from None
-    charge = (intent.charge if intent.charge is not None else int(molecule.charge) if prior and molecule.multiplicity
+    known = (prior or build is not None) and molecule.multiplicity
+    charge = (intent.charge if intent.charge is not None else int(molecule.charge) if known
               else Whole(AskStr("Charge", "0", key="charge"), "charge"))
     multiplicity = (intent.multiplicity if intent.multiplicity is not None
-                    else int(molecule.multiplicity) if prior and molecule.multiplicity
+                    else int(molecule.multiplicity) if known
                     else Whole(AskStr("Multiplicity", "1", key="mult"), "multiplicity"))
     spin = (SpinState(intent.spin) if intent.spin else SpinState.OSS if molecule.spinState == SpinState.OSS
             else SpinState.CSS)
@@ -270,17 +286,17 @@ def _DispatchOptimize(intent: OptimizationIntent) -> list[TrackedJob]:
     if fileProblem:
         errors.append(fileProblem)
     if errors:
-        agent.Skip(source.name, "; ".join(errors))
+        agent.Skip(item, "; ".join(errors))
         return []
     for warning in warnings:
         agent.Warn(f"{warning}: {job.spProblem}" if warning == "Scheduled SP Problem" else warning)
 
     path = job.path
     if path.exists():
-        cameFrom = path.resolve() == source.resolve()
+        cameFrom = source is not None and path.resolve() == source.resolve()
         if not AskBool(f"Replace {path.name}{' (the file these coordinates came from)' if cameFrom else ''}?", "n",
                        key="replace-input"):
-            agent.Skip(source.name, f"{path.name} already exists (not replaced)")
+            agent.Skip(item, f"{path.name} already exists (not replaced)")
             return []
 
     with open(path, "w") as jobInput:
@@ -297,6 +313,9 @@ def _DispatchOptimize(intent: OptimizationIntent) -> list[TrackedJob]:
               "wallTimeHours": job.wallTime or Defaults.wallTime, "partition": job.partition or Defaults.partition}
     if HeaderSends("cluster"):
         result["cluster"] = job.cluster or Defaults.cluster
+    if build is not None:
+        from .smiles import SmilesResult
+        result.update(SmilesResult(build, molecule))
     if then is not None:
         step = then.ChainStep()
         result["thenSP"] = {"method": then.name, "route": then.route, "cpus": then.cpus,
@@ -451,7 +470,29 @@ def _WaivedCommand(waiver: str) -> str:
 
 def _DispatchXyz(intent: XyzIntent) -> None:
     """`cu -xyz`: each file's last geometry (an output's last, an input's own; Gaussian or ORCA), read from one map as
-    every workflow reads it (ReadMolecule) and written as NAME.xyz (WriteXyz, as -sp writes its own)."""
+    every workflow reads it (ReadMolecule) and written as NAME.xyz (WriteXyz, as -sp writes its own). With --smiles:
+    its RDKit conformer as NAME.xyz, asked before replacing a file (a typed name can hit a hand-made one)."""
+    if intent.smiles is not None:
+        from .prompts import AskBool
+        from .smiles  import SmilesMolecule, SmilesResult
+        molecule, build, problem = SmilesMolecule(intent.smiles, intent.name, intent.rdkitConformers,
+                                                  intent.rdkitConformer)
+        for warning in build.warnings if build is not None else []:
+            agent.Warn(f"{intent.smiles}: {warning}")
+        if molecule is None:
+            agent.Skip(intent.smiles, problem)
+            return
+        target = fileCreation(intent.name, Defaults.coordExtension)
+        if target.exists() and not (intent.replace or AskBool(f"Replace {target.name}?", "n", key="replace-xyz")):
+            agent.Skip(intent.smiles, f"{target.name} already exists (not replaced)")
+            return
+        WriteXyz(molecule, target)
+        agent.Written(target)
+        agent.Result({"xyz": str(Path(target).resolve()), "atoms": len(molecule.coordinateList),
+                      "charge": build.charge, "multiplicity": build.multiplicity, **SmilesResult(build, molecule)})
+        console.print(f"[good]{escape(intent.smiles)}: {escape(molecule.conformer.Label())}, "
+                      f"{len(molecule.coordinateList)} atoms written to {target}[/good]")
+        return
     for path in intent.files:
         baseName, _ = grabPaths(path)
         if baseName is None:

@@ -92,10 +92,10 @@ The environments also carry `openpyxl`, so an AI agent can build Excel workbooks
 | `cu -refresh [project]` | Rewrites the config files in the current layout, keeping your values |
 | `cu --update` | Updates CompUtils from GitHub |
 | `cu -attributions` | Shows the disclaimer and credits |
-| `cu -opt FILE` | Writes and submits an optimization of one molecule (an .xyz or a prior job), as the Optimization builder does; `--then-sp` with `--sp-method NAME` (or `--sp-route`) and `--sp-*` resources has the Neva-Touch Scheduler submit that single point when it ends |
+| `cu -opt FILE` | Writes and submits an optimization of one molecule (an .xyz or a prior job, or `--smiles 'SMILES' --name NAME`: RDKit builds its 3D geometry), as the Optimization builder does; `--then-sp` with `--sp-method NAME` (or `--sp-route`) and `--sp-*` resources has the Neva-Touch Scheduler submit that single point when it ends |
 | `cu -si` | Writes SI_coordinates.txt from the folder's outputs, as the SI Scraper does |
 | `cu -info FILE…` | Shows what outputs and inputs say: status, energies, frequencies, convergence |
-| `cu -xyz FILE…` | Writes each file's last geometry (an output's, or an input's own) as `NAME.xyz` |
+| `cu -xyz FILE…` | Writes each file's last geometry (an output's, or an input's own) as `NAME.xyz`; `--smiles 'SMILES' --name NAME` writes a SMILES' RDKit conformer |
 | `cu -methods` | Lists the Optimization and Benchmark Methods in force in this folder |
 | `cu -agent [TOPIC]` | Prints the skill that teaches an AI agent to use CompUtils (see below) |
 
