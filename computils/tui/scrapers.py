@@ -6,7 +6,7 @@ from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Input, Static
 
@@ -16,7 +16,7 @@ from ..defaults import Defaults
 from ..scrape  import (ORDER_FILE, PROGRAM_NAMES, SI_FILE, BlockedProblems, FindSpecies, GoodVibesFiles,
                        GoodVibesNeeded, GoodVibesRun, GoodVibesTable, MissingFromTable, NaturalKey, ReadOrder,
                        ReadSpecies, SIText, SPThermo, Species, StartsIncluded, TableUsed, WriteOrder)
-from .common   import (NAME, NAV_BINDINGS, TEXT, FrameRule, KeyHint, MoveRow, NavFooter, Notice, Popup,
+from .common   import (NAME, NAV_BINDINGS, TEXT, Column, FrameRule, KeyHint, MoveRow, NavFooter, Notice, Popup,
                        ReorderableTable, Setting, SettingsList, ValueInput)
 from .home     import TitleLine
 from .inspect  import Styled
@@ -77,7 +77,7 @@ class SIScraperScreen(Screen):
         yield Static(TitleLine("SI Scraper"), id="title")
         yield FrameRule("┌┐", "Settings", split=LEFT_WIDTH - 1, id="si-top")
         with Horizontal(id="si-body"):
-            with VerticalScroll(id="si-left", classes="side"):
+            with Column(id="si-left", classes="side"):
                 yield SettingsList(SISettings(self.suffix), stacked=True, widest=LEFT_WIDTH - 5,
                                    inputClass=WriteInput, id="settings")
             with Vertical(id="si-right"):

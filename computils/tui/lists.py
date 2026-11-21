@@ -1,11 +1,11 @@
 """Pop-up editors framed like Popup: lists edited as lists, and project files edited as text."""
 from rich.text import Text
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Input, Static, TextArea
 
-from .common  import FrameRule, KeyHint, MoveRow, Popup, ReorderableTable
+from .common  import Column, FrameRule, KeyHint, MoveRow, Popup, ReorderableTable
 from .inspect import Styled
 
 MISSING = "—"          # an empty cell, e.g. a method with no program yet
@@ -264,14 +264,14 @@ class TextEditor(ModalScreen):
             with Horizontal(id="editor-body"):
                 yield TextArea(self.original, id="text", soft_wrap=False)
                 with Vertical(id="editor-side"):
-                    with VerticalScroll(id="summary"):
+                    with Column(id="summary"):
                         yield Static(id="summary-text")
                     if self.example:
-                        with VerticalScroll(id="example"):
+                        with Column(id="example"):
                             yield Static(Text(self.example) if isinstance(self.example, str) else self.example)
             if self.preview is not None:
                 yield FrameRule("├┤", id="preview-rule")
-                with VerticalScroll(id="preview"):
+                with Column(id="preview"):
                     yield Static(id="preview-text")
             yield FrameRule("└┘", id="text-keys")
 

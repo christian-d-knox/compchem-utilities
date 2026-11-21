@@ -243,6 +243,13 @@ def Fit(label: Text, room: int) -> None:
         label.append(" ")
 
 
+class Column(VerticalScroll, can_focus=False):
+    """A scrolling column that holds a screen's real tab stops (a settings list, tables, inputs), or only text beside
+    one: never a tab stop itself. Textual's VerticalScroll is focusable and shows nothing when focused, so Tab stopped
+    on it in between the real ones. It still scrolls with the wheel, and to whatever inside it takes the focus.
+    A scroll that is a screen's only stop (a pop-up's body, Attributions) stays a VerticalScroll, for ↑↓ PgUp PgDn."""
+
+
 class FrameRule(Static):
     """One edge of a framed form, drawn to its width: ┌─ label ───── right ─┐ (corners ┌┐, ├┤ or └┘).
     Textual's borders have no ├/┤ junctions, so a form's section dividers are drawn here.
@@ -406,8 +413,8 @@ class SettingRow(Horizontal, can_focus=False):
             self.parent.ShowAll()
 
     def on_click(self, event) -> None:
-        # A click asks for this row, whatever had the focus: the scrolling column around the list took it on mouse-down
-        # (a row isn't focusable until it is current). A click on what ␣ acts on acts as ␣: the checkbox, a choice's
+        # A click asks for this row, whatever had the focus (a row isn't focusable until it is current, so mouse-down
+        # focuses nothing new). A click on what ␣ acts on acts as ␣: the checkbox, a choice's
         # "( ) Name", an editor row's value. A click on a label only chooses the row
         self.parent.Choose(self, focus=True)
         acts = (event.widget.has_class("setting-box") or event.widget.has_class("setting-fixed")
@@ -498,7 +505,8 @@ class SettingsList(Vertical):
         for other in self.rows:
             other.set_class(other is row, "-current")
             other.target.can_focus = other is row
-        if focus or hadFocus or self.screen.focused is None:
+        # A hidden list (a step not shown) never takes the focus on its own
+        if focus or hadFocus or self.screen.focused is None and self.display:
             row.target.focus()
 
     def check_action(self, action: str, parameters) -> bool | None:

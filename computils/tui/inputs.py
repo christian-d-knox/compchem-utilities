@@ -26,7 +26,7 @@ from ..molecule import Molecule
 from ..optimize import (FROM_SOURCE as FROM_SOURCE_KEY, COORDINATES_MARKER, ModRedCheck, ModRedStages, MethodChoices,
                         MethodProblems, CustomMethod, StartingSpin, SinglePointChoices, SinglePointStep, SplitStages,
                         JoinStages, OptimizationJob)
-from .common    import (NAV_BINDINGS, NUMBER, TEXT, FrameRule, KeyHint, NavFooter, Notice, Popup, Setting, SettingsList,
+from .common    import (NAV_BINDINGS, NUMBER, TEXT, Column, FrameRule, KeyHint, NavFooter, Notice, Popup, Setting, SettingsList,
                         ValueInput)
 from .home      import TitleLine
 from .inspect   import SPAN_STYLES, Formula, JobSummary, OutputExtensions, PreviewMolecule, RouteSpans, Styled
@@ -207,7 +207,7 @@ class CoordinatesScreen(Screen):
         yield Static(TitleLine("Optimization: Coordinates"), id="title")
         yield FrameRule("┌┐", "Source", split=LEFT_WIDTH - 1, id="inputs-top")
         with Horizontal(id="inputs-body"):
-            with VerticalScroll(id="inputs-left", classes="side"):
+            with Column(id="inputs-left", classes="side"):
                 yield SourceList(SourceSettings(), stacked=True, widest=LEFT_WIDTH - 5, id="settings")
                 yield Static(id="structure")
             with Vertical(id="inputs-right"):
@@ -587,16 +587,19 @@ class OptimizationScreen(Screen):
         yield Static(TitleLine("Optimization: Job", Text(origin)), id="title")
         yield StepRule("┌┐", STEP_TITLES[OPT_STEP], split=LEFT_WIDTH - 1, id="inputs-top")
         with Horizontal(id="inputs-body"):
-            with VerticalScroll(id="inputs-left", classes="side"):
+            with Column(id="inputs-left", classes="side"):
                 # One step's settings at a time (the step tabs): the optimization, then the Neva-Touch Scheduler's next
                 yield SettingsList(self.JobSettings(), stacked=True, widest=LEFT_WIDTH - 5, inputClass=SubmitInput,
                                    id="settings")
-                yield SettingsList(self.SinglePointSettings(), stacked=True, widest=LEFT_WIDTH - 5,
-                                   inputClass=SubmitInput, id="sp-settings")
+                # Hidden from the start, so it never takes the focus as the screen opens
+                spSettings = SettingsList(self.SinglePointSettings(), stacked=True, widest=LEFT_WIDTH - 5,
+                                          inputClass=SubmitInput, id="sp-settings")
+                spSettings.display = False
+                yield spSettings
             with Vertical(id="inputs-right"):
                 # The Stages view (the default): the stages, then the highlighted one as it will be written
                 yield StageTable(id="stage-table", cursor_type="row", zebra_stripes=False)
-                with VerticalScroll(id="renders-as"):
+                with Column(id="renders-as"):
                     yield Static(id="renders-text")
                 # The Full Preview (p): the whole input, editable
                 yield PreviewArea(id="input-preview", soft_wrap=False)
@@ -605,7 +608,6 @@ class OptimizationScreen(Screen):
 
     def on_mount(self) -> None:
         self.preview.display = False
-        self.spSettings.display = False
         self.Refresh()
         self.wasScheduled = self.scheduled
         self.ShowSteps()
@@ -750,8 +752,7 @@ class OptimizationScreen(Screen):
                              if self.then is not None and charge is not None and not thenErrors else [])
         self.ShowSchedulerRow()
         if self.edited:
-            first = "All Stages" if self.fullEdit is not None else f"Stage {min(self.stageEdits)}"
-            warnings.append(f"{first} Edited: Not Following the Settings")
+            warnings.append("Using Custom Parameters")
         self.ShowRightColumn()
         # A project-file problem stops a generated input; an edited one is the user's to fix
         if fileProblem and not self.edited:
@@ -1038,8 +1039,7 @@ class OptimizationScreen(Screen):
             rows = [Text(f"Stage {number} · Runs {JobChecks(route, self.extension, typed).kinds}")]
             lines = self.job.ReadStage(number, typed) if self.job is not None and self.fullEdit is None else None
             if lines is None:
-                rows.append(Styled("Edited: Kept as Typed, Not Following the Settings (^r in Stages Restores It)",
-                                   "warning"))
+                rows.append(Styled("Using Custom Parameters (^r in Stages Restores the Settings)", "warning"))
             else:
                 rows.append(Styled("Follows the Settings", "good"))
                 if modRed:
