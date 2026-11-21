@@ -96,7 +96,7 @@ The environments also carry `openpyxl`, so an AI agent can build Excel workbooks
 | `cu -first` | Re-runs first-time setup |
 | `cu -refresh [project]` | Rewrites the config files in the current layout, keeping your values |
 | `cu --update` | Updates CompUtils from GitHub |
-| `cu --update-plugin` | Updates the lab's agent plugin (a git clone) on your own computer, with your GitHub sign-in |
+| `cu --update-plugin` | Updates your lab's agent plugin (a git clone its lab profile names) on your own computer, with your GitHub sign-in |
 | `cu -attributions` | Shows the disclaimer and credits |
 | `cu -opt FILE` | Writes and submits an optimization of one molecule (an .xyz or a prior job, or `--smiles 'SMILES' --name NAME`: RDKit builds its 3D geometry), as the Optimization builder does; `--then-sp` with `--sp-method NAME` (or `--sp-route`) and `--sp-*` resources has the Neva-Touch Scheduler submit that single point when it ends |
 | `cu -crest FILE` | Writes and submits a CREST conformer search of each molecule (an .xyz, a prior job, or `--smiles 'SMILES' --name NAME`), as the Conformer Search builder does: `--method NAME` (a Conformer Search Method) or `--route 'OPTIONS'`, `--constrain 'B 12 15;B 15 21'` (bonds held at their starting lengths; also `A`, `D`, `atoms`, `elements`, `fix`), `--force-constant`. The search of 8a is 8a_CREST, whose output feeds `8a.cudf`; its conformers come back to `8a_CREST-scratch/`. `cu -re 8a_CREST.out` searches again, corrected or as it ran |
@@ -139,10 +139,11 @@ for every workspace; Claude Code: `~/.claude/skills/computils/`).
 
 The skill also records whether CompUtils is installed on your own computer (`--local-cu PATH --local-python PATH`,
 or `--no-local`), so the agent never asks again. Once a day, the first `--json` report on a machine also says
-whether a newer CompUtils (or environment) is on GitHub (`updates`); the agent tells you, and you decide. The same
-report reminds the agent to update the lab's plugin on your own computer (`updates.plugin`: its repository is
-private, so the cluster can't see it), which it does by itself with `cu --update-plugin`, asking you to reload
-Antigravity (Ctrl+R) when a file it reads only at startup changed.
+whether a newer CompUtils (or environment) is on GitHub (`updates`); the agent tells you, and you decide. When
+your lab profile names an agent plugin (`agentPluginFolder`, `agentPluginUpdater`, `agentPluginRepo`,
+`agentPluginBranch`), the same report reminds the agent to update it on your own computer (`updates.plugin`: a
+private repository the cluster can't see), which it does by itself with `cu --update-plugin`, asking you to reload
+the agent's app when a file it reads only at startup changed.
 
 ## Configuration
 

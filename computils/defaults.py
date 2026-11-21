@@ -173,6 +173,11 @@ class Defaults:
     ntsReRunLimit = 5
     # How many RDKit conformers a SMILES is built as (smiles.py): the lowest-energy one is used unless another is picked
     rdkitConformers = 10
+    # An agent plugin a lab gives its agents (plugin.py): set only by a lab profile, empty for none
+    agentPluginFolder = ""
+    agentPluginUpdater = ""
+    agentPluginRepo = ""
+    agentPluginBranch = ""
 
     # What files contain what keys
     _FILE_GROUPS: dict[str, list[str]] = {
@@ -208,6 +213,7 @@ class Defaults:
         "qol.toml": [
             "colorMode", "bareCommandOpensTUI", "trackedJobHours", "routeUnderEachMethod", "autoNTS",
             "ntsReRunLimit", "rdkitConformers",
+            "agentPluginFolder", "agentPluginUpdater", "agentPluginRepo", "agentPluginBranch",
         ]
     }
 
@@ -298,6 +304,12 @@ class Defaults:
             " optimizer steps (from its last geometry) before it stops the chain.",
         "rdkitConformers": "How many RDKit conformers a SMILES is built as (ETKDG, then MMFF94): the lowest-energy one is"
             " used unless another is picked.",
+        "agentPluginFolder": "An agent plugin's folder on the human's own computer (a git clone; ~ allowed), which the"
+            " daily report reminds the agent to update with `cu --update-plugin`. Set by a lab profile; empty for"
+            " none.",
+        "agentPluginUpdater": "The plugin's own updater, a script in its folder that prints one JSON record.",
+        "agentPluginRepo": "The plugin's git repository (its clone URL), for the human's command when it isn't cloned.",
+        "agentPluginBranch": "The branch the plugin's clone follows.",
     }
 
     # Expected Python type for each config key, used by _CoerceValue to validate values loaded from user-editable TOML.

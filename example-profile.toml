@@ -20,6 +20,12 @@ name = "Example Lab"
 isNotifications = true
 # botToken = "123456789:ABC..."   # the lab bot's token, from Telegram's @BotFather
 # broadcastGroupChatID = "-100..."   # the group chat that hears about large submissions
+# An agent plugin your lab gives its agents, kept as a git clone of a private repository on each labmate's own computer:
+# the daily report reminds their agent to update it there (cu --update-plugin). Leave these out for none.
+# agentPluginFolder = "~/path/to/your-plugin"     # its folder on the labmate's computer
+# agentPluginUpdater = "scripts/update.py"        # its own updater, relative to the folder; prints one JSON record
+# agentPluginRepo = "https://github.com/your-lab/your-plugin.git"
+# agentPluginBranch = "main"
 benchmarkMethods = [
     "M062X 6-311+G(d,p)",
     "B3LYP 6-311+G(d,p) EmpiricalDispersion=GD3BJ",

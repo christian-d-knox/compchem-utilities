@@ -46,7 +46,7 @@ def BuildParser() -> argparse.ArgumentParser:
     actionGroup.add_argument('-first','--first', action='store_true', help="Re-run first-time setup.")
     actionGroup.add_argument('-up', '--update', action='store_true', help="Update CompUtils from GitHub.")
     actionGroup.add_argument('--update-plugin', action='store_true',
-                             help="Update the lab's agent plugin on this computer (its git clone, with your "
+                             help="Update your lab's agent plugin on this computer (its git clone, with your "
                                   "GitHub sign-in): run on your own computer, not the cluster.")
     actionGroup.add_argument('-env', '--environment', nargs='*', metavar="ARG",
                              help="Show the CompUtils environments' status. 'refresh|rebuild|install [ENVIRONMENT]' "
@@ -205,8 +205,17 @@ def BuildParser() -> argparse.ArgumentParser:
     parser.add_argument('--first-stage', type=int, default=1, help=argparse.SUPPRESS)
     # A Neva-Touch Scheduler hook's chain file (nevatouch.ChainPath; written into the hook, not listed)
     parser.add_argument('--chain', default=None, help=argparse.SUPPRESS)
-    parser.add_argument('--plugin-dir', type=Path, default=None, metavar="FOLDER",
-                        help="With --update-plugin, the plugin's folder (default: ~/path/to/your-plugin).")
+    # With --update-plugin: the plugin, as the daily reminder's command names it (default: the lab profile's)
+    parser.add_argument('--plugin-dir', default=None, metavar="FOLDER",
+                        help="With --update-plugin, the plugin's folder (default: the lab profile's "
+                             "agentPluginFolder).")
+    parser.add_argument('--plugin-updater', default=None, metavar="PATH",
+                        help="With --update-plugin, its updater script, relative to its folder (default: the lab "
+                             "profile's).")
+    parser.add_argument('--plugin-repo', default=None, metavar="URL",
+                        help="With --update-plugin, its git repository (default: the lab profile's).")
+    parser.add_argument('--plugin-branch', default=None, metavar="NAME",
+                        help="With --update-plugin, the branch its clone follows (default: the lab profile's).")
     parser.add_argument('--update-branch', type=str, default=None, help="With --update, install from this branch (default: the one CompUtils was installed from, else dev).")
 
     # For agents and scripts (agent.py): any action
@@ -397,6 +406,9 @@ def ParseCLI(argv: list[str]) -> Intent:
                                    f"it (slurm.toml's submissionList).")
     draft.updateBranch  = args.update_branch
     draft.pluginDir     = args.plugin_dir
+    draft.pluginUpdater = args.plugin_updater
+    draft.pluginRepo    = args.plugin_repo
+    draft.pluginBranch  = args.plugin_branch
 
     # Sub-prompts — preserved from current CLI behavior. With --json, or with nobody at a terminal to answer (an agent's
     # ssh call), -st is one snapshot: never a loop, so never the loop question (nor with --dismiss or --wait)

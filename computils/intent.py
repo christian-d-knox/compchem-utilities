@@ -179,9 +179,12 @@ class UpdateIntent(Intent):
 
 @dataclass
 class PluginUpdateIntent(Intent):
-    """`cu --update-plugin` — fast-forward the agent plugin's git clone on this computer (plugin.py). folder None: the
-    default install folder."""
-    folder: Optional[Path] = None
+    """`cu --update-plugin` — fast-forward the lab's agent plugin's git clone on this computer (plugin.py). Each None:
+    the lab profile's value (agentPlugin*)."""
+    folder: Optional[str] = None
+    updater: Optional[str] = None
+    repo: Optional[str] = None
+    branch: Optional[str] = None
 
 
 @dataclass
@@ -444,8 +447,11 @@ class IntentDraft:
     # UPDATE
     updateBranch: Optional[str] = None  # None: the branch CompUtils was installed from
 
-    # UPDATE_PLUGIN: the plugin's folder (None: plugin.DefaultFolder())
-    pluginDir: Optional[Path] = None
+    # UPDATE_PLUGIN: the plugin (None: the lab profile's agentPlugin* values)
+    pluginDir: Optional[str] = None
+    pluginUpdater: Optional[str] = None
+    pluginRepo: Optional[str] = None
+    pluginBranch: Optional[str] = None
 
     # ENVIRONMENT: the job ('' status) and the variant ('' the running one)
     environmentJob:     str = ""
@@ -567,8 +573,11 @@ class IntentDraft:
         if self.nevaTouch and self.nevaTouch not in NTS_STEPS:
             errors.append(f"Unknown Neva-Touch Scheduler step '{self.nevaTouch}'.")
 
-        if self.pluginDir is not None and self.action != Action.UPDATE_PLUGIN:
-            errors.append("--plugin-dir goes with --update-plugin.")
+        if self.action != Action.UPDATE_PLUGIN:
+            for flag, value in (("--plugin-dir", self.pluginDir), ("--plugin-updater", self.pluginUpdater),
+                                ("--plugin-repo", self.pluginRepo), ("--plugin-branch", self.pluginBranch)):
+                if value is not None:
+                    errors.append(f"{flag} goes with --update-plugin.")
 
         if self.action == Action.ENVIRONMENT and self.environmentJob not in ("", "refresh", "rebuild", "install"):
             errors.append(f"-env takes refresh, rebuild or install, then an environment (got '{self.environmentJob}').")
@@ -707,7 +716,8 @@ class IntentDraft:
             case Action.UPDATE:
                 return UpdateIntent(branch=self.updateBranch)
             case Action.UPDATE_PLUGIN:
-                return PluginUpdateIntent(folder=self.pluginDir)
+                return PluginUpdateIntent(folder=self.pluginDir, updater=self.pluginUpdater, repo=self.pluginRepo,
+                                          branch=self.pluginBranch)
             case Action.ENVIRONMENT:
                 return EnvironmentIntent(job=self.environmentJob, variant=self.environmentVariant)
             case Action.REFRESH:

@@ -188,11 +188,13 @@ COMMANDS = [
     AgentCommand("update", ("update", "update_branch"), Action.UPDATE,
                  "Update CompUtils' own code from GitHub (ask the human first). Afterwards, regenerate this skill.",
                  "-up --json", "", ("reinstall",), ("screen-update",)),
-    AgentCommand("update-plugin", ("update_plugin", "plugin_dir"), Action.UPDATE_PLUGIN,
-                 "Update the lab's agent plugin's git clone on the human's own computer (run locally with "
-                 "This Computer's cu, never over ssh; at each day's updates.plugin reminder, without asking).",
+    AgentCommand("update-plugin", ("update_plugin", "plugin_dir", "plugin_updater", "plugin_repo", "plugin_branch"),
+                 Action.UPDATE_PLUGIN,
+                 "Update the lab's agent plugin's git clone on the human's own computer (run locally with This "
+                 "Computer's cu, never over ssh; at each day's updates.plugin reminder, its command as given, without "
+                 "asking).",
                  "--update-plugin --json", "results[0].plugin: {folder, branch, before, after, updated, changed, "
-                 "reload}; warnings name the files that need a reload (Ctrl+R)."),
+                 "reload}; warnings name the files that need a reload."),
     AgentCommand("init", ("init",), Action.INIT_PROJECT,
                  "Mark this folder as a project root (.computils/: project-level config and keylists).", "-init --json",
                  "", ("nested-project", "move-*")),
@@ -253,20 +255,21 @@ def _LocalSection(local: LocalInstall | None) -> list[str]:
         return lines + ["<this computer>", ""]
     # Without CompUtils there, the plugin is the human's to update (its own hook may do it too)
     byHand = ("- The plugin (`updates.plugin`): updated by hand. Tell the human once in the conversation, in one line, "
-              "that it can be updated with `git -C PLUGIN_FOLDER pull --ff-only` (its folder: "
-              "`~/path/to/your-plugin`); don't run it yourself.")
+              "that it can be updated with `git -C FOLDER pull --ff-only` (FOLDER: the `--plugin-dir` in "
+              "`updates.plugin`'s command); don't run it yourself.")
     if local.declined:
         return lines + ["The human chose not to install CompUtils on their own computer. Don't offer it again unless "
                         "they ask: the cluster's CompUtils is the one you use.", "", byHand, ""]
     if not local.cu:
-        return lines + ["Not set up yet. Once, install CompUtils on the "
-                        "human's computer with their OK, or record that they don't want it; then regenerate this skill "
-                        "with what it says.", "", byHand, ""]
+        return lines + ["Not set up yet. Once, with the human's OK, install CompUtils on their computer "
+                        "(conda-installer.py, which ends by printing its cu command and Python), or record that they "
+                        "don't want it (`--no-local`); then regenerate this skill with what it says.", "", byHand, ""]
     return lines + ["CompUtils is installed on the human's computer too. This is the record setup wrote: never check "
                     "for it or install it again.", "",
                     f"- `cu` there (run locally, never over ssh): `{local.cu}`",
                     f"- its Python, with openpyxl, for workbooks: `{local.python}`",
-                    f"- the plugin (`updates.plugin`): run `{local.cu} --update-plugin --json` locally, without asking. "
+                    f"- the plugin (`updates.plugin`): run its command locally with `{local.cu}` in place of `cu`, and "
+                    "`--json`, without asking. "
                     "Exit 5: GitHub couldn't be reached, so try again at tomorrow's reminder. Exit 7: tell the human "
                     "what it says.", ""]
 
@@ -332,11 +335,11 @@ def SkillText(host: str = HOST_PLACEHOLDER, digest: str | None = None, commit: s
         "human what is newer and ask. Run its `command` on that machine (over ssh for the cluster, locally for this "
         "computer) only on their go. Never check for updates yourself.",
         "",
-        "`updates.plugin` is different: a daily reminder, not news (the plugin's repository is private, so the "
-        "cluster can't see it). Follow This Computer's plugin line at once, without asking: the human has agreed to "
-        "it. Say nothing unless the plugin changed. If the result's `warnings` ask for a reload (files Antigravity "
-        "reads only when it starts), ask the human to press Ctrl+R when convenient; never press it or send keystrokes "
-        "yourself.",
+        "`updates.plugin` (only when the lab profile names an agent plugin) is different: a daily reminder, not "
+        "news (the plugin's repository is private, so the cluster can't see it). Follow This Computer's plugin line "
+        "at once, without asking: the human has agreed to it. Say nothing unless the plugin changed. If the result's "
+        "`warnings` ask for a reload (files the agent's app reads only when it starts), ask the human to reload it "
+        "when convenient; never do it or send keystrokes yourself.",
         "",
         *_LocalSection(local),
         "## Rules",
@@ -506,8 +509,8 @@ One JSON object on stdout, at the end of every run. Empty fields are left out.
 - `updates`: {code: {branch, installed, latest}, environment: {name, verdict}, command, why, plugin: {command, why}}:
   in the first report of a day on a machine (cu checks by itself, at most once a day). code and environment only when
   something is newer on GitHub: tell the human and run `command` there only on their go, since updating CompUtils is
-  always theirs to decide. plugin is a reminder every day: the agent plugin is updated on the human's own computer
-  (the skill's This Computer section says how), without asking.
+  always theirs to decide. plugin (when a lab profile names an agent plugin) is a reminder every day: the plugin is
+  updated on the human's own computer (the skill's This Computer section says how), without asking.
 - `notices`: things that happened outside this command (an environment update that finished...).
 - `error`: a usage error's message, or a crash's last traceback line.
 """

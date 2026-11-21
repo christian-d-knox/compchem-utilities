@@ -53,8 +53,8 @@ def Dispatch(intent: Intent) -> list[TrackedJob]:
         case FirstTimeSetupIntent():  _DispatchFirstTimeSetup(intent)
         case UpdateIntent():          _DispatchUpdate(intent)
         case PluginUpdateIntent():
-            from .plugin import UpdatePlugin
-            UpdatePlugin(intent.folder)
+            from .plugin import Plugin, UpdatePlugin
+            UpdatePlugin(Plugin.Configured(intent.folder, intent.updater, intent.repo, intent.branch))
         case EnvironmentIntent():     _DispatchEnvironment(intent)
         case InitProjectIntent():     _DispatchInitProject(intent)
         case ProfileIntent():         _DispatchProfile(intent)

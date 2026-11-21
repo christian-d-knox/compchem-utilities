@@ -103,7 +103,7 @@ def _Run(argv: list[str]) -> None:
     opensTUI = argv in (["-tui"], ["--tui"]) or (not argv and Defaults.bareCommandOpensTUI)
     appliesProfile = argv[:1] in (["-profile"], ["--profile"])
 
-    # The environment's status and updates (-env), and the agent plugin's update (--update-plugin), concern the
+    # The environment's status and updates (-env), and the lab's agent plugin's update (--update-plugin), concern the
     # installation, not the cluster: a run nobody can answer does them before setup too (an agent on a computer used
     # only for workbooks, where nobody set cu up)
     deferSetup = not prompts.interactive and argv[:1] in (["-env"], ["--environment"], ["--update-plugin"])
