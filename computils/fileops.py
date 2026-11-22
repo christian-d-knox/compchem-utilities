@@ -672,29 +672,35 @@ def ExtractOutOfSteps(data, start: int = 0, end: int | None = None) -> bool:
     lastTable = FindInMap(data, CONVERGENCE_HEADER, True, True, start, end)
     return lastTable is not None and FindInMap(data, OUT_OF_STEPS, True, start=lastTable.end(), end=end) is not None
 
-def ExtractResources(data, extensionType: str) -> tuple[int, int]:
+def ExtractResources(data, extensionType: str, name: str = "The input") -> tuple[int, int]:
     """Extract CPU count and SLURM memory request from an mmap data stream.
 
     Returns (cpus, jobRam) ready for slurmHandler.
-    Falls back to Defaults for any values not found in the file.
+    Falls back to Defaults for any values not found in the file, with a warning naming the file (`name`): the program
+    itself won't use what the script requests.
     """
     # Per program: CPU pattern, memory pattern, and the job's memory in GB from (matched number, cpus).
     # Gaussian's %mem=NGB is the total; ORCA's %maxcore N is MB per CPU
     match extensionType:
         case Defaults.gaussianExtension:
             corePattern, ramPattern, ToGB = r"%nproc(?:shared)?=(\d+)", r"%mem=(\d+)GB", lambda ram, cpus: ram
+            coreLine, ramLine, program = "%nprocshared", "%mem=NGB", "Gaussian"
         case Defaults.orcaExtension:
             corePattern, ramPattern, ToGB = r"nprocs\s+(\d+)", r"%maxcore\s+(\d+)", lambda ram, cpus: cpus * ram / 1000
+            coreLine, ramLine, program = "%pal nprocs", "%maxcore", "ORCA"
         case _:
             return Defaults.CPU, int(Defaults.CPU * Defaults.memoryRatio + Defaults.memoryBuffer)
 
     coreMatch = FindInMap(data, corePattern, ignoreCase=True)
     if not coreMatch:
-        agent.Warn("Couldn't find the CPU count in the input file. Submitting according to Defaults.")
+        # Without it the program runs on one core, whatever the script asks SLURM for
+        agent.Warn(f"{name} has no {coreLine} line, so {program} will run on 1 core while the job asks SLURM for "
+                   f"{Defaults.CPU} (the config's). Add {coreLine} to use them.")
     cpus = int(coreMatch.group(1)) if coreMatch else Defaults.CPU
     ramMatch = FindInMap(data, ramPattern, ignoreCase=True)
     if not ramMatch:
-        agent.Warn("Couldn't find the RAM in the input file. Submitting according to Defaults.")
+        agent.Warn(f"{name} has no {ramLine} line, so {program} will use its own small default memory; the job asks "
+                   "SLURM for the config's.")
     ram = ToGB(int(ramMatch.group(1)), cpus) if ramMatch else cpus * Defaults.memoryRatio
     return cpus, int(ram + Defaults.memoryBuffer)
 

@@ -787,6 +787,9 @@ def _DispatchInfo(intent: InfoIntent) -> None:
         if dataFile is not None:
             facts["dataFile"] = str(dataFile)
         agent.Result(facts)
+        if "electronProblem" in facts:
+            agent.Warn(f"{facts['file']}: {facts['electronProblem']} (charge {facts['charge']}, multiplicity "
+                       f"{facts['multiplicity']}); a job from it would stop at once.")
         # One row per stage of a staged output (its file's cells on the first), else one
         stages = facts["stages"] if facts["kind"] == "output" and "stages" in facts else [facts]
         for stage in stages:

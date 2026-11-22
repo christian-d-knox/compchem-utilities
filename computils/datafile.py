@@ -55,6 +55,7 @@ FIELDS = (
     Field("multiplicity",         "Multiplicity",     "int",         "identity"),
     Field("spin",                 "Spin",             "text",        "identity"),
     Field("spinReason",           "Spin Reason",      "text",        "identity"),
+    Field("electronProblem",      "Electron Problem", "text",        "identity"),
     Field("coordinates",          "Coordinates (Final)", "rows",     "identity"),
     Field("program",              "Program",          "text",        "file"),
     Field("version",              "Version",          "text",        "file"),
@@ -121,7 +122,7 @@ FROM_LINE = r"^(.+?)(?:, Stage (\d+) of (\d+))? \((\d+) bytes, modified (\S+ \S+
 # Which reading of the outputs a section holds: bump it whenever an extractor reads something differently (a program
 # version it didn't know, a fixed pattern), so a data file written by an older reading is read again rather than
 # answered from (Lookup). A section without one is from before it existed. 2: CREST 3.x (2026-11-21)
-READER = 2
+READER = 3
 KIND_TITLES = {"SP": "Single Point", "Freq": "Frequencies", "IRC": "IRC", "Stability": "Stability",
                "Conformer Search": "Conformer Search (CREST)"}
 OPTIMIZATION = "Optimization"

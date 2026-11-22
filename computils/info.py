@@ -6,7 +6,7 @@ from pathlib import Path
 import regex
 
 from .defaults import Defaults
-from .fileops  import (MapFile, FindInMap, HasContent, ExtractFrom, ExtractXyz, ExtractTermination, ExtractResources,
+from .fileops  import (ElectronProblem, MapFile, FindInMap, HasContent, ExtractFrom, ExtractXyz, ExtractTermination, ExtractResources,
                        ExtractEnergy, ExtractThermalCorrections, ExtractFrequencies, ExtractConvergence,
                        ExtractStability, ExtractOutOfSteps, ExtractSpinContamination, ExtractThermochemistry,
                        ExtractSolvation, ExtractRouteEcho, InputRoutes, JobChecks, SplitRoute, ReadMolecule, Formula,
@@ -94,6 +94,12 @@ def FileFacts(path: Path, full: bool = True) -> dict:
             facts["spin"], facts["spinReason"] = spinState.name, reason
         if molecule.coordinateList:
             facts["atoms"], facts["formula"] = len(molecule.coordinateList), Formula(molecule.coordinateList)
+            # A charge and multiplicity the atoms can't have: Gaussian and ORCA would stop at once
+            charge, multiplicity = facts.get("charge"), facts.get("multiplicity")
+            if isinstance(charge, int) and isinstance(multiplicity, int):
+                problem = ElectronProblem(molecule.coordinateList, charge, multiplicity)
+                if problem:
+                    facts["electronProblem"] = problem
         if molecule.sourceRoute and not staged:
             facts.update(_RouteFacts(molecule.sourceRoute))
         # ExtractResources silently falls back to Defaults, which would report made-up values for this file

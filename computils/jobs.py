@@ -571,7 +571,7 @@ def runJob(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> None:
     # Extract CPU and RAM from the input file via mmap regex, and the --Link1-- stages it runs, each with what it runs
     # (for the stalker's planned stages)
     with MapFile(molecule.fullPath) as data:
-        cpus, jobRam = ExtractResources(data, molecule.extensionType)
+        cpus, jobRam = ExtractResources(data, molecule.extensionType, Path(molecule.fullPath).name)
         stageCount = StageCount(data, molecule.extensionType)
         planned = PlannedKinds(data, molecule.extensionType)
         inputText = ExtractOrcaInput(data) if molecule.extensionType == Defaults.orcaExtension else ""

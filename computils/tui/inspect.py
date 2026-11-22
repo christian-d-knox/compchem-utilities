@@ -84,6 +84,9 @@ def FileDetails(path: Path) -> dict[str, str]:
         # A CREST output has no spin classification (xTB has no broken-symmetry singlets)
         if "spin" in facts:
             details["Spin"] = f"{facts['spin']} ({facts['spinReason']})"
+        # Charge and multiplicity the atoms can't have: no spin to speak of
+        if "electronProblem" in facts:
+            details["Spin"] = facts["electronProblem"]
     method, basis = facts.get("method", ""), facts.get("basis", "")
     if method:
         details["Method"] = f"{method}/{basis}" if basis else method

@@ -75,9 +75,10 @@ def _CommandName(argv: list[str]) -> str:
 
 def _Run(argv: list[str]) -> None:
     from . import prompts
-    # Nobody can answer a question without a TTY (an agent's ssh command, a script) or with --json: one with no
-    # --answer stops the run before it acts (prompts.py)
-    if agent.jsonOutput or not sys.stdin.isatty():
+    # Nobody can answer a question without a TTY (an agent's ssh command, a script; on Windows also a stdin from NUL,
+    # which Python reads as a TTY: prompts.StdinIsTerminal) or with --json: one with no --answer stops the run before
+    # it acts (prompts.py)
+    if agent.jsonOutput or not prompts.StdinIsTerminal():
         prompts.interactive = False
     # A Neva-Touch Scheduler hook (in a job script, or a stalker's run of one): nobody is there to answer, so nothing
     # may prompt, and the startup checks below belong to the runs people start
@@ -154,7 +155,7 @@ def _Run(argv: list[str]) -> None:
     from .dispatch import Dispatch
 
     if opensTUI:
-        if not sys.stdin.isatty():
+        if not prompts.StdinIsTerminal():
             raise agent.UsageError("The TUI needs a terminal.")
         # The TUI only builds the Intent; it then runs here exactly as a CLI invocation would
         from .tui import RunTUI, RELAUNCH

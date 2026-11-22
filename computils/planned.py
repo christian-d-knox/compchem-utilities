@@ -134,7 +134,7 @@ def PlanAsWritten(paths: list[Path]) -> list[PlannedJob]:
             job.problem = "Empty File"
         else:
             with MapFile(path) as data:
-                job.cpus, job.memoryGB = ExtractResources(data, path.suffix)
+                job.cpus, job.memoryGB = ExtractResources(data, path.suffix, path.name)
             job.text = path.read_text(errors="replace")
         jobs.append(job)
     return jobs

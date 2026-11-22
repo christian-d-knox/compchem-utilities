@@ -1,3 +1,6 @@
+import os
+import sys
+
 from rich.markup import escape
 from .console import console
 from . import agent
@@ -22,6 +25,31 @@ def _Answer(key: str, prompt: str, kind: str, options: list[str] | None = None, 
     return None
 
 
+def StdinIsTerminal() -> bool:
+    """Whether someone can type answers: stdin is a terminal. On Windows, a stdin redirected from NUL (Git Bash's
+    /dev/null, an agent's command runner) also reads as a TTY, so a real console is told by its console mode."""
+    try:
+        if sys.stdin is None or not sys.stdin.isatty():
+            return False
+        if os.name != "nt":
+            return True
+        import ctypes
+        import msvcrt
+        mode = ctypes.c_uint32()
+        return bool(ctypes.windll.kernel32.GetConsoleMode(msvcrt.get_osfhandle(sys.stdin.fileno()), ctypes.byref(mode)))
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
+def _Input(text: str, key: str, prompt: str, kind: str, options: list[str] | None = None, default=None) -> str:
+    """A typed answer. Input that ends (nobody there after all: a closed or empty stdin) stops the run as an unanswered
+    question, exactly as a run nobody can answer does, never with a traceback."""
+    try:
+        return console.input(text)
+    except EOFError:
+        raise agent.QuestionNeeded(key, prompt, kind, options, default) from None
+
+
 def _Invalid(key: str, value: str, expected: str) -> agent.UsageError:
     return agent.UsageError(f"--answer {key}={value} isn't valid: {expected}.")
 
@@ -43,7 +71,7 @@ def AskBool(prompt: str, default: str = "y", style: str = "prompt", *, key: str)
     # Format the prompt with the default capitalized: (Y/n) or (y/N)
     suffix = " (Y/n): " if default == "y" else " (y/N): "
     while True:
-        response = console.input(f"[{style}]{prompt}{suffix}[/{style}]").strip().lower()
+        response = _Input(f"[{style}]{prompt}{suffix}[/{style}]", key, prompt, "bool", ["y", "n"], default).strip().lower()
         if response == "":
             response = default
         if response in ("y", "n"):
@@ -60,7 +88,7 @@ def AskFloat(prompt: str, default = None, style: str = "prompt", *, key: str) ->
         except ValueError:
             raise _Invalid(key, answer, "expected a number") from None
     while True:
-        response = _Typed(prompt, default, style)
+        response = _Typed(prompt, default, style, key, "float")
         try:
             return float(response)
         except ValueError:
@@ -76,13 +104,13 @@ def AskStr(prompt: str, default = None, style: str = "prompt", *, key: str) -> s
                 raise _Invalid(key, answer, "a value is required")
             return default
         return answer
-    return _Typed(prompt, default, style)
+    return _Typed(prompt, default, style, key, "str")
 
 
-def _Typed(prompt: str, default, style: str) -> str:
+def _Typed(prompt: str, default, style: str, key: str, kind: str) -> str:
     suffix = f" ({default}): " if default else ": "
     while True:
-        response = console.input(f"[{style}]{prompt}{suffix}[/{style}]").strip()
+        response = _Input(f"[{style}]{prompt}{suffix}[/{style}]", key, prompt, kind, None, default).strip()
         if response == "":
             if default is not None:
                 return default
@@ -108,7 +136,8 @@ def AskChoice(prompt: str, options: list[str], default: int = 0, style: str = "p
     for index, option in enumerate(options):
         console.print(f"  [{style}]\\[{index}][/{style}] {escape(option)}")
     while True:
-        response = console.input(f"[{style}]{prompt} ({default}, q to cancel): [/{style}]").strip().lower()
+        response = _Input(f"[{style}]{prompt} ({default}, q to cancel): [/{style}]", key, prompt, "choice",
+                          list(options), options[default] if options else None).strip().lower()
         if response == "":
             return default
         if response == "q":
