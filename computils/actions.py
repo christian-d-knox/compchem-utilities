@@ -35,13 +35,15 @@ class Action(Enum):
     AGENT            = "agent"      # -agent [TOPIC]: the agent skill, or one of its topics (agentskill.py)
     XYZ              = "xyz"        # -xyz: each file's last geometry as NAME.xyz
     CREST            = "crest"      # -crest: a CREST conformer search of each molecule (crest.py)
+    CANCEL           = "cancel"     # -cancel: cancel tracked jobs (stalk.Cancel)
+    SCRAPE           = "scrape"     # -scrape: a bounded regex search of files (fileops.ExtractMatches), read-only
 
 # Actions that submit SLURM jobs, which -st can follow
 JOB_ACTIONS = (Action.RUN, Action.SINGLE_POINT, Action.BENCHMARK, Action.CUBE, Action.RERUN, Action.CREST)
 
 # Actions that take a batch of files (IntentDraft.Validate, and the TUI's Continue)
 FILE_ACTIONS = (Action.RUN, Action.SINGLE_POINT, Action.BENCHMARK, Action.CUBE, Action.RERUN, Action.FORM_CHECK,
-                Action.GOODVIBES, Action.INFO, Action.OPTIMIZE, Action.XYZ, Action.CREST)
+                Action.GOODVIBES, Action.INFO, Action.OPTIMIZE, Action.XYZ, Action.CREST, Action.SCRAPE)
 
 # The Neva-Touch Scheduler's steps: what a job's hook does once the job ends. SP submits the single point (an opt's);
 # DONE ends the chain (the single point's own hook only reports)

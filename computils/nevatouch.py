@@ -221,6 +221,11 @@ def RunStep(intent: NevaTouchIntent) -> None:
     normal = bool(termination) and termination != Defaults.terminationVariants[2]
     job = _FindJob(intent.jobID, output, wait=stepBy == BY_HOOK)
     tracked = job is not None
+    # Cancelled through CompUtils (stalk.CancelJobs): the chain ends there, whatever the output says
+    if tracked and job.cancelled:
+        console.print(f"[warning]{output.name} was cancelled (cu -cancel): the Neva-Touch Scheduler takes no step."
+                      f"[/warning]")
+        return
     if not tracked:
         console.print(f"[warning]Job {intent.jobID} isn't tracked; its step is reported without a record.[/warning]")
         job = _Untracked(intent, output)

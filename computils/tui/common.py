@@ -303,6 +303,8 @@ class Setting:
     under: str = ""             # the row this one is a sub-option of: it applies only while that row is on
     available: bool = True      # False: greyed and skipped (SettingsList.SetAvailable), e.g. an option not built yet
     opens: bool = False         # ␣ opens an editor for it (SettingsList.Open), e.g. a stage's ModRed lines
+    # A value picked from these in one row (‹ fixed ›): ←→ step through them, ␣ takes the next
+    options: tuple[str, ...] = ()
 
 
 class ValueInput(Input):
@@ -387,7 +389,8 @@ class SettingRow(Horizontal, can_focus=False):
         self.query_one(".setting-box", Static).update(Text(box))
         self.query_one(".setting-box", Static).display = not (self.stacked and not box.strip())
         if self.setting.value is None:
-            fixed = f"({'•' if self.on else ' '}) {self.setting.fixed}" if self.setting.choice else self.setting.fixed
+            fixed = (f"({'•' if self.on else ' '}) {self.setting.fixed}" if self.setting.choice
+                     else f"‹ {self.setting.fixed} ›" if self.setting.options else self.setting.fixed)
             self.query_one(".setting-fixed", Static).update(fixed)
         # Whatever won't apply (off, an unselected choice, a sub-option of an off row) is greyed out
         self.set_class(not self.parent.Applies(self), "-off")
@@ -418,7 +421,7 @@ class SettingRow(Horizontal, can_focus=False):
         # "( ) Name", an editor row's value. A click on a label only chooses the row
         self.parent.Choose(self, focus=True)
         acts = (event.widget.has_class("setting-box") or event.widget.has_class("setting-fixed")
-                and (self.setting.choice or self.setting.opens))
+                and (self.setting.choice or self.setting.opens or self.setting.options))
         if acts:
             self.parent.action_toggle()
 
@@ -514,9 +517,10 @@ class SettingsList(Vertical):
     def check_action(self, action: str, parameters) -> bool | None:
         # Shown dimmed where they do nothing: ←→ off a choice, ␣ on a row that always applies (or Extra keys)
         if action == "choose":
-            return True if self.current.setting.choice else None
+            return True if self.current.setting.choice or self.current.setting.options else None
         if action == "toggle":
-            return (True if self.current.available and (self.current.setting.opens or self.current.on is not None
+            return (True if self.current.available and (self.current.setting.opens or self.current.setting.options
+                                                        or self.current.on is not None
                                                         and self.current.setting.accepts is not TEXT) else None)
         return True
 
@@ -534,6 +538,8 @@ class SettingsList(Vertical):
             return
         if row.setting.opens:
             self.post_message(self.Open(row.setting.key))
+        elif row.setting.options:
+            self.Step(row, 1)
         elif row.setting.choice:
             self.Select(row)
         elif row.on is not None and row.setting.accepts is not TEXT:
@@ -541,7 +547,24 @@ class SettingsList(Vertical):
             self.ShowAll()
             self.post_message(self.Changed())
 
+    def Step(self, row: SettingRow, step: int) -> None:
+        """A one-row pick (Setting.options): the next or previous value, wrapping around."""
+        options = row.setting.options
+        current = options.index(row.setting.fixed) if row.setting.fixed in options else -1
+        self.SetPicked(row.setting.key, options[(current + step) % len(options)])
+
+    def SetPicked(self, key: str, value: str) -> None:
+        """Set a one-row pick's value (from code, or stepped): the row shows it and the list posts Changed."""
+        row = self.Row(key)
+        row.setting.fixed = value
+        self.ShowAll()
+        self.post_message(self.Changed())
+
     def action_choose(self, step: int) -> None:
+        if self.current.setting.options:
+            if self.current.available:
+                self.Step(self.current, step)
+            return
         # Unavailable options are stepped over (the selected one stays in the list as the starting point)
         options = [row for row in self.rows if row.setting.choice == self.current.setting.choice
                    and (row.available or row.on)]

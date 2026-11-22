@@ -19,6 +19,7 @@ from .intent    import (
     CubeIntent, FormCheckIntent, ExcelIntent, GoodVibesIntent,
     FirstTimeSetupIntent, UpdateIntent, PluginUpdateIntent, InitProjectIntent, ProfileIntent, RefreshIntent, StalkIntent,
     AttributionsIntent, NevaTouchIntent, EnvironmentIntent, InfoIntent, MethodsIntent, OptimizationIntent, SIIntent,
+    CancelIntent, ScrapeIntent,
     AgentIntent, XyzIntent, CrestIntent,
 )
 from .fileops   import grabPaths, formCheck, fileCreation, HasContent, MapFile, ReadMolecule, WriteXyz
@@ -65,6 +66,10 @@ def Dispatch(intent: Intent) -> list[TrackedJob]:
         case InfoIntent():            _DispatchInfo(intent)
         case XyzIntent():             _DispatchXyz(intent)
         case MethodsIntent():         _DispatchMethods()
+        case CancelIntent():
+            from .stalk import Cancel
+            Cancel(intent.jobs)
+        case ScrapeIntent():          _DispatchScrape(intent)
         case SIIntent():              _DispatchSI(intent)
         case AgentIntent():           _DispatchAgent(intent)
         case AttributionsIntent():    _DispatchAttributions()
@@ -730,6 +735,32 @@ def _DispatchStalk(intent: StalkIntent) -> None:
 
 
 # ─── Read-only dispatchers (for people and agents alike) ──────────────
+
+def _DispatchScrape(intent: ScrapeIntent) -> None:
+    """`cu -scrape`: each file's matching lines (one map each), bounded; printed as file:line headers for people and
+    one result per file for --json. A file without a match is a skip, so nothing found anywhere is exit 5."""
+    from .fileops import ExtractFrom, ExtractMatches, ScrapePattern
+    pattern = ScrapePattern(intent.find, intent.case)[0]
+    until = ScrapePattern(intent.until, intent.case)[0] if intent.until else None
+    for path in intent.files:
+        if not Path(path).is_file():
+            agent.Skip(str(path), "No such file")
+            continue
+        found = ExtractFrom(Path(path), ExtractMatches, pattern, intent.first, intent.last, intent.after,
+                            intent.before, until, empty=None)
+        if found is None:
+            agent.Skip(str(path), "Empty file")
+            continue
+        if not found["matches"]:
+            agent.Skip(str(path), "No match")
+            continue
+        for match in found["matches"]:
+            console.print(f"{path}:{match['line']}", style="operation", markup=False, highlight=False)
+            console.print(match["text"], markup=False, highlight=False)
+        if found.get("truncated"):
+            agent.Warn(f"{path}: a block was cut at the line limit (truncated).")
+        agent.Result({"file": str(Path(path).resolve()), **found})
+
 
 def _DispatchInfo(intent: InfoIntent) -> None:
     """`cu -info`: each file's facts (one map each), a table for people, records for --json, and what to run next."""

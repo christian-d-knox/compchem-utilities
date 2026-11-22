@@ -117,7 +117,11 @@ ROW_KINDS = ("rows", "constraints", "eigenvector", "conformers")
 LABEL_WIDTH = 18
 FREQUENCIES_PER_ROW = 8
 SECTION_HEADER = r"(?m)^=== (.+?) ===\r?$"
-FROM_LINE = r"^(.+?)(?:, Stage (\d+) of (\d+))? \((\d+) bytes, modified (\S+ \S+)\)$"
+FROM_LINE = r"^(.+?)(?:, Stage (\d+) of (\d+))? \((\d+) bytes, modified (\S+ \S+)(?:, reader (\d+))?\)$"
+# Which reading of the outputs a section holds: bump it whenever an extractor reads something differently (a program
+# version it didn't know, a fixed pattern), so a data file written by an older reading is read again rather than
+# answered from (Lookup). A section without one is from before it existed. 2: CREST 3.x (2026-11-21)
+READER = 2
 KIND_TITLES = {"SP": "Single Point", "Freq": "Frequencies", "IRC": "IRC", "Stability": "Stability",
                "Conformer Search": "Conformer Search (CREST)"}
 OPTIMIZATION = "Optimization"
@@ -342,7 +346,8 @@ def _Render(name: str, sections: list[tuple[str, dict]]) -> str:
         size, modified = section["_stamp"]
         where = f"{section['file']}, Stage {section['_stage']} of {section['_of']}" if section["_of"] > 1 else \
             section["file"]
-        lines += ["", f"=== {title} ===", _Line("From", f"{where} ({size} bytes, modified {modified})")]
+        lines += ["", f"=== {title} ===", _Line("From", f"{where} ({size} bytes, modified {modified}, "
+                                                         f"reader {section.get('_reader', READER)})")]
         for field in FIELDS:
             if field.key in section and not (field.scope == "identity" and lead.get(field.key) == section[field.key]):
                 lines += _Lines(field, section[field.key])
@@ -467,7 +472,7 @@ def _ParseBlock(text: str) -> tuple[dict, set]:
         if label == "From":
             found = regex.match(FROM_LINE, value)
             facts.update(file=found.group(1), _stage=int(found.group(2) or 1), _of=int(found.group(3) or 1),
-                         _stamp=(int(found.group(4)), found.group(5)))
+                         _stamp=(int(found.group(4)), found.group(5)), _reader=int(found.group(6) or 0))
             continue
         # A block's label can carry its unit: 'Frequencies (cm-1)'
         field = BY_LABEL.get(label) or BY_LABEL.get(regex.sub(r" \([^)]*\)$", "", label))
@@ -508,15 +513,16 @@ def _ReadSections(dataPath: Path) -> list[tuple[str, dict]]:
 
 def Lookup(path: Path) -> dict | None:
     """An output's facts from its data file, as FileFacts gives them, while every one of its stages has its section
-    and they still match the file (same size and modification time); None otherwise (no data file, a stage whose place
-    another attempt holds, or the output has changed since)."""
+    and they still match the file (same size and modification time) and this reader (READER); None otherwise (no data
+    file, a stage whose place another attempt holds, the output has changed since, or an older reader wrote it)."""
     path = Path(path)
     if not path.is_file():
         return None
     try:
         stamp = _Stamp(path)
         mine = sorted((section for _, section in _ReadSections(DataPath(path)) if section["file"] == path.name
-                       and section["_stamp"][0] == stamp[0] and _When(section["_stamp"]) == _When(stamp)),
+                       and section["_stamp"][0] == stamp[0] and _When(section["_stamp"]) == _When(stamp)
+                       and section.get("_reader") == READER),
                       key=lambda section: section["_stage"])
     except (OSError, ValueError, AttributeError):
         return None

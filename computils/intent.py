@@ -367,6 +367,26 @@ class InfoIntent(Intent):
 
 
 @dataclass
+class CancelIntent(Intent):
+    """`cu -cancel JOB...` — cancel tracked jobs (IDs, names, or CLUSTER:ID), asked first (key confirm-cancel)."""
+    jobs: list[str]
+
+
+@dataclass
+class ScrapeIntent(Intent):
+    """`cu -scrape FILE... --find REGEX` — the lines each file has matching a regex (fileops.ExtractMatches), bounded:
+    the last N (default 1), the first N, or all (capped); with lines around each, or each one's block --until a line."""
+    files:  list[Path]
+    find:   str
+    last:   Optional[int] = 1
+    first:  Optional[int] = None
+    after:  int           = 0
+    before: int           = 0
+    until:  Optional[str] = None
+    case:   bool          = False
+
+
+@dataclass
 class MethodsIntent(Intent):
     """`cu -methods` — the Optimization and Single Point Methods in force here (project, else global), read-only."""
     pass
@@ -477,6 +497,18 @@ class IntentDraft:
     dismiss: list[str]           = field(default_factory=list)
     wait:    Optional[list[str]] = None
 
+    # CANCEL: tracked jobs to cancel (IDs, names, CLUSTER:ID)
+    cancelJobs: list[str] = field(default_factory=list)
+
+    # SCRAPE: the regex, which matches (scrapeLast None and scrapeFirst None: all), lines around each, its block's end
+    scrapeFind:   Optional[str] = None
+    scrapeLast:   Optional[int] = 1
+    scrapeFirst:  Optional[int] = None
+    scrapeAfter:  int           = 0
+    scrapeBefore: int           = 0
+    scrapeUntil:  Optional[str] = None
+    scrapeCase:   bool          = False
+
     # AGENT
     agentTopic:   str = ""
     agentSshHost: str = ""
@@ -552,6 +584,24 @@ class IntentDraft:
                 errors.append("Select at least one cube option.")
             if CubeOption.RANGE in self.cubeOptions and not self.orbitalRange:
                 errors.append("Orbital range required when 'Range' is selected.")
+
+        if self.action == Action.SCRAPE:
+            from .fileops import SCRAPE_MAX_CONTEXT, SCRAPE_MAX_MATCHES, ScrapePattern
+            if not self.scrapeFind:
+                errors.append("-scrape needs --find REGEX (what to look for).")
+            for value, flag in ((self.scrapeLast, "--latest"), (self.scrapeFirst, "--earliest")):
+                if value is not None and not 1 <= value <= SCRAPE_MAX_MATCHES:
+                    errors.append(f"{flag} takes 1 to {SCRAPE_MAX_MATCHES}.")
+            for value, flag in ((self.scrapeAfter, "--after"), (self.scrapeBefore, "--before")):
+                if not 0 <= value <= SCRAPE_MAX_CONTEXT:
+                    errors.append(f"{flag} takes 0 to {SCRAPE_MAX_CONTEXT} lines.")
+            if self.scrapeUntil is not None and (self.scrapeAfter or self.scrapeBefore):
+                errors.append("--until takes a block to a line of its own: not with --after or --before.")
+            for pattern, flag in ((self.scrapeFind, "--find"), (self.scrapeUntil, "--until")):
+                if pattern:
+                    problem = ScrapePattern(pattern, self.scrapeCase)[1]
+                    if problem:
+                        errors.append(f"{flag} isn't a valid regular expression: {problem}.")
 
         if self.action == Action.EXCEL and self.excelInputFile is None:
             errors.append("Input file required for Excel conversion.")
@@ -774,6 +824,12 @@ class IntentDraft:
                     constrain=self.crestConstrain, forceConstant=self.crestForceConstant, cpus=self.cpus,
                     memoryRatio=self.memoryRatio, wallTime=self.wallTime, partition=self.partition,
                     cluster=self.cluster, stalk=self.stalk, stalkLoop=self.stalkLoop)
+            case Action.CANCEL:
+                return CancelIntent(jobs=list(self.cancelJobs))
+            case Action.SCRAPE:
+                return ScrapeIntent(files=list(self.files), find=self.scrapeFind, last=self.scrapeLast,
+                                    first=self.scrapeFirst, after=self.scrapeAfter, before=self.scrapeBefore,
+                                    until=self.scrapeUntil, case=self.scrapeCase)
             case Action.XYZ:
                 return XyzIntent(files=list(self.files), smiles=self.smiles, name=self.optName,
                                  rdkitConformers=self.rdkitConformers, rdkitConformer=self.rdkitConformer or 1)

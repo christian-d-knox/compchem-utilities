@@ -20,7 +20,7 @@ constraints file it read (its echo, which is what the run used), the final ensem
 lowest conformer's geometry comes from crest_best.xyz, in <name>-scratch/ or beside the output (the lab's own layout)."""
 import math
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import regex
@@ -60,6 +60,77 @@ def _FlagValue(tokens: list[str], *names: str) -> str | None:
         if Flag(token) in names:
             return tokens[index + 1]
     return None
+
+
+# ─── An option line as settings (the Conformer Search builder's rows) ──
+# The levels a search picks from, in the builder's order ('' writes none: CREST's own default, GFN2-xTB)
+LEVEL_CHOICES = (("", "CREST's Default"), ("gfn2", "GFN2-xTB"), ("gfn1", "GFN1-xTB"), ("gfnff", "GFN-FF"),
+                 ("gfn2//gfnff", "GFN2-xTB//GFN-FF"))
+# The flags with a value the builder shows as rows: (flag, label, unit). Empty writes none (CREST's default)
+VALUE_OPTIONS = (("ewin", "Energy Window", "kcal/mol"), ("rthr", "RMSD Threshold", "A"),
+                 ("ethr", "Energy Threshold", "kcal/mol"), ("bthr", "Bconst Threshold", ""))
+# The switches it shows as checkboxes: (flag, label)
+FLAG_OPTIONS = (("noreftopo", "No Ref Topo"), ("notopo", "No Topo"), ("cmetal", "Constrain Metals"))
+# The project's solvent, as an option line writes it (solvent.py; RenderOptions fills it in)
+PROJECT_SOLVENT = "{alpb}"
+
+
+@dataclass
+class OptionFields:
+    """An option line split into what the builder shows as rows. level: a LEVEL_CHOICES flag ('' none); solvent:
+    PROJECT_SOLVENT, an ALPB solvent name, or '' (the gas phase); values: {VALUE_OPTIONS flag: text}; flags: the
+    FLAG_OPTIONS set; other: every other token, as written."""
+    level: str = ""
+    solvent: str = ""
+    values: dict = field(default_factory=dict)
+    flags: set = field(default_factory=set)
+    other: str = ""
+
+
+def SplitOptions(options: str) -> OptionFields:
+    """An option line as OptionFields; JoinOptions writes it back (in its own order: level, values, switches, the
+    rest, the solvent)."""
+    tokens, fields, other, index = options.split(), OptionFields(), [], 0
+    levels, values = dict(LEVEL_CHOICES), {flag for flag, *_ in VALUE_OPTIONS}
+    flags = {flag for flag, _ in FLAG_OPTIONS}
+    while index < len(tokens):
+        token, name = tokens[index], Flag(tokens[index])
+        follows = index + 1 < len(tokens) and not Flag(tokens[index + 1])
+        if token.lower() == PROJECT_SOLVENT:
+            fields.solvent = PROJECT_SOLVENT
+        elif name and name in levels and not fields.level:
+            fields.level = name
+        elif name == "alpb" and follows:
+            fields.solvent, index = tokens[index + 1], index + 1
+        elif name in values and follows:
+            fields.values[name], index = tokens[index + 1], index + 1
+        elif name in flags:
+            fields.flags.add(name)
+        else:
+            other.append(token)
+        index += 1
+    fields.other = " ".join(other)
+    return fields
+
+
+def JoinOptions(fields: OptionFields) -> str:
+    """OptionFields as an option line."""
+    words = [f"--{fields.level}"] if fields.level else []
+    for flag, *_ in VALUE_OPTIONS:
+        if fields.values.get(flag, "").strip():
+            words += [f"--{flag}", fields.values[flag].strip()]
+    words += [f"--{flag}" for flag, _ in FLAG_OPTIONS if flag in fields.flags]
+    words += fields.other.split()
+    if fields.solvent == PROJECT_SOLVENT:
+        words.append(PROJECT_SOLVENT)
+    elif fields.solvent.strip():
+        words += ["--alpb", fields.solvent.strip()]
+    return " ".join(words)
+
+
+def SameOptions(first: str, second: str) -> bool:
+    """Whether two option lines ask for the same search (written in any order)."""
+    return JoinOptions(SplitOptions(first)) == JoinOptions(SplitOptions(second))
 
 
 def Level(options: str) -> str:
@@ -316,8 +387,11 @@ def EnvironmentCrest() -> Path:
 
 
 def JobName(name: str) -> str:
-    """A species' search: 8a -> 8a_CREST (a name that already ends in the suffix is kept)."""
-    return name if name.endswith(Defaults.crestExtra) else name + Defaults.crestExtra
+    """A species' search: 8a -> 8a_CREST. A search's own name is kept: one ending in the suffix, or in the suffix and a
+    re-run's (8a_CREST_re, 8a_CREST_re2). Every CrestJob's name goes through it, however it was typed, so a search
+    always feeds its species' data file (datafile.RootName strips the suffix) and is always known as a search."""
+    pattern = regex.escape(Defaults.crestExtra) + "(?:" + regex.escape(Defaults.reRunExtra) + r"\d*)?"
+    return name if regex.search(pattern + "$", name) else name + Defaults.crestExtra
 
 
 @dataclass
@@ -341,6 +415,10 @@ class CrestJob:
     partition:       str | None   = None
     cluster:         str | None   = None
     constraintsText: str          = ""
+
+    def __post_init__(self) -> None:
+        # The species' search, however its name was typed (8a -> 8a_CREST; JobName)
+        self.name = JobName(self.name)
 
     # ─── Names ───
     def File(self, extension: str, extra: str = "") -> Path:
@@ -444,7 +522,13 @@ class CrestJob:
         from .jobs import ScratchRunScript
         lines = ["".join(Defaults.crestNonVariant),
                  "# CREST's threads (--T) and OpenMP's and MKL's match the job's CPUs\n",
-                 f"export MKL_NUM_THREADS={self.cpus}\nexport OMP_NUM_THREADS={self.cpus},1\n"]
+                 f"export MKL_NUM_THREADS={self.cpus}\nexport OMP_NUM_THREADS={self.cpus},1\n",
+                 # conda-forge's xtb links OpenBLAS's pthreads build: called from xtb's OpenMP threads, a threaded
+                 # OpenBLAS prints "Detect OpenMP Loop and this application may hang" on every call (800,000+ lines,
+                 # 100 MB, in a 26-minute run) and oversubscribes the CPUs. The parallelism is OpenMP's, so BLAS runs
+                 # one thread per call
+                 "# OpenBLAS single-threaded inside CREST's OpenMP threads (else a warning per call, and "
+                 "oversubscribed CPUs)\nexport OPENBLAS_NUM_THREADS=1\n"]
         if not Defaults.crestExecutable:
             lines.append("# CompUtils' environment's CREST, with its xtb\n"
                          f"export PATH=\"{Path(self.executable).parent.as_posix()}:$PATH\"\n")
@@ -532,11 +616,22 @@ def Submit(job: CrestJob, trackedJobs: list, folder: Path | None = None) -> bool
 
 # ─── Reading a CREST output ───────────────────────────────────────────
 
-COMMAND_LINE = rb"Command line input:\s*\r?\n\s*>[ \t]*([^\r\n]*)"
+# The command it ran: '> crest ...' (2.x), '$ /path/crest ...' (3.x)
+COMMAND_LINE = rb"Command line input:\s*\r?\n\s*[>$][ \t]*([^\r\n]*)"
 CONSTRAINT_ECHO = rb"content of the constraining file \(sorted\):\s*\r?\n((?:>[^\n]*\n)+)"
 # The stalker's progress: CREST's phase headers as it titles them, the last one read backwards (each led by a literal)
-PHASES = r"MTD Iteration(?=\s+\d)|Multilevel Optimization|Structure Crossing \(GC\)|Final Geometry Optimization|" \
-         r"Starting a trial MTD|xTB Geometry Optimization"
+# (2.x and 3.x name some differently: 'MTD Iteration 2' / 'Meta-Dynamics Iteration 2', 'Multilevel Optimization' /
+# 'Multilevel Ensemble Optimization', 'Starting a trial MTD' / 'Starting trial MTD')
+PHASES = r"MTD Iteration(?=\s+\d)|Meta-Dynamics Iteration(?=\s+\d)|Multilevel Optimization|" \
+         r"Multilevel Ensemble Optimization|Structure Crossing \(GC\)|Final Geometry Optimization|" \
+         r"Starting a trial MTD|Starting trial MTD|xTB Geometry Optimization|Initial Geometry Optimization|" \
+         r"Additional regular MDs"
+# How a phase reads in the stalker's report
+PHASE_NAMES = {"Meta-Dynamics Iteration": "MTD Iteration",
+               "Multilevel Ensemble Optimization": "Multilevel Optimization",
+               "Starting a trial MTD": "the Trial MTD", "Starting trial MTD": "the Trial MTD",
+               "Initial Geometry Optimization": "the Initial Optimization",
+               "xTB Geometry Optimization": "the Initial Optimization", "Additional regular MDs": "the Additional MDs"}
 # The final ensemble's values, CREST's own words: (key, pattern, how many values)
 FINAL_VALUES = (("temperature", r"T /K(?=\s*:\s*(\S+))"),
                 ("lowestEnergy", r"E lowest(?=\s*:\s*(\S+))"),
@@ -545,7 +640,8 @@ FINAL_VALUES = (("temperature", r"T /K(?=\s*:\s*(\S+))"),
                 ("ensembleFreeEnergy", r"ensemble free energy \(kcal/mol\)(?=\s*:\s*(\S+))"),
                 ("populationOfLowest", r"population of lowest in %(?=\s*:\s*(\S+))"),
                 ("conformers", r"number of unique conformers for further calc(?=\s+(\d+))"),
-                ("energyWindow", r"conformer energy window\s+/kcal(?=\s*:\s*(\S+))"),
+                ("energyWindow", r"(?:conformer energy window\s+/kcal|sorting energy window \(EWIN\))"
+                                 r"(?=\s*:\s*(\S+))"),
                 ("rmsdThreshold", r"RMSD threshold(?=\s*:\s*(\S+))"),
                 ("rotConstThreshold", r"Bconst threshold(?=\s*:\s*(\S+))"))
 
@@ -624,13 +720,15 @@ def ExtractConformerEnergies(data) -> list[dict]:
     conformers = []
     for rawLine in iter(data.readline, b""):
         fields = rawLine.split()
-        if len(fields) == 8:
+        # A set's first row: number, Erel, Etot, weight, set weight, set, degeneracy[, origin (2.x only)]
+        if len(fields) in (7, 8):
             try:
                 conformers.append({"conformer": int(fields[5]), "energy": float(fields[1]), "total": float(fields[2]),
                                    "population": float(fields[4]), "rotamers": int(fields[6])})
             except ValueError:
                 break
-        elif len(fields) != 5:
+        # The set's other rotamers: number, Erel, Etot, weight[, origin]
+        elif len(fields) not in (4, 5):
             break
     return conformers
 
@@ -642,9 +740,12 @@ def CrestFacts(data, path: Path, full: bool = True) -> dict:
     conformer's geometry from crest_best.xyz. full=False: the run and its status only (the TUI's Details)."""
     facts: dict = {"file": Path(path).name, "kind": "output", "program": "CREST"}
     version = FindInMap(data, r"Version (\S+?),", end=4096)
+    # 2.x names the xtb it calls; 3.x computes through the tblite library
     xtb = FindInMap(data, r"Compatible with xTB version (\S+)", end=4096)
+    tblite = FindInMap(data, r"xTB calculation via tblite lib", end=16384)
     if version:
-        facts["version"] = version.group(1).decode() + (f" (xTB {xtb.group(1).decode()})" if xtb else "")
+        facts["version"] = version.group(1).decode() + (f" (xTB {xtb.group(1).decode()})" if xtb else
+                                                        " (xTB via tblite)" if tblite else "")
     termination = ExtractTermination(data, -TERMINATION_TAIL)
     facts["status"] = "Normal" if termination else "Unknown"
     if termination:
@@ -695,9 +796,12 @@ def CrestFacts(data, path: Path, full: bool = True) -> dict:
                 facts[key] = _Number(found.group(1).decode())
         if energyThreshold is not None:
             facts["energyThreshold"] = _Number(energyThreshold)
-        wallTime = FindInMap(data, r"Overall wall time(?=\s*:\s*([^\r\n]+))", reverse=True)
+        # 2.x: 'Overall wall time  : 0h :16m :58s'; 3.x: 'CREST runtime (total)  0 d,  0 h, 26 min, 28.978 sec'
+        wallTime = FindInMap(data, r"Overall wall time(?=\s*:\s*([^\r\n]+))|"
+                                   r"CREST runtime \(total\)(?=\s+([^\r\n]+))", reverse=True)
         if wallTime:
-            facts["wallTime"] = regex.sub(r"\s*:\s*", " ", wallTime.group(1).decode().strip())
+            text = (wallTime.group(1) or wallTime.group(2)).decode().strip()
+            facts["wallTime"] = " ".join(regex.sub(r"\s*:\s*", " ", text).split())
         energies = ExtractConformerEnergies(data)
         if energies:
             facts["conformerEnergies"] = energies
@@ -712,18 +816,19 @@ def ProgressReport(data, start: int = 0, end: int | None = None) -> str:
     lines = []
     conformers = FindInMap(data, r"number of unique conformers for further calc(?=\s+(\d+))", True, start=start, end=end)
     if conformers:
-        window = FindInMap(data, r"conformer energy window\s+/kcal(?=\s*:\s*(\S+))", True, start=start, end=end)
+        window = FindInMap(data, dict(FINAL_VALUES)["energyWindow"], True, start=start, end=end)
         count = int(conformers.group(1))
         lines.append(f"{count} conformer{'s' if count != 1 else ''}" + (
             f" within {float(window.group(1)):g} kcal/mol." if window else "."))
     else:
         phase = FindInMap(data, PHASES, True, start=start, end=end)
         if phase:
-            text = phase.group().decode()
+            found = phase.group().decode()
+            text = PHASE_NAMES.get(found, found)
             if text == "MTD Iteration":
                 number = regex.match(rb"\s+(\d+)", data[phase.end():phase.end() + 16])
                 text += f" {int(number.group(1))}" if number else ""
-            lines.append(f"Reached {'the Trial MTD' if text == 'Starting a trial MTD' else text}.")
+            lines.append(f"Reached {text}.")
     early = len(regex.findall(rb"terminated EARLY", data[start:end] if end else data[start:]))
     if early:
         lines.append(f"{early} MTD{'s' if early != 1 else ''} terminated early.")

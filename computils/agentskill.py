@@ -68,6 +68,22 @@ COMMANDS = [
                  "-info '*.out' --json", "One record per file (info.FileFacts): a one-stage output's results in the "
                  "record, a staged one's in `stages` (an input's `stages` only lists what each runs), and dataFile; "
                  "next: cu -re / cu -sp suggestions."),
+    AgentCommand("scrape", ("scrape", "find", "latest", "earliest", "all", "after", "before", "until", "case"),
+                 Action.SCRAPE,
+                 "Lines of a file matching a regular expression, for a value -info doesn't report (an output read once, "
+                 "never whole): the last match by default, or --earliest N / --latest N / --all (capped); --after N / "
+                 "--before N lines around each, or --until REGEX for a table's block (capped). Case-insensitive unless "
+                 "--case. Put the value in a group to get it as printed. Recipe: read-other-values.",
+                 "-scrape 8a_SP.out --find 'T1 diagnostic\\s+\\.*\\s+(\\S+)' --json",
+                 "One record per file: matches [{line, text, groups}] (groups as captured), total (every matching "
+                 "line, except with --earliest), truncated when a block hit the line limit. A file without a match is "
+                 "skipped (exit 5 when none matched)."),
+    AgentCommand("cancel", ("cancel",), Action.CANCEL,
+                 "Cancel tracked jobs (IDs, names, or CLUSTER:ID): never scancel. The tracker records it at once, the "
+                 "Neva-Touch Scheduler takes no step after a cancelled job, and the ending is notified as any is. "
+                 "Asked first (confirm-cancel).",
+                 "-cancel 8a --json", "results[0]: {cancelled: [names]}; a job already ended, or one scancel refused, "
+                 "is skipped with why.", ("confirm-cancel",), ("screen-stalker",)),
     AgentCommand("xyz", ("xyz", "smiles", "rdkit_conformers", "rdkit_conformer"), Action.XYZ,
                  "Write each file's last geometry (an output's; an input's own; Gaussian or ORCA) as NAME.xyz here, "
                  "e.g. for figures or another program. Or a SMILES' 3D geometry: -xyz --smiles 'SMILES' --name NAME "
@@ -381,13 +397,17 @@ def SkillText(host: str = HOST_PLACEHOLDER, digest: str | None = None, commit: s
         *_LocalSection(local),
         "## Rules",
         "",
-        "- Preview first: job commands take `--dry-run` (inputs and scripts written, nothing submitted). Show the human "
-        "the route(s) and what will be submitted; submit on their go-ahead (`next` has the command).",
+        "- Preview first, unless your instructions give you more autonomy: job commands take `--dry-run` (inputs and "
+        "scripts written, nothing submitted). Show the human the route(s) and what will be submitted; submit on their "
+        "go-ahead (`next` has the command).",
+        "- Cancel only with `-cancel` (never scancel). Its `confirm-cancel` answer is the human's unless your "
+        "instructions let you give it.",
         "- Chemistry is the human's: method, charge, multiplicity, spin (`--spin css|oss` for singlets), basis; for a "
         "conformer search its level, solvent, thresholds and which bonds it holds. Ask; never guess. Mechanical "
         "answers (replacing an input you just previewed, dismissing ended jobs) are yours.",
         "- Only `cu` submits (never `sbatch`): every job is then tracked, notified and chained.",
-        "- Read outputs with `-info` (never cat, grep or copy a .out: they're huge). Inputs are small to read.",
+        "- Read outputs with `-info` (never cat, grep or copy a .out: they're huge), and a value it doesn't report "
+        "with `-scrape` (bounded: a match and the lines you ask for). Inputs are small to read.",
         "- Each job's results are kept in its data file, `<root>.cudf` beside its outputs (8a.out, 8a_re.out, "
         "8a_SP_re2.out and the benchmark's 8a-2-B3LYP_SP.out all feed 8a.cudf), written by `-info` and whenever a "
         "tracked job ends. It is small and has a fixed layout (`=== Section ===` headers, one `Label  value` line "

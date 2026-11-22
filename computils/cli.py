@@ -5,6 +5,7 @@ from .defaults  import Defaults
 from .prompts import AskBool, AskStr
 from .intent import Intent, IntentDraft
 from .actions import CubeOption, Action, FILE_ACTIONS
+from .fileops import SCRAPE_MAX_LINES, SCRAPE_MAX_MATCHES
 from . import agent
 
 # Each action flag's argparse dest, and the Action it sets (the parser allows only one per invocation)
@@ -17,6 +18,7 @@ ACTION_FLAGS = {
     "profile": Action.PROFILE, "refresh": Action.REFRESH, "attributions": Action.ATTRIBUTIONS,
     "neva_touch": Action.NEVA_TOUCH, "info": Action.INFO, "methods": Action.METHODS, "optimize": Action.OPTIMIZE,
     "si": Action.SI_SCRAPER, "agent": Action.AGENT, "xyz": Action.XYZ, "crest": Action.CREST,
+    "cancel": Action.CANCEL, "scrape": Action.SCRAPE,
 }
 
 
@@ -80,6 +82,12 @@ def BuildParser() -> argparse.ArgumentParser:
     actionGroup.add_argument('-xyz', '--xyz', nargs='*', metavar="FILE",
                              help="Write each file's last geometry (an output's, or an input's own) as NAME.xyz, Gaussian "
                                   "or ORCA; or, with --smiles and --name, a SMILES' RDKit conformer.")
+    actionGroup.add_argument('-cancel', '--cancel', nargs='+', metavar="JOB",
+                             help="Cancel tracked jobs (IDs, names, or CLUSTER:ID), after asking. The tracker records "
+                                  "it at once, and the Neva-Touch Scheduler takes no step after a cancelled job.")
+    actionGroup.add_argument('-scrape', '--scrape', nargs='+', metavar="FILE",
+                             help="Find lines in files by a regular expression (--find), read once each and bounded: "
+                                  "for a value -info doesn't report. See 'scrape' below.")
     actionGroup.add_argument('-methods', '--methods', action='store_true',
                              help="List the Optimization and Single Point Methods in force here (project, else "
                                   "global).")
@@ -200,6 +208,22 @@ def BuildParser() -> argparse.ArgumentParser:
     siGroup.add_argument('--output', default=None, metavar="FILE", help="Default: SI_coordinates.txt.")
     siGroup.add_argument('--species', default=None, metavar="A,B,...",
                          help="The species to write, in order (default: list.txt's, else every one that can be).")
+
+    # -scrape's search: what to find, which matches, and how much around each
+    scrapeGroup = parser.add_argument_group("scrape (-scrape)")
+    scrapeGroup.add_argument('--find', default=None, metavar="REGEX",
+                             help="The regular expression (Python's regex syntax; case-insensitive unless --case). "
+                                  "Its groups are reported as captured.")
+    which = scrapeGroup.add_mutually_exclusive_group()
+    which.add_argument('--latest', type=int, default=None, metavar="N", help="The last N matches (the default: 1).")
+    which.add_argument('--earliest', type=int, default=None, metavar="N", help="The first N matches (stops there).")
+    which.add_argument('--all', action='store_true', help=f"Every match (at most {SCRAPE_MAX_MATCHES}).")
+    scrapeGroup.add_argument('--after', type=int, default=0, metavar="N", help="N lines after each match.")
+    scrapeGroup.add_argument('--before', type=int, default=0, metavar="N", help="N lines before each match.")
+    scrapeGroup.add_argument('--until', default=None, metavar="REGEX",
+                             help=f"Each match's block: through the first later line matching REGEX (a table; at most "
+                                  f"{SCRAPE_MAX_LINES} lines).")
+    scrapeGroup.add_argument('--case', action='store_true', help="Match case exactly.")
 
     # A Neva-Touch Scheduler re-run's count and the original stage it starts at (written into its hook; not listed)
     parser.add_argument('--reruns', type=int, default=0, help=argparse.SUPPRESS)
@@ -399,6 +423,18 @@ def ParseCLI(argv: list[str]) -> Intent:
         draft.cpus, draft.memoryRatio = args.cpus, args.memory
         draft.reRuns, draft.firstStage = args.reruns, args.first_stage
         draft.chain = args.chain
+
+    scrapeFlags = (args.find, args.latest, args.earliest, args.all or None, args.after or None, args.before or None,
+                   args.until, args.case or None)
+    if any(value is not None for value in scrapeFlags) and draft.action != Action.SCRAPE:
+        raise agent.UsageError("--find, --latest, --earliest, --all, --after, --before, --until and --case go with "
+                               "-scrape.")
+    if draft.action == Action.SCRAPE:
+        draft.scrapeFind, draft.scrapeUntil, draft.scrapeCase = args.find, args.until, args.case
+        draft.scrapeFirst, draft.scrapeAfter, draft.scrapeBefore = args.earliest, args.after, args.before
+        draft.scrapeLast = None if args.all or args.earliest is not None else (1 if args.latest is None else args.latest)
+    if args.cancel:
+        draft.cancelJobs = list(args.cancel)
 
     # Modifiers
     draft.dismiss       = args.dismiss or []

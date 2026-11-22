@@ -17,7 +17,7 @@ from textual.widgets import DataTable, Static
 
 from ..defaults import Defaults
 from ..stalk    import (AWAITING_PING, LoadTracked, HasLiveJobs, PollQueue, DismissJobs, HeadLine, ProgressLines,
-                        StagePosition, TrackedJob)
+                        StagePosition, TrackedJob, CancelJobs)
 from .common    import NAV_BINDINGS, Column, NavFooter, Notice, Popup
 from .home      import ShortPath, TitleLine
 from .inspect   import Styled
@@ -133,6 +133,7 @@ class StalkerScreen(Screen):
     AUTO_FOCUS = "#running"
     BINDINGS = [
         Binding("p", "ping", "Ping Now"),
+        Binding("c", "cancel_job", "Cancel Job"),
         Binding("d", "dismiss_job", "Dismiss"),
         Binding("D", "dismiss_ended", "Dismiss Ended", key_display="D"),
         Binding("escape", "home", "Home"),
@@ -219,6 +220,8 @@ class StalkerScreen(Screen):
         return self.jobs.get(key) if key else None
 
     def ShowDetails(self, table: DataTable) -> None:
+        # Cancel's footer key follows the highlighted job (live or not)
+        self.refresh_bindings()
         details = self.query_one("#stalker-details", Static)
         key = self.HighlightedKey(table)
         job = self.jobs.get(key) if key else None
@@ -245,6 +248,38 @@ class StalkerScreen(Screen):
     def action_ping(self) -> None:
         self.routine.PingNow()
         self.RefreshTitle()
+
+    def check_action(self, action: str, parameters: tuple) -> bool | None:
+        # Keys in context (the footer fits 84 columns): Cancel on a live job, Dismiss Ended in the Ended pane
+        if action == "cancel_job":
+            job = self.HighlightedJob()
+            return job is not None and not job.ended
+        if action == "dismiss_ended":
+            return getattr(self.focused, "id", None) == "ended"
+        return True
+
+    def action_cancel_job(self) -> None:
+        job = self.HighlightedJob()
+        if job is None or job.ended:
+            return
+
+        def Cancel() -> None:
+            cancelled, failures = CancelJobs([job])
+            self.app.call_from_thread(Cancelled, failures)
+
+        def Cancelled(failures: list) -> None:
+            if not HasLiveJobs():
+                self.routine.Idle()
+            self.Reload()
+            if failures:
+                Notice(self.app, "Couldn't Cancel", f"{job.name}: {failures[0][1]}", "error")
+
+        def Answered(result: str) -> None:
+            if result == "cancel":
+                self.run_worker(Cancel, thread=True, group="cancel", exit_on_error=False)
+        self.app.push_screen(Popup("Cancel Job?", f"Cancel {job.name} (ID {job.jobID})? It stops now, and the "
+                                   f"Neva-Touch Scheduler takes no step after it.", [("c", "Cancel Job", "cancel")],
+                                   "warning", cancel="Keep Running"), Answered)
 
     def action_dismiss_job(self) -> None:
         job = self.HighlightedJob()
@@ -276,5 +311,6 @@ class StalkerScreen(Screen):
     def action_help(self) -> None:
         Notice(self.app, "Help", "\n".join([
             "tab / shift+tab Move Between Running, Pending and Ended", "↑/↓ Highlight a Job (Shown in Details)",
-            "p Ping Now (Starts a Fresh Interval)", "d Dismiss the Highlighted Job", "D Dismiss Every Ended Job",
+            "p Ping Now (Starts a Fresh Interval)", "c Cancel the Highlighted Job (Asks First)",
+            "d Dismiss the Highlighted Job", "D Dismiss Every Ended Job (Ended Pane)",
             "esc Back to Home (Stalking Continues)", "ctrl+q Quit"]))

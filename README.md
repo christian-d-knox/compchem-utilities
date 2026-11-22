@@ -106,6 +106,8 @@ The environments also carry `openpyxl`, so an AI agent can build Excel workbooks
 | `cu -info FILE…` | Shows what outputs and inputs say: status, energies, frequencies, convergence, an optimization's constraints and a Gaussian TS's eigenvector, stage by stage for a staged job. Each job's results are kept in its data file, `<root>.cudf` (8a.out, 8a_re.out and 8a_SP.out all feed `8a.cudf`): one section per stage of work, each the final successful attempt, also written whenever a tracked job ends |
 | `cu -xyz FILE…` | Writes each file's last geometry (an output's, or an input's own) as `NAME.xyz`; `--smiles 'SMILES' --name NAME` writes a SMILES' RDKit conformer |
 | `cu -methods` | Lists the Optimization and Single Point Methods in force in this folder |
+| `cu -scrape FILE… --find 'REGEX'` | Finds lines in an output by a regular expression, for a value `-info` doesn't report: one read of the file, only the matching lines (`--latest N`, `--earliest N` or `--all`; `--after`/`--before` lines around each, or a table `--until` its last line), its groups as printed |
+| `cu -cancel JOB…` | Cancels tracked jobs (IDs or names) after asking: recorded at once, notified like any ending, and the Neva-Touch Scheduler takes no step after a cancelled job. The Job Stalker's `c` does the same |
 | `cu -agent [TOPIC]` | Prints the skill that teaches an AI agent to use CompUtils (see below) |
 
 | Modifiers | Purpose |

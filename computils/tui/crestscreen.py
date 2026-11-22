@@ -13,8 +13,9 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Static
 
-from ..crest    import (CUSTOM, DEFAULT_FORCE_CONSTANT, CrestJob, ConstraintLines, JobName, Level, Methods,
-                        OptionsProblem, ParseConstraints, Solvation, Suggestions)
+from ..crest    import (DEFAULT_FORCE_CONSTANT, FLAG_OPTIONS, LEVEL_CHOICES, PROJECT_SOLVENT, VALUE_OPTIONS,
+                        CrestJob, ConstraintLines, JobName, JoinOptions, Level, Methods, OptionFields, OptionsProblem,
+                        ParseConstraints, SameOptions, Solvation, SplitOptions, Suggestions)
 from ..defaults import Defaults
 from ..fileops  import ReRunNameIn, fileCreation
 from ..intent   import CrestIntent
@@ -43,7 +44,9 @@ Atoms count from 1, in the
 geometry's order (Gaussian's).
 Written in xtb's xcontrol
 format: $constrain and $fix."""
-OPTIONS_ROW = "options"
+AS_RAN = "as-ran"
+# An ALPB solvent's name as typed (letters, digits, and the commas and hyphens of 1,4-dioxane)
+SOLVENT_NAME = r"[\w,.-]"
 
 
 class SubmitInput(ValueInput):
@@ -52,9 +55,10 @@ class SubmitInput(ValueInput):
 
 
 class ConformerSearchScreen(Screen):
-    """A search's settings (name, charge, multiplicity, the Conformer Search Method or CREST's options typed in full,
-    constraints, force constant, resources and SLURM settings) beside Renders As: the crest command and the constraints
-    file as they will be written (p: the whole job script, read only)."""
+    """A search's settings (name, charge, multiplicity, the Conformer Search Method with each of its options as a row
+    under it, constraints, force constant, resources and SLURM settings) beside Renders As: the crest command and the
+    constraints file as they will be written (p: the whole job script, read only). Choosing a method fills its rows from
+    its option line (crest.SplitOptions); a row changed from it marks the method Edited."""
     AUTO_FOCUS = "#settings .-current"
     DEFAULT_CSS = """
     ConformerSearchScreen #crest-renders { height: 1fr; padding: 0 1; }
@@ -77,8 +81,8 @@ class ConformerSearchScreen(Screen):
         self.constraints = preset.constraints if preset is not None else ""
         # A re-run's constraints file as it ran: kept unless constraint lines are typed
         self.asRan = preset.constraintsText if preset is not None else ""
-        self.customOptions = preset.options if preset is not None and preset.method not in self.methods else ""
         self.prefilled: dict[str, str] = {}
+        self.lastMethod = ""
         self.job: CrestJob | None = None
         self.ready, self.view = False, "renders"
 
@@ -95,16 +99,17 @@ class ConformerSearchScreen(Screen):
 
     def Settings(self) -> list[Setting]:
         molecule, preset = self.molecule, self.preset
-        chosen = (next((key for key, name in self.methodKeys.items() if preset is not None and name == preset.method),
-                       "custom") if preset is not None else next(iter(self.methodKeys), "custom"))
+        chosen = (next((key for key, name in self.methodKeys.items() if name == preset.method), AS_RAN)
+                  if preset is not None else next(iter(self.methodKeys), AS_RAN))
         methods = [Setting(key, "", OptionsProblem(self.methods[name]), fixed=Cut(name, LEFT_WIDTH - 9),
                            on=key == chosen, choice="method", available=not OptionsProblem(self.methods[name]))
                    for key, name in self.methodKeys.items()]
-        methods.append(Setting("custom", "", "" if self.methods else "No Conformer Search Methods: Config › Job "
-                               "Keylists", fixed="Custom" if preset is None or chosen != "custom" or not self.asRanMethod
-                               else "As It Ran", on=chosen == "custom", choice="method"))
+        # A re-run of a search whose options were no method as they stand: a choice of its own
+        if chosen == AS_RAN:
+            methods.append(Setting(AS_RAN, "", "", fixed="As It Ran", on=True, choice="method"))
         methods[0].label = "Method"
-        options = self.methods[self.methodKeys[chosen]] if chosen in self.methodKeys else self.customOptions
+        self.lastMethod = chosen
+        fields = SplitOptions(self.BaseOptions(chosen) if preset is None else preset.options)
         charge = preset.charge if preset is not None else molecule.charge or 0
         multiplicity = preset.multiplicity if preset is not None else molecule.multiplicity or 1
         return [
@@ -112,13 +117,42 @@ class ConformerSearchScreen(Screen):
             Setting("charge", "Charge", value=str(charge), accepts=r"[\d-]"),
             Setting("multiplicity", "Multiplicity", value=str(multiplicity), accepts=r"\d"),
             *methods,
-            # The chosen method's options, so a small change is one edit (typing here chooses Custom)
-            Setting(OPTIONS_ROW, "  └ Options", value=options, accepts=TEXT, under="custom"),
+            *self.OptionRows(fields),
             Setting("constraints", "Constraints", fixed="None", opens=True),
             Setting("force", "Force Constant", value=f"{preset.forceConstant if preset else DEFAULT_FORCE_CONSTANT!r}",
                     unit="Eh/bohr^2", accepts=NUMBER),
             *ResourceRows(cpus=preset.cpus if preset is not None else None),
         ]
+
+    def OptionRows(self, fields: OptionFields) -> list[Setting]:
+        """CREST's options as rows under Method, filled from an option line (crest.SplitOptions): the level, the
+        solvent (the project's, or a name typed: empty is the gas phase), the values (empty: CREST's default), the
+        switches, and whatever else the line holds."""
+        project = fields.solvent == PROJECT_SOLVENT
+        return [
+            Setting("level", "  ├ Level", fixed=dict(LEVEL_CHOICES).get(fields.level, LEVEL_CHOICES[0][1]),
+                    options=tuple(label for _, label in LEVEL_CHOICES)),
+            Setting("solvent-project", "  ├ Solvent", fixed=self.ProjectSolventLabel(), on=project, choice="solvent"),
+            Setting("solvent-other", "", fixed="Other", on=not project, choice="solvent"),
+            Setting("solvent-name", "  │  └ ALPB Name", value="" if project else fields.solvent,
+                    accepts=SOLVENT_NAME, under="solvent-other"),
+            *(Setting(f"value-{flag}", f"  ├ {label}", value=fields.values.get(flag, ""), unit=unit, accepts=NUMBER)
+              for flag, label, unit in VALUE_OPTIONS),
+            *(Setting(f"flag-{flag}", label, on=flag in fields.flags) for flag, label in FLAG_OPTIONS),
+            Setting("other", "  └ Other Options", value=fields.other, accepts=TEXT),
+        ]
+
+    @staticmethod
+    def ProjectSolventLabel() -> str:
+        from ..solvent import Lookup, ProjectSolvent
+        name = ProjectSolvent()
+        return f"Project's ({Lookup(name).name if Lookup(name) else name})" if name else "Project's (None Set)"
+
+    def BaseOptions(self, chosen: str) -> str:
+        """The option line a method choice starts from: the method's, or (As It Ran) the options the re-run ran with."""
+        if chosen in self.methodKeys:
+            return self.methods[self.methodKeys[chosen]]
+        return self.preset.options if self.preset is not None else ""
 
     @property
     def asRanMethod(self) -> bool:
@@ -175,13 +209,39 @@ class ConformerSearchScreen(Screen):
 
     # ─── The search ───────────────────────────────────────────────────
 
+    def RowFields(self) -> OptionFields:
+        """The option rows as OptionFields."""
+        settings = self.settings
+        level = next((flag for flag, label in LEVEL_CHOICES if label == settings.Row("level").setting.fixed), "")
+        solvent = (PROJECT_SOLVENT if settings.Chosen("solvent") == "solvent-project"
+                   else settings.Row("solvent-name").value.strip())
+        return OptionFields(level, solvent, {flag: settings.Row(f"value-{flag}").value.strip()
+                                             for flag, *_ in VALUE_OPTIONS},
+                            {flag for flag, _ in FLAG_OPTIONS if settings.Row(f"flag-{flag}").on},
+                            settings.Row("other").value.strip())
+
+    def FillRows(self, options: str) -> None:
+        """The option rows set from an option line (a method just chosen)."""
+        settings, fields = self.settings, SplitOptions(options)
+        settings.Row("level").setting.fixed = dict(LEVEL_CHOICES).get(fields.level, LEVEL_CHOICES[0][1])
+        project = fields.solvent == PROJECT_SOLVENT
+        for key, on in (("solvent-project", project), ("solvent-other", not project)):
+            settings.Row(key).on = on
+        settings.Row("solvent-name").SetValue("" if project else fields.solvent)
+        for flag, *_ in VALUE_OPTIONS:
+            settings.Row(f"value-{flag}").SetValue(fields.values.get(flag, ""))
+        for flag, _ in FLAG_OPTIONS:
+            settings.Row(f"flag-{flag}").on = flag in fields.flags
+        settings.Row("other").SetValue(fields.other)
+        settings.ShowAll()
+
     def Options(self) -> tuple[str, str]:
-        """(the method's label, CREST's options) for the chosen row."""
+        """(the method's label, CREST's options): the chosen method's name, 'Name (Edited)' once its rows differ from
+        it, and the option line the rows make."""
         chosen = self.settings.Chosen("method")
-        if chosen in self.methodKeys:
-            name = self.methodKeys[chosen]
-            return name, self.methods[name]
-        return ("As It Ran" if self.asRanMethod else CUSTOM), " ".join(self.settings.Row(OPTIONS_ROW).value.split())
+        options = JoinOptions(self.RowFields())
+        name = self.methodKeys.get(chosen) or (self.preset.method if self.preset is not None else "As It Ran")
+        return (name if SameOptions(options, self.BaseOptions(chosen)) else f"{name} (Edited)"), options
 
     def ConstraintsSummary(self) -> str:
         lines = ConstraintLines(self.constraints)
@@ -195,7 +255,10 @@ class ConformerSearchScreen(Screen):
         """Re-validate live: the settings as one CrestJob (crest.py, cu -crest's too), what it writes, and what ⏎ would
         submit, or the first thing stopping it."""
         settings, errors = self.settings, []
-        name = settings.Row("name").value.strip()
+        typed = settings.Row("name").value.strip()
+        # Every search ends in _CREST (crest.JobName), so its output feeds the species' data file
+        name = JobName(typed) if typed else ""
+        settings.Row("name").SetMeaning(f"Written As {name}" if name and name != typed else "")
         if not name:
             errors.append("Enter a Name")
         elif (Path.cwd() / fileCreation(name, Defaults.outputExtension)).exists():
@@ -207,12 +270,22 @@ class ConformerSearchScreen(Screen):
             errors.append("Charge and Multiplicity Must Be Whole Numbers")
         settings.Row("multiplicity").SetMeaning(f"--uhf {multiplicity - 1}" if multiplicity else "")
         label, options = self.Options()
+        chosen = settings.Chosen("method")
         for key, method in self.methodKeys.items():
             settings.Row(key).SetMeaning(OptionsProblem(self.methods[method])
-                                         or (Cut(self.methods[method], LEFT_WIDTH - 7)
-                                             if key == settings.Chosen("method") else ""))
-        if settings.Chosen("method") == "custom" and not options:
-            errors.append("Enter CREST's Options")
+                                         or ("Edited" if key == chosen and label.endswith("(Edited)") else ""))
+        # Each row against the method it came from: what changed, and an empty value's CREST default
+        base = SplitOptions(self.BaseOptions(chosen))
+        current = self.RowFields()
+        baseLevel = dict(LEVEL_CHOICES).get(base.level, LEVEL_CHOICES[0][1])
+        settings.Row("level").SetMeaning("" if current.level == base.level else f"Was {baseLevel}")
+        for flag, *_ in VALUE_OPTIONS:
+            was, now = base.values.get(flag, ""), current.values.get(flag, "")
+            settings.Row(f"value-{flag}").SetMeaning(
+                (f"CREST's Default (Was {was})" if was else "CREST's Default") if not now
+                else "" if now == was else f"Was {was or 'CREST Default'}")
+        settings.Row("solvent-name").SetMeaning("" if settings.Chosen("solvent") == "solvent-project"
+                                                or current.solvent else "Gas Phase")
         constraintsRow = settings.Row("constraints")
         if constraintsRow.setting.fixed != self.ConstraintsSummary():
             constraintsRow.setting.fixed = self.ConstraintsSummary()
@@ -274,20 +347,14 @@ class ConformerSearchScreen(Screen):
     # ─── Events ───────────────────────────────────────────────────────
 
     def on_input_changed(self, event) -> None:
-        row = getattr(event.input, "row", None)
-        if row is not None and row.setting.key == OPTIONS_ROW and row.typing:
-            self.customOptions = event.value
         self.Refresh()
 
     def on_settings_list_changed(self, event: SettingsList.Changed) -> None:
-        # The Options row follows the chosen method (Custom's as last typed), never while it is typed in
-        row = self.settings.Row(OPTIONS_ROW)
+        # A method just chosen fills the option rows from its line (any edits to the last one are replaced)
         chosen = self.settings.Chosen("method")
-        if not row.target.has_focus:
-            options = self.methods[self.methodKeys[chosen]] if chosen in self.methodKeys else (
-                self.customOptions or row.value)
-            if row.value != options:
-                row.SetValue(options)
+        if chosen != self.lastMethod:
+            self.lastMethod = chosen
+            self.FillRows(self.BaseOptions(chosen))
         self.Refresh()
 
     def on_settings_list_open(self, event: SettingsList.Open) -> None:
@@ -345,9 +412,12 @@ class ConformerSearchScreen(Screen):
     def action_help(self) -> None:
         Notice(self.app, "Help", "\n".join([
             "↑/↓ Move Between Settings (Type to Change a Value)",
-            "←/→ or space Choose the Method; the Chosen One Shows Its Options Under It",
-            "Method: the Conformer Search Methods (Config › Job Keylists), or Custom: CREST's Options Typed in Full "
-            "(CompUtils Writes --T, --chrg, --uhf and --cinp Itself)",
+            "←/→ or space Choose the Method: Its Options Fill the Rows Under It; Change Any Row and the Method "
+            "Reads Edited",
+            "Method: the Conformer Search Methods (Config › Job Keylists); CompUtils Writes --T, --chrg, --uhf and "
+            "--cinp Itself",
+            "Level: ←/→ or space; Solvent: the Project's (project.toml solvent) or an ALPB Name Typed (Empty Is "
+            "the Gas Phase); an Empty Value Leaves It to CREST's Default; Other Options: Any Other Flags, As Typed",
             "Name: the Species' Search (8a_CREST), So Its Output Feeds 8a's Data File; One That Has Run Here Is "
             "Re-run as Its Next Attempt (8a_CREST_re)",
             "Multiplicity: CREST Takes Unpaired Electrons (--uhf), Multiplicity − 1; xTB Has No Broken-Symmetry "

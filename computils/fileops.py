@@ -96,6 +96,89 @@ def ExtractFromText(text: str, extractor, *args, empty=None):
     with MapText(text) as data:
         return extractor(data, *args)
 
+# ─── cu -scrape: a bounded search of any file, for a value no extractor reads yet ───
+# Every search is forward (finditer): a person's pattern is never run REVERSE, which retries a trailing `.*` at every
+# position. The bounds keep a report small whatever the file: matches kept, lines around each, a block's length.
+SCRAPE_MAX_MATCHES = 100
+SCRAPE_MAX_CONTEXT = 200
+SCRAPE_MAX_LINES   = 300
+
+def ScrapePattern(text: str, case: bool = False) -> tuple:
+    """(the compiled bytes pattern, '') or (None, why it isn't one). Multiline: ^ and $ match at each line."""
+    try:
+        return regex.compile(text.encode(), regex.MULTILINE | (0 if case else regex.IGNORECASE)), ""
+    except regex.error as error:
+        return None, str(error)
+
+def _LineEnd(data, offset: int) -> int:
+    end = data.find(b"\n", offset)
+    return len(data) if end < 0 else end
+
+def _LinesBack(data, start: int, count: int) -> int:
+    for _ in range(count):
+        if start == 0:
+            break
+        start = data.rfind(b"\n", 0, start - 1) + 1
+    return start
+
+def _LinesForward(data, end: int, count: int) -> int:
+    for _ in range(count):
+        if end >= len(data):
+            break
+        end = _LineEnd(data, end + 1)
+    return end
+
+def ExtractMatches(data, pattern, first: int | None = None, last: int | None = 1, after: int = 0, before: int = 0,
+                   until=None) -> dict:
+    """The lines matching a compiled pattern (ScrapePattern): the first N (stops there), the last N, or every one
+    (both None; at most SCRAPE_MAX_MATCHES). One entry per line, whole lines, with `before`/`after` lines around it, or
+    its block through the first later line matching `until` (at most SCRAPE_MAX_LINES lines: `truncated`). Each entry:
+    {line (1-based), text, groups (captured as printed: a dict when the pattern names them)}. `total` counts every
+    matching line, except with `first` (--earliest: the search stops early)."""
+    from collections import deque
+    limit = first or last or SCRAPE_MAX_MATCHES
+    kept, total, lineStart = deque(maxlen=last) if last else [], 0, -1
+    for match in pattern.finditer(data, concurrent=True):
+        start = data.rfind(b"\n", 0, match.start()) + 1
+        if start == lineStart:
+            continue
+        lineStart, total = start, total + 1
+        if last or len(kept) < limit:
+            kept.append(match)
+        if first and len(kept) >= first:
+            break
+    matches, truncated, counted, newlines = [], False, 0, 0
+    for match in kept:
+        start = data.rfind(b"\n", 0, match.start()) + 1
+        end = _LineEnd(data, max(match.start(), match.end() - 1))
+        newlines += data[counted:start].count(b"\n")
+        counted = start
+        if until is not None:
+            ending = until.search(data, pos=min(end + 1, len(data)), concurrent=True)
+            stop = _LineEnd(data, ending.start()) if ending else len(data)
+            cut = _LinesForward(data, end, SCRAPE_MAX_LINES - 1)
+            if cut < stop:
+                stop, truncated = cut, True
+            end = stop
+        start, end = _LinesBack(data, start, before), _LinesForward(data, end, after)
+        groups = ({name: _Text(value) for name, value in match.groupdict().items()} if pattern.groupindex
+                  else [_Text(value) for value in match.groups()])
+        text = bytes(data[start:end]).decode("utf-8", errors="replace").replace("\r", "")
+        # The matching line's number (lines shown before it come first in text)
+        entry = {"line": newlines + 1, "text": text}
+        if groups:
+            entry["groups"] = groups
+        matches.append(entry)
+    found = {"matches": matches}
+    if not first:
+        found["total"] = total
+    if truncated:
+        found["truncated"] = True
+    return found
+
+def _Text(value: bytes | None) -> str | None:
+    return None if value is None else value.decode("utf-8", errors="replace")
+
 # Properly handle line-skipping in extractions
 def SkipInMap(data, match, skipLines: int = 0, fromStart: bool = False) -> None:
     if not fromStart:
@@ -111,8 +194,8 @@ def SkipInMap(data, match, skipLines: int = 0, fromStart: bool = False) -> None:
 # ORCA's banner is line 2, Gaussian's 'Entering Gaussian System' line 1
 PROGRAM_HEADER_BYTES = 4096
 ORCA_HEADER = r"\* O   R   C   A \*"
-# CREST's banner (line 3 of its output, inside its box)
-CREST_HEADER = r"C R E S T"
+# CREST's banner, inside its box: 2.x spells its name out, 3.x draws it in ASCII art; both say what it is
+CREST_HEADER = r"C R E S T|Conformer-Rotamer Ensemble Sampling Tool"
 # CREST's program key: it has no input file of its own (crest.py: an .xyz and the options it runs with), so a name in the
 # program slot where Gaussian and ORCA have their input extensions
 CREST_PROGRAM = "CREST"

@@ -81,6 +81,7 @@ class TrackedJob:
     endedAt:     float = 0.0
     notified:    bool  = False
     leftQueue:   bool  = False     # squeue no longer lists it (a Neva-Touch Scheduler job is watched until then)
+    cancelled:   bool  = False     # cancelled through CompUtils (CancelJobs): recorded at once, and never followed
     # The Neva-Touch Scheduler (nevatouch.py): the step this job's hook takes once it ends (NTS_SP, NTS_DONE; '' off)
     # and the hook's command (a stalker runs it for a step the hook didn't take), set at submission. The rest is what
     # the step did, written only through UpdateTracked (straight into the store), so no stalker's copy overwrites it
@@ -190,7 +191,7 @@ STEP_FIELDS = ("nextJob", "stepBy", "stepOutcome", "stepNote", "stepStage", "ste
 
 def _Sync(job: TrackedJob, stored: TrackedJob) -> None:
     """Brings a held copy's shared fields up to the stored record's."""
-    for name in ("notified", "leftQueue", *STEP_FIELDS):
+    for name in ("notified", "leftQueue", "cancelled", *STEP_FIELDS):
         setattr(job, name, getattr(stored, name))
 
 def _SaveStore(jobs: list[TrackedJob] = (), dropped: set[str] = frozenset()) -> None:
@@ -204,6 +205,7 @@ def _SaveStore(jobs: list[TrackedJob] = (), dropped: set[str] = frozenset()) -> 
                 kept = job if _Progress(job) >= _Progress(old) else old
                 kept.notified = old.notified or job.notified
                 kept.leftQueue = old.leftQueue or job.leftQueue
+                kept.cancelled = old.cancelled or job.cancelled
                 if kept is job:
                     for name in STEP_FIELDS:
                         setattr(job, name, getattr(old, name))
@@ -448,7 +450,8 @@ def _FallbackDue(job: TrackedJob) -> bool:
     SP) or its last stage ran out of optimizer steps (a re-run), and its hook (which runs inside the job, so it is over
     by now) took no step or couldn't submit: refused (e.g. no sbatch on compute nodes), killed, or never run."""
     normal = bool(job.termination) and job.termination != Defaults.terminationVariants[2]
-    return (job.nevaTouch == NTS_SP and job.leftQueue and (normal or job.stages[job.stage].outOfSteps)
+    return (job.nevaTouch == NTS_SP and job.leftQueue and not job.cancelled
+            and (normal or job.stages[job.stage].outOfSteps)
             and bool(job.hookCommand) and not job.nextJob and not job.fallbackTried and job.stepOutcome in ("", FAILED))
 
 def _FireFallbacks(jobs: list[TrackedJob]) -> None:
@@ -515,7 +518,8 @@ def EndingMessage(job: TrackedJob, termination: str | None = None) -> str:
     """A job's ending, as one Telegram message: how it ended, then its Neva-Touch Scheduler step. The one builder for
     the stalker and the Neva-Touch Scheduler's hook (termination: the hook's own reading, before any stalker's)."""
     termination = job.termination if termination is None else termination
-    head = (f"Job {job.name}{_OnLocation(job)} has finished via {EndingPhrase(termination)}." if termination
+    head = (f"Job {job.name}{_OnLocation(job)} was cancelled (cu -cancel)." if job.cancelled
+            else f"Job {job.name}{_OnLocation(job)} has finished via {EndingPhrase(termination)}." if termination
             else f"Job {job.name}{_OnLocation(job)} left the queue without a termination line.")
     # A program's own report of its ending (CREST: the conformers it kept)
     report = job.stages[job.stage].report if termination and job.program == CREST_PROGRAM else ""
@@ -592,6 +596,8 @@ def HeadLine(job: TrackedJob) -> tuple[str, str]:
     count = len(job.stages)
     stages = f"{count} stage{'s' if count != 1 else ''}"
     if job.ended:
+        if job.cancelled:
+            return f"Job {job.name} was cancelled (cu -cancel).", "warning"
         if not job.termination:
             return (f"Job {job.name} left the queue without a termination line (cancelled, out of time, or no output "
                     f"written).", "warning")
@@ -654,7 +660,8 @@ def JobRecord(job: TrackedJob) -> dict:
                   ("stable", stage.stable), ("outOfSteps", stage.outOfSteps or None), ("report", stage.report))
                   if value not in ("", None)}
                          for number, stage in enumerate(job.stages, job.firstStage)],
-              "nevaTouch": NevaTouchLine(job) if job.nevaTouch else "", "nextJob": job.nextJob}
+              "nevaTouch": NevaTouchLine(job) if job.nevaTouch else "", "nextJob": job.nextJob,
+              "cancelled": job.cancelled or None}
     return {key: value for key, value in record.items() if value not in ("", None, [])}
 
 
@@ -685,6 +692,59 @@ def MatchJobs(names: list[str], jobs: list[TrackedJob]) -> dict[str, TrackedJob]
             agent.Skip(name, "No tracked job has that ID or name")
         chosen.update({job.key: job for job in matches})
     return chosen
+
+
+def CancelJobs(jobs: list[TrackedJob]) -> tuple[list[TrackedJob], list[tuple[TrackedJob, str]]]:
+    """Cancels tracked jobs (scancel, one call per job, so one already gone doesn't hide the rest) and records each at
+    once: cancelled, read to its end (the running stage Stopped, the rest Not Reached), saved, notified as any ending
+    is (the notification settings decide), and its data file written. The Neva-Touch Scheduler takes no step after a
+    cancelled job. The one canceller: `cu -cancel` and the Job Stalker's c. Returns (cancelled, [(job, why not)])."""
+    cancelled, failures = [], []
+    for job in jobs:
+        command = ["scancel", *(["-M", job.cluster] if job.cluster else []), job.jobID]
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+            problem = "" if result.returncode == 0 else (result.stderr.strip() or f"scancel exited {result.returncode}")
+        except (OSError, subprocess.SubprocessError) as error:
+            problem = f"scancel couldn't run: {error}"
+        if problem:
+            failures.append((job, problem))
+            continue
+        job.cancelled = True
+        if not job.ended:
+            _ReadProgress(job, final=True)
+        cancelled.append(job)
+    if cancelled:
+        _SaveStore(cancelled)
+        NotifyEndings(cancelled)
+        RecordEndings(cancelled)
+    return cancelled, failures
+
+
+def Cancel(names: list[str]) -> None:
+    """`cu -cancel`: cancels the named live jobs (IDs, names, or CLUSTER:ID), asked first (key confirm-cancel)."""
+    from . import agent
+    from .prompts import AskBool
+    live = []
+    for job in MatchJobs(names, LoadTracked()).values():
+        if job.ended:
+            agent.Skip(job.name, "Already ended")
+        else:
+            live.append(job)
+    if not live:
+        return
+    listed = ", ".join(f"{job.name} (ID {job.jobID}, {job.state.title()})" for job in live)
+    if not AskBool(f"Cancel {listed}?", "n", key="confirm-cancel"):
+        for job in live:
+            agent.Skip(job.name, "Not cancelled", show=False)
+        console.print("[info]Nothing cancelled.[/info]")
+        return
+    cancelled, failures = CancelJobs(live)
+    for job, problem in failures:
+        agent.Skip(job.name, f"scancel refused it: {problem}")
+    if cancelled:
+        console.print(f"[good]Cancelled {', '.join(job.name for job in cancelled)}.[/good]")
+        agent.Result({"cancelled": [job.name for job in cancelled]})
 
 
 def Dismiss(names: list[str]) -> None:
@@ -730,7 +790,7 @@ def _StepTaken(job: TrackedJob) -> bool:
 
 def _WaitDone(job: TrackedJob) -> bool:
     """Whether a wait is over for a job: it's no longer watched, or its Neva-Touch Scheduler step is already taken."""
-    return not Watched(job) or _StepTaken(job)
+    return not Watched(job) or _StepTaken(job) or job.cancelled
 
 def _StoreStamp() -> int:
     """When the store was last written (0: not there). The Neva-Touch Scheduler's hooks run on compute nodes and share
