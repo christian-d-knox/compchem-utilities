@@ -21,6 +21,8 @@ to be (a minimum, a transition state, a closed- or open-shell singlet) is the hu
      ones came with the checkpoint, not from the stage's own route.
    - `spin` (CSS, OSS or OPEN), with `spinReason`; `s2`, the last `<S**2>`; `stability`, a stability analysis's
      verdict (`false`: the wave function didn't stabilize).
+   - On hand-written inputs (before `cu -r`), `-info` also reports `electronProblem` (impossible charge/multiplicity),
+     `cpus`, and `memoryGB`; `constraints` marked `inherited` catch ModRed-to-TS links missing `nofreeze`.
 
 3. Report to the human, per structure, what doesn't match what it should be. Never fix one on your own:
    - Out of steps, or an error termination: a re-run from the last geometry is mechanical. Preview it, then submit

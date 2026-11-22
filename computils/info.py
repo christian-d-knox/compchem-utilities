@@ -90,7 +90,11 @@ def FileFacts(path: Path, full: bool = True) -> dict:
                                for route in InputRoutes(data, program)]
         if molecule.multiplicity:
             facts["charge"], facts["multiplicity"] = _Number(molecule.charge), _Number(molecule.multiplicity)
-            spinState, reason = ClassifySpin(molecule, data)
+            if stages:
+                s2 = next((item["s2"] for item in reversed(stages) if "s2" in item), None)
+                spinState, reason = ClassifySpin(molecule, data, spinSquared=s2)
+            else:
+                spinState, reason = ClassifySpin(molecule, data)
             facts["spin"], facts["spinReason"] = spinState.name, reason
         if molecule.coordinateList:
             facts["atoms"], facts["formula"] = len(molecule.coordinateList), Formula(molecule.coordinateList)
@@ -156,15 +160,15 @@ def StageFacts(data, program: str, span: tuple[int, int, str], molecule: Molecul
         real = [value for value in frequencies if value > 0]
         if real:
             stage["lowestFrequency"] = real[0]
-    convergence = ExtractConvergence(data, start, end)
+    convergence = ExtractConvergence(data, start, end) if (checks is None or checks.optimizes) else None
     if convergence is not None:
         stage["convergence"] = {"met": convergence[0], "total": convergence[1]}
-    stability = ExtractStability(data, start, end)
+    stability = ExtractStability(data, start, end, program)
     if stability is not None:
         stage["stability"] = stability
-    if ExtractOutOfSteps(data, start, end):
+    if convergence is not None and ExtractOutOfSteps(data, start, end, program):
         stage["outOfSteps"] = True
-    spin = ExtractSpinContamination(data, start, end)
+    spin = ExtractSpinContamination(data, start, end, program)
     if spin is not None:
         stage["s2"] = spin
     if checks and checks.optimizes:
@@ -208,9 +212,15 @@ def _OptimizationFacts(data, program: str, span: tuple[int, int, str], molecule:
         if constraints:
             facts["constraints"] = constraints
         return facts
-    first, last = ExtractParameters(data, start, end, first=True), ExtractParameters(data, start, end)
-    scans = {(COORDINATES.get(kind, kind), tuple(sorted(atoms))): extra
-             for kind, atoms, action, extra in ExtractModRedInput(data, start, end) if action == "S"}
+    vector, eigenvalue = ExtractTSEigenvector(data, start, end) if checks.optKind == "OptTS" else ([], None)
+    tsNames = {name for name, _ in vector}
+    first = ExtractParameters(data, start, end, first=True, onlyNames=tsNames or None, onlyHeld=True)
+    needLast = tsNames | set(first)
+    last = ExtractParameters(data, start, end, onlyNames=needLast) if needLast else {}
+    hasScan = any(info.lower().startswith("scan") for _, _, _, info in first.values())
+    scans = ({(COORDINATES.get(kind, kind), tuple(sorted(atoms))): extra
+              for kind, atoms, action, extra in ExtractModRedInput(data, start, end) if action == "S"}
+             if hasScan else {})
     constraints = []
     for name, (letter, atoms, value, info) in first.items():
         held = info.lower()
@@ -230,7 +240,6 @@ def _OptimizationFacts(data, program: str, span: tuple[int, int, str], molecule:
     if constraints:
         facts["constraints"] = constraints
     if checks.optKind == "OptTS":
-        vector, eigenvalue = ExtractTSEigenvector(data, start, end)
         named = []
         for name, coefficient in vector:
             row = last.get(name) or first.get(name)
@@ -245,14 +254,16 @@ def _OptimizationFacts(data, program: str, span: tuple[int, int, str], molecule:
 
 
 ORCA_CONSTRAINT_ATOMS = {"B": 2, "A": 3, "D": 4, "C": 1}
+_ORCA_CONSTRAINT_BLOCK_RE = regex.compile(r"(?is)%geom\b.*?\bconstraints\b(.*?)\bend\b")
+_ORCA_CONSTRAINT_ENTRY_RE = regex.compile(r"\{([^}]*)\}")
 
 
 def OrcaConstraints(inputText: str) -> list[tuple[str, tuple[int, ...], float | None]]:
     """An ORCA input's %geom Constraints, as written: (letter, atoms (ORCA's own, from 0), value or None), e.g.
     '{B 0 3 2.05 C}' -> ('B', (0, 3), 2.05)."""
-    block = regex.search(r"(?is)%geom\b.*?\bconstraints\b(.*?)\bend\b", inputText or "")
+    block = _ORCA_CONSTRAINT_BLOCK_RE.search(inputText or "")
     found = []
-    for entry in regex.findall(r"\{([^}]*)\}", block.group(1) if block else ""):
+    for entry in _ORCA_CONSTRAINT_ENTRY_RE.findall(block.group(1) if block else ""):
         tokens = entry.split()
         if not tokens or tokens[0].upper() not in ORCA_CONSTRAINT_ATOMS or tokens[-1].upper() != "C":
             continue

@@ -75,9 +75,12 @@ class Species:
         return next((flag for flag, blocks in self.Flags(quasiHarmonic) if blocks), None)
 
 
+_NATURAL_SPLIT_RE = regex.compile(r"(\d+)")
+
+
 def NaturalKey(name: str) -> list:
     # 8a, 8b, 10 (not 10, 8a, 8b)
-    return [int(part) if part.isdigit() else part.lower() for part in regex.split(r"(\d+)", name)]
+    return [int(part) if part.isdigit() else part.lower() for part in _NATURAL_SPLIT_RE.split(name)]
 
 
 def FindSpecies(folder: Path, suffix: str) -> list[Species]:

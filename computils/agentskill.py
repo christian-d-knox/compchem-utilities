@@ -8,7 +8,7 @@ When a feature is added (a flag, an Action, a TUI item, a question), the check f
 (or is declared human-only, with why), its questions have keys, and any recipe naming it still parses. The skill's
 digest then changes, every --json report carries the new one, and the agent regenerates its skill on its next call.
 """
-import hashlib, sys
+import functools, hashlib, sys
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -43,7 +43,8 @@ LOCAL_PLACEHOLDER = None
 @dataclass(frozen=True)
 class AgentCommand:
     """One command as agents see it. flags: the argparse dests it owns (its action flag first). tui: the TUI items it
-    mirrors. agent False: a person's only (why says so); hidden: never typed (written into job scripts)."""
+    mirrors. agent False: a person's only (why says so); hidden: never typed (written into job scripts). summary: short
+    1-line overview for SKILL.md (falls back to purpose when empty)."""
     key:       str
     flags:     tuple[str, ...]
     action:    Action | None
@@ -55,6 +56,7 @@ class AgentCommand:
     agent:     bool             = True
     why:       str              = ""
     hidden:    bool             = False
+    summary:   str              = ""
 
 
 COMMANDS = [
@@ -67,7 +69,8 @@ COMMANDS = [
                  "(Opt+Freq then SP in one file) gives each stage's results in `stages`.",
                  "-info '*.out' --json", "One record per file (info.FileFacts): a one-stage output's results in the "
                  "record, a staged one's in `stages` (an input's `stages` only lists what each runs), and dataFile; "
-                 "next: cu -re / cu -sp suggestions."),
+                 "next: cu -re / cu -sp suggestions.",
+                 summary="Parse outputs/inputs: status, charge/mult, spin, route, energy, freq, convergence, constraints, tsEigenvector."),
     AgentCommand("scrape", ("scrape", "find", "latest", "earliest", "all", "after", "before", "until", "case"),
                  Action.SCRAPE,
                  "Lines of a file matching a regular expression, for a value -info doesn't report (an output read once, "
@@ -77,13 +80,15 @@ COMMANDS = [
                  "-scrape 8a_SP.out --find 'T1 diagnostic\\s+\\.*\\s+(\\S+)' --json",
                  "One record per file: matches [{line, text, groups}] (groups as captured), total (every matching "
                  "line, except with --earliest), truncated when a block hit the line limit. A file without a match is "
-                 "skipped (exit 5 when none matched)."),
+                 "skipped (exit 5 when none matched).",
+                 summary="Bounded regex search in files (--earliest/--latest/--all, --after/--before/--until) for values -info omits."),
     AgentCommand("cancel", ("cancel",), Action.CANCEL,
                  "Cancel tracked jobs (IDs, names, or CLUSTER:ID): never scancel. The tracker records it at once, the "
                  "Neva-Touch Scheduler takes no step after a cancelled job, and the ending is notified as any is. "
                  "Asked first (confirm-cancel).",
                  "-cancel 8a --json", "results[0]: {cancelled: [names]}; a job already ended, or one scancel refused, "
-                 "is skipped with why.", ("confirm-cancel",), ("screen-stalker",)),
+                 "is skipped with why.", ("confirm-cancel",), ("screen-stalker",),
+                 summary="Cancel tracked jobs (IDs/names) via cu so tracker and NTS stay in sync (never scancel)."),
     AgentCommand("xyz", ("xyz", "smiles", "rdkit_conformers", "rdkit_conformer"), Action.XYZ,
                  "Write each file's last geometry (an output's; an input's own; Gaussian or ORCA) as NAME.xyz here, "
                  "e.g. for figures or another program. Or a SMILES' 3D geometry: -xyz --smiles 'SMILES' --name NAME "
@@ -91,12 +96,14 @@ COMMANDS = [
                  "-xyz --smiles 'CC(=O)OC1CCCC1' --name cpa --json",
                  "written: the .xyz files; with --smiles, results[0]: atoms, charge, multiplicity, rdkitConformer "
                  "and each RDKit conformer's rank and deltaE (kcal/mol).",
-                 ("replace-xyz",), (f"action-{Action.XYZ.value}",)),
+                 ("replace-xyz",), (f"action-{Action.XYZ.value}",),
+                 summary="Extract final geometry as NAME.xyz from outputs/inputs, or build 3D conformers from --smiles."),
     AgentCommand("methods", ("methods",), Action.METHODS,
                  "The Optimization, Benchmark and Conformer Search Methods in force here (project, else global): pick "
                  "-opt's and -crest's --method from these. They differ per project: list them in each folder.",
                  "-methods --json", "One record per section: its level and each method's name, route (a Conformer "
-                 "Search Method: its options, level and solvation), program, problem."),
+                 "Search Method: its options, level and solvation), program, problem.",
+                 summary="List active Optimization, Benchmark (SP), and Conformer Search methods (project, else global)."),
     AgentCommand("opt", ("optimize", "method", "route", "charge", "mult", "spin", "name", "cpus", "memory", "modred",
                          "then_sp", "sp_cpus", "sp_memory", "sp_method", "sp_route", "sp_wall_time", "sp_partition",
                          "sp_cluster", "sp_nbo", "sp_checkpoint", "smiles", "rdkit_conformers", "rdkit_conformer"),
@@ -111,7 +118,8 @@ COMMANDS = [
                  "-opt 8a.xyz --method wb97xd --charge 0 --mult 1 --then-sp --dry-run --json",
                  "The input written, its method, charge, multiplicity, spin, resources and scheduled SP (with "
                  "--smiles: rdkitConformer and each RDKit conformer's rank and deltaE); submitted[].",
-                 ("method", "charge", "mult", "replace-input"), ("builder-opt",)),
+                 ("method", "charge", "mult", "replace-input"), ("builder-opt",),
+                 summary="Build/submit optimization of one molecule (file or --smiles); --then-sp queues SP via NTS."),
     AgentCommand("crest", ("crest", "method", "route", "charge", "mult", "name", "cpus", "memory", "constrain",
                            "force_constant", "smiles", "rdkit_conformers", "rdkit_conformer"),
                  Action.CREST,
@@ -129,17 +137,20 @@ COMMANDS = [
                  "One result per search: job, method, options, level, solvation, charge, multiplicity, uhf, the crest "
                  "command, the constraints file's lines (each held value), resources, output and results folder; "
                  "written[], submitted[].",
-                 ("crest-method", "charge", "mult"), ("builder-crest",)),
+                 ("crest-method", "charge", "mult"), ("builder-crest",),
+                 summary="Build/submit tracked CREST conformer search (file or --smiles) with --method/--route and --constrain."),
     AgentCommand("sp", ("singlePoint",), Action.SINGLE_POINT,
                  "Write and submit each output's single point (Single Point Methods' first entry; -ovr N picks "
                  "another, --route gives a route of your own; --cpus N and --memory GB set its resources).",
                  "-sp 8a.out --dry-run --json", "written[], submitted[], skipped[] with reasons.",
-                 tui=(f"action-{Action.SINGLE_POINT.value}",)),
+                 tui=(f"action-{Action.SINGLE_POINT.value}",),
+                 summary="Write/submit single points for outputs (first SP method, -ovr N, or --route; --cpus/--memory)."),
     AgentCommand("bench", ("bench",), Action.BENCHMARK,
                  "Write and submit a benchmark suite: one single point per Benchmark Method (-ovr N starts at method "
                  "N; --cpus N and --memory GB set every job's resources, memory otherwise as each method needs).",
                  "-b 8a.out --dry-run --json", "written[], submitted[], skipped[] per method variant.",
-                 tui=(f"action-{Action.BENCHMARK.value}",)),
+                 tui=(f"action-{Action.BENCHMARK.value}",),
+                 summary="Write/submit one single point per Benchmark Method (-ovr N, --cpus/--memory)."),
     AgentCommand("rerun", ("rerun", "route", "method", "constrain", "force_constant"), Action.RERUN,
                  "Re-run jobs from their last geometry, with the route they ran, or a corrected one (--route ROUTE, "
                  "or --method NAME: an Optimization Method). This is how a bad or mistaken output is fixed: the "
@@ -152,22 +163,30 @@ COMMANDS = [
                  "(as -crest takes them).",
                  "-re 8a.out --route 'opt=(ts,calcfc,noeigen) freq b3lyp/def2svp' --dry-run --json",
                  "written[] (and each chain file), submitted[].",
-                 tui=(f"action-{Action.RERUN.value}",)),
+                 tui=(f"action-{Action.RERUN.value}",),
+                 summary="Re-run failed/mistaken Gaussian, ORCA, or CREST jobs as _re/_re2 keeping <root>.cudf (-opt/--then-sp supported)."),
     AgentCommand("run", ("run",), Action.RUN,
-                 "Submit inputs exactly as written (each gets a job script; every job is tracked).",
-                 "-r 8a.gjf --json", "submitted[].", tui=(f"action-{Action.RUN.value}",)),
-    AgentCommand("st", ("stalk", "dismiss", "wait"), Action.STALK,
+                 "Submit hand-written inputs as written (each gets a job script sized from its %nprocshared/%mem, "
+                 "falling back to config defaults with a warning if missing; missing %nprocshared leaves Gaussian on "
+                 "one core). Runs without charge/mult checks or an automatic Neva-Touch Scheduler single point (run "
+                 "cu -sp after completion). Inspect with cu -info first for electronProblem and check any "
+                 "Geom=AllCheck/Check link after ModRed for nofreeze; every job is tracked.",
+                 "-r 8a.gjf --json", "submitted[].", tui=(f"action-{Action.RUN.value}",),
+                 summary="Submit hand-written inputs as written (inspect with -info first for electronProblem and ModRed nofreeze)."),
+    AgentCommand("st", ("stalk", "dismiss", "wait", "wait_mode"), Action.STALK,
                  "The tracked jobs: with --json (or with nobody at a terminal) one snapshot, never a loop (a ping: "
                  "queue state, stage by stage progress, how each ended, the Neva-Touch Scheduler's step). --wait JOB... "
-                 "waits until one of those jobs ends, a Neva-Touch Scheduler step within seconds (run it as a background command, "
-                 "then end your turn). --dismiss "
-                 "stops tracking jobs (IDs, names, or 'ended').",
-                 "-st --wait 24769828 --json",
+                 "waits in the background according to --wait-mode: 'chain' (default: wakes when any job's full "
+                 "Neva-Touch Scheduler chain finishes, suppressing intermediate stage wakeups), 'all' (wakes only once "
+                 "every waited job/chain terminates, normal or error), or 'any' (wakes as soon as any individual job "
+                 "ends). --dismiss stops tracking jobs (IDs, names, or 'ended').",
+                 "-st --wait 24769828 --wait-mode all --json",
                  "One record per job: state, headline, stages (status, convergence, stable), nevaTouch. With --wait, "
-                 "first {wait: {reason (ended, time limit, dismissed), ended: [{name, jobId, message}], waiting: [job "
-                 "IDs still running, the Neva-Touch Scheduler's new jobs included]}}, and next: the command to wait "
-                 "again, and -info for a job that didn't end normally.",
-                 ("dismiss-live", "stalk-loop"), ("screen-stalker",)),
+                 "first {wait: {mode, reason (ended, time limit, dismissed), ended: [{name, jobId, message, chain?}], "
+                 "waiting: [job IDs still running, the Neva-Touch Scheduler's new jobs included]}}, and next: the "
+                 "command to wait again, and -info for a job that didn't end normally.",
+                 ("dismiss-live", "stalk-loop"), ("screen-stalker",),
+                 summary="Snapshot tracked jobs, background --wait (--wait-mode chain|all|any), or --dismiss ended jobs."),
     AgentCommand("gv", ("goodvibes", "qh", "cutoff", "entropy", "temperature", "concentration", "scale", "spc",
                         "gv_allow", "gv_keys"), Action.GOODVIBES,
                  "Run GoodVibes on structures (their _SP files found by name) and convert to Excel. Without flags and "
@@ -180,13 +199,15 @@ COMMANDS = [
                  "with its temperature and concentration.",
                  ("gv-qh", "gv-use-cutoff", "gv-cutoff", "gv-use-temperature", "gv-temperature", "gv-use-concentration",
                   "gv-concentration", "gv-use-scale", "gv-scale", "gv-use-spc", "gv-custom-spc", "gv-spc", "gv-use-extra",
-                  "gv-extra"), (f"action-{Action.GOODVIBES.value}",)),
+                  "gv-extra"), (f"action-{Action.GOODVIBES.value}",),
+                 summary="Run GoodVibes (consistent method/solvation/geometry check first) and export GoodVibes.xlsx."),
     AgentCommand("si", ("si", "opt_label", "sp_label", "phase", "free", "output", "species"), Action.SI_SCRAPER,
                  "Write SI_coordinates.txt (energies and coordinates for a paper's SI) from this folder, as the TUI's SI "
                  "Scraper does. Stops (exit 6) when qh-G needs a GoodVibes run first: run report.next, then again.",
                  "-si --opt-label 'B3LYP-D3/6-31G(d)' --sp-label 'M06-2X/def2-TZVP' --json",
                  "One record per species written: opt and SP energies, enthalpies and free energies (Hartree).",
-                 ("si-opt-label", "si-sp-label", "replace-si"), ("scraper-si",)),
+                 ("si-opt-label", "si-sp-label", "replace-si"), ("scraper-si",),
+                 summary="Write SI_coordinates.txt and list.txt for a folder's finished species (requires current GoodVibes)."),
     AgentCommand("cube", ("cube",), Action.CUBE,
                  "Generate cube files from .chk/.fchk files (cubegen jobs; not tracked).",
                  "-cu 8a.chk --answer 'cube-options=Den Spin' --json", "submitted[].",
@@ -200,7 +221,8 @@ COMMANDS = [
                  "The CompUtils conda environments' status; 'refresh|rebuild|install [NAME]' updates one in the "
                  "background (ask the human first: it changes what everything runs on).",
                  "-env --json", "One record per environment: verdict, missing/behind packages, a running job.",
-                 ("env-rebuild",), ("screen-environment",)),
+                 ("env-rebuild",), ("screen-environment",),
+                 summary="Check CompUtils conda environments or refresh/rebuild/install one in the background."),
     AgentCommand("update", ("update", "update_branch"), Action.UPDATE,
                  "Update CompUtils' own code from GitHub (ask the human first). Afterwards, regenerate this skill.",
                  "-up --json", "", ("reinstall",), ("screen-update",)),
@@ -214,10 +236,23 @@ COMMANDS = [
                  "reload, profile}; warnings name the files that need a reload. profile {file, dest, cluster, "
                  "local, copied, applied}: the plugin's lab profile is newer than the cluster's (cluster) or this "
                  "computer's (local); copied: cu put it on the cluster already; applied: where it was applied.",
-                 ("apply-lab-profile",)),
+                 ("apply-lab-profile",),
+                 summary="Update agent plugin clone on this computer locally (run without asking on updates.plugin)."),
     AgentCommand("init", ("init",), Action.INIT_PROJECT,
                  "Mark this folder as a project root (.computils/: project-level config and keylists).", "-init --json",
                  "", ("nested-project", "move-*")),
+    AgentCommand("config", ("config", "set", "unset", "section", "unset_section", "add_entry", "remove_entry",
+                            "spin_state", "unset_spin_state"), Action.CONFIG,
+                 "Inspect (no edit flags) or edit ONLY the nearest project's .computils/ config (project.toml "
+                 "settings via --set/--unset, project keylists.cusf sections/entries via --section/--unset-section/"
+                 "--add-entry/--remove-entry, and spinstates.txt via --spin-state/--unset-spin-state). Never touches "
+                 "global config (~ /bin) or lab profiles. Section aliases: opt, sp, basis, orca, crest. Preview with "
+                 "--dry-run.",
+                 "-config --set solvent=THF --set CPU=32 --dry-run --json",
+                 "Read-only: {projectRoot, settings, keylists, spinstates}. Dry-run: {projectRoot, dryRun, changes}. "
+                 "Applied: {changes, projectRoot, settings, keylists, spinstates}. Stops (exit 6) outside a project.",
+                 tui=("screen-config", "screen-files"),
+                 summary="Inspect or edit ONLY nearest project .computils/ config (settings, keylists, spinstates; --dry-run)."),
     AgentCommand("attributions", ("attributions",), Action.ATTRIBUTIONS,
                  "Licenses and the citations each program, method and library asks for (a paper's methods section).",
                  "-attributions", "", tui=("screen-attributions",)),
@@ -239,9 +274,8 @@ COMMANDS = [
 # Flags any command takes, and hidden ones (argparse.SUPPRESS: never listed, never checked)
 SHARED_FLAGS = {"help": "", "json": "", "answer": "", "dry_run": "", "checkpoint": "", "nbo7": "", "override": "",
                 "wall_time": "", "partition": "", "cluster": ""}
-# TUI items with no command: why a person does them (the check fails on any other uncovered item)
-HUMAN_ONLY_TUI = {"screen-config": "Config is edited by people (an agent reads it through -methods and its reports)",
-                  "screen-files": "Project Files (spinstates.txt) are a person's declarations about their molecules"}
+# TUI items with no command: why a person does them (global config editing still lives in `cu -tui`)
+HUMAN_ONLY_TUI = {}
 
 
 def Command(key: str) -> AgentCommand | None:
@@ -344,10 +378,8 @@ def SkillText(host: str = HOST_PLACEHOLDER, digest: str | None = None, commit: s
     lines = [
         "---",
         "name: computils",
-        "description: Run, track and analyse Gaussian 16 and ORCA 6 jobs on the cluster through CompUtils (cu) over "
-        "ssh - optimizations (then single points), benchmarks, re-runs of failed jobs, reading outputs (energies, "
-        "frequencies, convergence), GoodVibes thermochemistry and SI coordinates. Use it for any computational "
-        "chemistry job or output on the cluster instead of writing inputs, calling sbatch or parsing outputs yourself.",
+        "description: Drive Gaussian 16, ORCA 6, and CREST jobs via cu over ssh (SMILES-to-3D, opt/SP chains, "
+        "benchmarks, re-runs, -info/-scrape, GoodVibes, SI, project -config) instead of writing inputs/scripts or parsing outputs.",
         "---",
         "",
         "# CompUtils",
@@ -384,15 +416,10 @@ def SkillText(host: str = HOST_PLACEHOLDER, digest: str | None = None, commit: s
         "| 6 | stopped | A precondition isn't met: run `next[0]`, then retry. |",
         "| 7 | human | Only a person can do this: tell them exactly what `next` says. |",
         "",
-        "A report may also carry `updates` (cu checks GitHub by itself, at most once a day on each machine): tell the "
-        "human what is newer and ask. Run its `command` on that machine (over ssh for the cluster, locally for this "
-        "computer) only on their go. Never check for updates yourself.",
-        "",
-        "`updates.plugin` (only when the lab profile names an agent plugin) is different: a daily reminder, not "
-        "news (the plugin's repository is private, so the cluster can't see it). Follow This Computer's plugin line "
-        "at once, without asking: the human has agreed to it. Say nothing unless the plugin changed. If the result's "
-        "`warnings` ask for a reload (files the agent's app reads only when it starts), ask the human to reload it "
-        "when convenient; never do it or send keystrokes yourself.",
+        "A report may carry daily `updates` (never check yourself): report `code`/`environment` updates and run "
+        "`command` only on the human's go. For `updates.plugin` (a daily reminder when configured), run This "
+        "Computer's plugin step immediately without asking, stay silent unless files changed, and ask the human to "
+        "reload the app when `warnings` name startup files (`-agent report`).",
         "",
         *_LocalSection(local),
         "## Rules",
@@ -406,38 +433,19 @@ def SkillText(host: str = HOST_PLACEHOLDER, digest: str | None = None, commit: s
         "conformer search its level, solvent, thresholds and which bonds it holds. Ask; never guess. Mechanical "
         "answers (replacing an input you just previewed, dismissing ended jobs) are yours.",
         "- Only `cu` submits (never `sbatch`): every job is then tracked, notified and chained.",
-        "- Read outputs with `-info` (never cat, grep or copy a .out: they're huge), and a value it doesn't report "
-        "with `-scrape` (bounded: a match and the lines you ask for). Inputs are small to read.",
-        "- Each job's results are kept in its data file, `<root>.cudf` beside its outputs (8a.out, 8a_re.out, "
-        "8a_SP_re2.out and the benchmark's 8a-2-B3LYP_SP.out all feed 8a.cudf), written by `-info` and whenever a "
-        "tracked job ends. It is small and has a fixed layout (`=== Section ===` headers, one `Label  value` line "
-        "each), so read it directly (`cat`) instead of running `-info` on every output. The first section is the "
-        "molecule (formula, charge, multiplicity, spin, its final geometry); then one section per stage of work "
-        "(Optimization (Reaction Intermediate), Optimization (ModRedundant), Optimization (Transition State), "
-        "Single Point: LEVEL, ...), each holding the final successful attempt (a re-run that ended "
-        "normally replaces the failed original). Each From line names the output (and stage) it came from; if that "
-        "output has changed since, run `-info` on it, which refreshes the section. The geometry and the full "
-        "frequency list are only there, never in `-info` (or run `-xyz` for an .xyz). The data file is the species' "
-        "hub: fix a bad or mistaken output by re-running it with its input corrected (`-re FILE --route '...'` or "
-        "`--method NAME`, previewed with --dry-run, on the human's word), never by a job under a new name, so the "
-        "re-run takes the old one's section once it succeeds. An optimization lists its "
-        "Constraints (Bond C1 C4 Frozen @ 2.05 A; From the Checkpoint when its route didn't ask for them), a "
-        "Gaussian TS its TS Eigenvector (each coordinate's coefficient and final value, as Gaussian printed them). A "
-        "CREST search (8a_CREST.out) is a Conformer Search (CREST): LEVEL section: its options and constraints, the "
-        "ensemble it kept (conformers, energy window, E (Lowest), ensemble G, the lowest's population, wall time) and "
-        "every conformer's energy and population (Conformer Energies, only there).",
-        "- Waiting for jobs: never poll `-st` or sleep in a loop. Run the `-st --wait JOB... --json` that a submission's "
-        "`next` gives as a background command and end your turn: it exits (waking you) when one of them ends. Read "
-        "its report, act, and run its `next` to wait again. `-st --json` is one snapshot, any time.",
-        "- Config (methods, basis sets, ORCA blocks, clusters) is the human's: they edit it in `cu -tui`.",
-        "- First-time setup runs itself on a fresh install's first `cu ... --json`: on the human's own computer it "
-        "needs nothing (high color, no cluster, no notifications). On the cluster it stops with exit 3 for each of "
-        "its questions: the lab profile (`profile-file`: a path, or empty for none; `apply-profile` when an earlier "
-        "install left one), the cluster (`cluster`), Telegram notifications (`notifications`, then `bot-token` when "
-        "the profile has none). Ask the human all of them at once, then re-run the same command with every answer "
-        "(`--answer profile-file=PATH --answer cluster=NAME --answer notifications=n`). Notifications yes: tell the "
-        "human to send their bot any message right after you start that run (it waits 60 seconds); `chat-id` is "
-        "asked if no message came.",
+        "- Read outputs with `-info` (never cat, grep or copy a .out: they're huge), and values it omits with "
+        "`-scrape` (bounded: a match and the lines you ask for). Inputs are small to read.",
+        "- Species data hub (`<root>.cudf`): each species' outputs feed `<root>.cudf` (small fixed layout, safe to "
+        "`cat`; holds geometry and full frequencies). Fix bad outputs via `-re` (replaces the old section once it "
+        "succeeds), never a new name. Full layout: `-agent cudf`.",
+        "- Waiting for jobs: never poll `-st` or sleep in a loop. Run `next`'s `-st --wait JOB... --json` as a "
+        "background command and end your turn (default `--wait-mode chain`, `all` for a batch, `any` per job; see "
+        "`wait-for-jobs`). `-st --json` is one snapshot anytime.",
+        "- Config boundaries: global config (~/bin/*.toml, global keylists.cusf, clusters, lab profiles) is "
+        "human-only in `cu -tui`. Project config (.computils/: project.toml, project keylists.cusf, spinstates.txt) "
+        "is inspected/edited with `-config` (preview `--dry-run` unless your instructions give more autonomy).",
+        "- Fresh install setup: the first `cu ... --json` triggers first-run setup (auto-defaults on a personal "
+        "computer; exit 3 questions on the cluster). See `-agent setup`.",
         "- One molecule per `-opt` call; loop over molecules yourself.",
         "",
         "## Commands",
@@ -445,7 +453,7 @@ def SkillText(host: str = HOST_PLACEHOLDER, digest: str | None = None, commit: s
     ]
     for command in COMMANDS:
         if command.agent and not command.hidden:
-            lines.append(f"- `{_Usage(parser, command)}` ({command.key}): {command.purpose}")
+            lines.append(f"- `{_Usage(parser, command)}` ({command.key}): {command.summary or command.purpose}")
     human = [command for command in COMMANDS if not command.agent and not command.hidden]
     lines += ["", "A person's only: " + "; ".join(f"`{_Usage(parser, command)}` ({command.why})" for command in human)
               + ".", "",
@@ -466,10 +474,46 @@ def SkillText(host: str = HOST_PLACEHOLDER, digest: str | None = None, commit: s
     return "\n".join(lines)
 
 
+@functools.lru_cache(maxsize=1)
 def SkillDigest() -> str:
     """A hash of everything the skill says (the host left out: the cluster can't know the PC's alias for it; the
     commit too), so it changes only when agent-facing behaviour does."""
     return hashlib.sha256(SkillText(HOST_PLACEHOLDER, "", "", LOCAL_PLACEHOLDER).encode()).hexdigest()[:10]
+
+
+def _NeedsHost(topic: str) -> bool:
+    key = (topic or "").strip().lower()
+    if key in ("", "skill", "ssh"):
+        return True
+    return key in RecipeNames() and "{host}" in RawRecipe(key)
+
+
+def RunAgent(intent) -> None:
+    """`cu -agent [TOPIC]`: the skill, or a topic, as plain Markdown on stdout (never through Rich, which would wrap
+    and style it); with --json, in the report instead."""
+    from . import agent
+    if _NeedsHost(intent.topic):
+        host = intent.sshHost or RememberedHost()
+        if not host:
+            import socket
+            host = socket.gethostname()
+    else:
+        host = HOST_PLACEHOLDER
+    if intent.topic in ("", "skill"):
+        text = SkillText(host, local=intent.local or LocalInstall())
+        if intent.sshHost:
+            RememberHost(intent.sshHost)
+    elif intent.topic == "topics":
+        text = "".join(f"{name}\n" for name in TopicNames())
+    else:
+        text = Topic(intent.topic, host)
+        if text is None:
+            raise agent.UsageError(f"No topic '{intent.topic}'. Topics: {', '.join(TopicNames())}.")
+    if agent.jsonOutput:
+        agent.Result({"topic": intent.topic or "skill", "text": text})
+    else:
+        sys.stdout.write(text)
+        agent.Acted()
 
 
 # ─── Topics (cu -agent TOPIC) ─────────────────────────────────────────
@@ -497,7 +541,7 @@ def RecipeTitle(name: str) -> str:
     return first.removeprefix(RECIPE_TITLE) if first.startswith(RECIPE_TITLE) else ""
 
 
-SPECIAL_TOPICS = ("report", "routes", "ssh")
+SPECIAL_TOPICS = ("cudf", "report", "routes", "setup", "ssh")
 
 
 def TopicNames(recipes: bool = True) -> list[str]:
@@ -539,13 +583,58 @@ def Topic(name: str, host: str = HOST_PLACEHOLDER) -> str | None:
         return CommandTopic(command)
     if name in RecipeNames():
         return Recipe(name, host)
+    if name == "cudf":
+        return CUDF_TOPIC
     if name == "report":
         return REPORT_TOPIC
     if name == "routes":
         return ROUTES_TOPIC
+    if name == "setup":
+        return SETUP_TOPIC
     if name == "ssh":
         return SSH_TOPIC.replace("{host}", host).replace("{cu}", _CuPath())
     return None
+
+
+CUDF_TOPIC = """# Species Data Files (<root>.cudf)
+
+Each job's results are kept in its species data file, `<root>.cudf`, beside its outputs (`8a.out`, `8a_re.out`,
+`8a_SP_re2.out`, and benchmark `8a-2-B3LYP_SP.out` all feed `8a.cudf`), written by `-info` and whenever a tracked job
+ends. It is small and has a fixed layout (`=== Section ===` headers, one `Label  value` line each), so read it directly
+(`cat`) instead of running `-info` on every output.
+
+- **Molecule section:** formula, charge, multiplicity, spin, and final geometry.
+- **Stage sections:** one per stage of work (`Optimization (Reaction Intermediate)`, `Optimization (ModRedundant)`,
+  `Optimization (Transition State)`, `Single Point: LEVEL`, ...), each holding the final successful attempt (a re-run
+  that ended normally replaces the failed original).
+  - Each `From` line names the output (and stage) it came from; if that output changed since, run `-info` on it to
+    refresh the section.
+  - Full geometry and full frequency lists live only in `.cudf`, never `-info` (or run `-xyz` for `.xyz`).
+  - Optimizations list `Constraints` (`Bond C1 C4 Frozen @ 2.05 A`; `From the Checkpoint` if inherited without asking);
+    Gaussian TSs list `TS Eigenvector` (each coordinate's coefficient and final value, as printed).
+- **CREST sections:** `8a_CREST.out` writes `Conformer Search (CREST): LEVEL` (options, constraints, conformer count,
+  energy window, `E (Lowest)`, ensemble `G`, lowest population, wall time) and `Conformer Energies` (every conformer's
+  energy and population, only here).
+- **Hub rule:** fix a bad or mistaken output by re-running it corrected (`-re FILE --route '...'` or `--method NAME`,
+  previewed with `--dry-run`, on the human's word), never by submitting under a new name, so `_re` replaces the old
+  section in `<root>.cudf` once it finishes normally.
+"""
+
+SETUP_TOPIC = """# First-Time Setup (Fresh Install)
+
+First-time setup runs automatically on a fresh install's first `cu ... --json`:
+
+- **On a personal computer (local install):** sets itself up with no prompts (high color, no cluster, no
+  notifications).
+- **On a cluster:** stops with exit `3` for each question:
+  - `profile-file` (path to lab profile, or empty for none; `apply-profile` if an earlier install left one);
+  - `cluster` (cluster selection);
+  - `notifications` (`y`/`n`), followed by `bot-token` if the profile omits one.
+- Ask the human all of them at once, then re-run the same command with every answer:
+  `--answer profile-file=PATH --answer cluster=NAME --answer notifications=n`
+- **If notifications is `y`:** tell the human to send their Telegram bot any message right after you start that run (it
+  waits 60 seconds for a chat ID); `chat-id` is asked via exit `3` if no message arrived.
+"""
 
 
 REPORT_TOPIC = """# The Report (--json)
@@ -574,7 +663,8 @@ One JSON object on stdout, at the end of every run. Empty fields are left out.
 
 ROUTES_TOPIC = """# Route Templates (Optimization and Single Point Methods)
 
-People write these in the TUI (Config > Job Keylists); an agent passes one to `-opt --route` only when the human asks.
+People write global entries in `cu -tui` (Config > Job Keylists); project-level entries in `.computils/keylists.cusf`
+can also be edited with `cu -config`. An agent passes `-opt --route` only when the human asks.
 
 - A route is a program's route line: Gaussian `wB97XD def2SVP opt freq`, ORCA `B3LYP def2-SVP Opt Freq`. The method
   (its first known token) picks the program.
@@ -623,16 +713,14 @@ Every cluster command runs as one ssh call. These rules hold from PowerShell (5.
 
 ## Waiting for Jobs (Long Commands)
 
-`{cu} -st --wait JOB... --json` runs until one of the jobs ends, minutes to days. Run it as a background command
-(your harness wakes you when it exits) and end your turn:
+Run `{cu} -st --wait JOB... [--wait-mode chain|all|any] --json` as a background command (your harness wakes you on exit)
+and end your turn (for `--wait-mode` behavior see `{cu} -agent wait-for-jobs`):
 
     ssh -n -o ServerAliveInterval=60 {host} "{cu} -st --wait 24769828 24769829 --json"
 
-- `-n` keeps ssh off your console's input; `ServerAliveInterval` notices a dead connection.
-- Exit 255 is ssh's own: the connection dropped (your computer slept, the network changed). Nothing was lost: run
-  `{cu} -st --json` once to see what happened meanwhile, then wait again on the jobs still running.
-- The wait stops by itself when its connection is gone, and after a day at most, so nothing is left running on the
-  login node.
+- `-n` keeps ssh off stdin; `ServerAliveInterval=60` detects dead connections.
+- Exit `255` means ssh dropped (sleep, network drop): nothing is lost; run `{cu} -st --json` once, then wait again.
+- The wait exits automatically when disconnected and caps at 24 hours so nothing stays stranded on the login node.
 
 ## The ssh Config (Your Computer's)
 
@@ -646,7 +734,7 @@ touch keys or known_hosts, and never turn host key checking off.
         ServerAliveInterval 60
 
 **A shared connection** (faster, and one login for 2FA) adds these lines, but only when your `ssh` supports it:
-check `(Get-Command ssh).Source` in PowerShell (or `ssh -V`). Windows' own OpenSSH (`C:\Windows\System32\OpenSSH`)
+check `(Get-Command ssh).Source` in PowerShell (or `ssh -V`). Windows' own OpenSSH (`C:\\Windows\\System32\\OpenSSH`)
 doesn't, and with these lines every connection fails; the OpenSSH of Git for Windows, WSL, macOS and Linux does.
 
         ControlMaster auto
@@ -723,21 +811,23 @@ def Problems() -> list[str]:
     problems += [f"Question '{key}' isn't listed in any AgentCommand's questions." for key in keys if key not in listed]
     # 4. Recipes: every command line in them still parses, and names a command agents may run
     import regex
+    cuCmd = regex.compile(r"\{cu\} ([^`\n]+)")
+    badQuote = regex.compile(r'["$`]')
     for name in RecipeNames():
         if not RecipeTitle(name):
             problems.append(f"Recipe {name} has no title: its first line must be '{RECIPE_TITLE}What It's For'.")
-        for line in regex.findall(r"\{cu\} ([^`\n]+)", RawRecipe(name)):
+        for line in cuCmd.findall(RawRecipe(name)):
             try:
                 arguments = shlex.split(line.split(" | ")[0])
                 parser.parse_args(arguments)
             except (ValueError, SystemExit, Exception) as error:
                 problems.append(f"Recipe {name}: `cu {line}` no longer parses ({error}).")
-            if regex.search(r'["$`]', line):
+            if badQuote.search(line):
                 problems.append(f"Recipe {name}: `cu {line}` has a double quote, $ or backtick: commands run inside "
                                 f'ssh host "…", so quote values with single quotes.')
     # 5. Commands run inside ssh host "…" from any shell: examples quote with single quotes, never ", $ or `
     for command in COMMANDS:
-        if regex.search(r'["$`]', command.example):
+        if badQuote.search(command.example):
             problems.append(f"The {command.key} example has a double quote, $ or backtick: quote with single quotes.")
     # 6. SKILL.md is saved on the agent's computer, through consoles that may garble anything but ASCII
     nonAscii = sorted({character for character in SkillText() if ord(character) > 127})

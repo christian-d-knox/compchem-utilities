@@ -20,7 +20,7 @@ from ..catalog  import Catalog
 from ..defaults import Defaults
 from ..intent   import IntentDraft
 from ..jobs     import DefaultMemoryRatio
-from ..optimize import (CustomMethod, JoinStages, MethodChoices, MethodProblems, SinglePointChoices, SlurmOverrides, SlurmProblems,
+from ..optimize import (CustomMethod, MethodChoices, MethodProblems, SinglePointChoices, SlurmOverrides, SlurmProblems,
                         SplitStages)
 from ..planned  import (LoadMolecules, PlanAsWritten, PlanBenchmark, PlannedJob, PlanReRuns, PlanSinglePoints,
                         Resources)

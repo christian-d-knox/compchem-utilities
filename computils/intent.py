@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Optional
 
-from .actions import Action, CubeOption, FILE_ACTIONS, JOB_ACTIONS, NTS_STEPS
+from .actions import Action, CubeOption, FILE_ACTIONS, JOB_ACTIONS, NTS_STEPS, WAIT_CHAIN, WAIT_MODES
 
 # CLI flags indicate a specific task. The parser populates an IntentDraft field-by-field as it reads each flag —
 # including setting draft.action to one of the Action enum values. After all fields are set, Validate() checks that the
@@ -245,10 +245,12 @@ class NevaTouchIntent(Intent):
 class StalkIntent(Intent):
     """`cu -st` on its own — stalk every tracked job, whichever directory it was submitted from. With --json, one
     snapshot (stalk.Snapshot). dismiss: job IDs or names to stop tracking ('ended': every ended one), and nothing else.
-    wait: job IDs or names to wait for ([]: every running one; stalk.Wait), None when not waiting."""
-    loop:    bool                = False
-    dismiss: list[str]           = field(default_factory=list)
-    wait:    Optional[list[str]] = None
+    wait: job IDs or names to wait for ([]: every running one; stalk.Wait), None when not waiting. waitMode: 'chain'
+    (default), 'any', or 'all'."""
+    loop:     bool                = False
+    dismiss:  list[str]           = field(default_factory=list)
+    wait:     Optional[list[str]] = None
+    waitMode: str                 = WAIT_CHAIN
 
 
 @dataclass
@@ -392,6 +394,20 @@ class MethodsIntent(Intent):
     pass
 
 
+@dataclass
+class ConfigIntent(Intent):
+    """`cu -config` — inspect or edit ONLY the nearest project's `.computils/` files (`project.toml`, `keylists.cusf`,
+    and `spinstates.txt`), never global config."""
+    setValues:       list[str] = field(default_factory=list)
+    unsetKeys:       list[str] = field(default_factory=list)
+    sections:        list[str] = field(default_factory=list)
+    unsetSections:   list[str] = field(default_factory=list)
+    addEntries:      list[str] = field(default_factory=list)
+    removeEntries:   list[str] = field(default_factory=list)
+    spinStates:      list[str] = field(default_factory=list)
+    unsetSpinStates: list[str] = field(default_factory=list)
+
+
 # The Intent each Action finalizes to. Excel, Update and Environment aren't listed: their fields are named differently
 # on the draft
 _INTENT_TYPES = {
@@ -399,7 +415,7 @@ _INTENT_TYPES = {
     Action.RERUN: ReRunIntent, Action.CUBE: CubeIntent, Action.FORM_CHECK: FormCheckIntent,
     Action.GOODVIBES: GoodVibesIntent, Action.FIRST_TIME_SETUP: FirstTimeSetupIntent,
     Action.INIT_PROJECT: InitProjectIntent, Action.PROFILE: ProfileIntent, Action.ATTRIBUTIONS: AttributionsIntent,
-    Action.INFO: InfoIntent, Action.METHODS: MethodsIntent, Action.XYZ: XyzIntent,
+    Action.INFO: InfoIntent, Action.METHODS: MethodsIntent, Action.XYZ: XyzIntent, Action.CONFIG: ConfigIntent,
 }
 # SI_SCRAPER finalizes in Finalize (its fields are named si* on the draft)
 
@@ -494,11 +510,22 @@ class IntentDraft:
     refreshScope: str = ""
 
     # STALK: tracked jobs to dismiss (IDs, names, or 'ended'), or to wait for (None: not waiting; []: every running one)
-    dismiss: list[str]           = field(default_factory=list)
-    wait:    Optional[list[str]] = None
+    dismiss:  list[str]           = field(default_factory=list)
+    wait:     Optional[list[str]] = None
+    waitMode: Optional[str]       = None
 
     # CANCEL: tracked jobs to cancel (IDs, names, CLUSTER:ID)
     cancelJobs: list[str] = field(default_factory=list)
+
+    # CONFIG: project-level .computils/ overrides (never global config)
+    setValues:       list[str] = field(default_factory=list)
+    unsetKeys:       list[str] = field(default_factory=list)
+    sections:        list[str] = field(default_factory=list)
+    unsetSections:   list[str] = field(default_factory=list)
+    addEntries:      list[str] = field(default_factory=list)
+    removeEntries:   list[str] = field(default_factory=list)
+    spinStates:      list[str] = field(default_factory=list)
+    unsetSpinStates: list[str] = field(default_factory=list)
 
     # SCRAPE: the regex, which matches (scrapeLast None and scrapeFirst None: all), lines around each, its block's end
     scrapeFind:   Optional[str] = None
@@ -719,9 +746,19 @@ class IntentDraft:
             errors.append("--wait goes with -st on its own (e.g. 'cu -st --wait 123456 --json').")
         if self.wait is not None and self.dismiss:
             errors.append("--wait and --dismiss are separate runs: dismiss first, then wait.")
+        if self.waitMode is not None and self.wait is None:
+            errors.append("--wait-mode goes with --wait (e.g. 'cu -st --wait 123456 --wait-mode all --json').")
+        if self.waitMode is not None and self.waitMode not in WAIT_MODES:
+            errors.append(f"--wait-mode takes any, chain or all (got '{self.waitMode}').")
 
         if self.action == Action.REFRESH and self.refreshScope not in ("", "project"):
             errors.append(f"-refresh takes no argument, or 'project' (got '{self.refreshScope}').")
+
+        configEdits = (self.setValues, self.unsetKeys, self.sections, self.unsetSections,
+                       self.addEntries, self.removeEntries, self.spinStates, self.unsetSpinStates)
+        if any(configEdits) and self.action != Action.CONFIG:
+            errors.append("--set, --unset, --section, --unset-section, --add-entry, --remove-entry, "
+                          "--spin-state and --unset-spin-state go with -config.")
 
         return errors
 
@@ -789,7 +826,8 @@ class IntentDraft:
                 return RefreshIntent(project=self.refreshScope == "project")
             case Action.STALK:
                 return StalkIntent(loop=self.stalkLoop, dismiss=list(self.dismiss),
-                                   wait=None if self.wait is None else list(self.wait))
+                                   wait=None if self.wait is None else list(self.wait),
+                                   waitMode=self.waitMode or WAIT_CHAIN)
             case Action.AGENT:
                 return AgentIntent(topic=self.agentTopic, sshHost=self.agentSshHost, local=self.agentLocal)
             case Action.SI_SCRAPER:

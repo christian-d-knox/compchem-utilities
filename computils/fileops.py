@@ -1,4 +1,4 @@
-import os, regex, subprocess, time
+import functools, os, regex, subprocess, time
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from mmap import mmap, ACCESS_READ
@@ -35,6 +35,41 @@ def MapText(text: str):
 # matching, so a long search in a TUI worker doesn't freeze the screen; safe because every mapping is read-only.
 # Reverse searches run from the pattern's END: start them with a literal and put trailing captures in a lookahead,
 # or the engine retries the tail (e.g. a number) at every match of it in the file
+@functools.lru_cache(maxsize=256)
+def _CompileBytes(pattern: str | bytes, flags: int = 0):
+    return regex.compile(pattern.encode() if isinstance(pattern, str) else pattern, flags)
+
+
+def _SliceBounds(data, start: int = 0, end: int | None = None) -> tuple[int, int]:
+    """Clamp Python-style negative/open [start:end] slice indices into non-negative byte offsets."""
+    size = len(data)
+    lo = max(0, size + start) if start < 0 else min(size, start)
+    hi = size if end is None else (max(0, size + end) if end < 0 else min(size, end))
+    return lo, max(lo, hi)
+
+
+class _ByteMatch:
+    """Minimal Match-compatible wrapper returned by literal C-level termination searches."""
+    __slots__ = ("_start", "_end", "_matched")
+
+    def __init__(self, start: int, end: int, matched: bytes):
+        self._start, self._end, self._matched = start, end, matched
+
+    def start(self) -> int:
+        return self._start
+
+    def end(self) -> int:
+        return self._end
+
+    def span(self) -> tuple[int, int]:
+        return self._start, self._end
+
+    def group(self, index: int = 0) -> bytes:
+        if index != 0:
+            raise IndexError(index)
+        return self._matched
+
+
 def FindInMap(data, pattern: str, reverse: bool = False, ignoreCase: bool = False, start: int = 0,
               end: int | None = None) -> regex.Match | None:
     flags = 0
@@ -44,7 +79,7 @@ def FindInMap(data, pattern: str, reverse: bool = False, ignoreCase: bool = Fals
         flags |= regex.IGNORECASE
     if start < 0:
         start = max(0, len(data) + start)
-    return regex.search(pattern.encode(), data, flags, pos=start, endpos=end, concurrent=True)
+    return _CompileBytes(pattern, flags).search(data, pos=start, endpos=end, concurrent=True)
 
 # A file several CompUtils runs write at once (the tracked-jobs store, a data file): a CLI stalker, the TUI, and a job's
 # Neva-Touch Scheduler hook on a compute node. O_EXCL creation works across machines on a shared filesystem, where flock
@@ -244,6 +279,7 @@ def ExtractCoords(data, program: str, fromInput: bool = False) -> tuple[list[str
 # optional Gaussian freeze flag, then x y z
 _NUMBER = r"-?\d+(?:\.\d*)?(?:[eEdD][-+]?\d+)?"
 COORDINATE_ROW = rf"[ \t]*([A-Za-z]{{1,2}}|\d{{1,3}})(?:[^\s,]*)(?:[ \t,]+-?1|[ \t,]+0)?[ \t,]+({_NUMBER})[ \t,]+({_NUMBER})[ \t,]+({_NUMBER})[ \t]*\r?$"
+_COORDINATE_ROW_RE = regex.compile(COORDINATE_ROW)
 
 def _RowSymbol(token: str) -> str:
     """The element a row's first token names, or '' if it names none (a ghost Bq, a dummy X)."""
@@ -256,7 +292,7 @@ def _CoordinateRows(data, start: int, last: bool = False) -> tuple[list[str], li
     blocks, current = [], None
     data.seek(start)
     for rawLine in iter(data.readline, b""):
-        row = regex.match(COORDINATE_ROW, rawLine.decode(errors="replace").rstrip("\n"))
+        row = _COORDINATE_ROW_RE.match(rawLine.decode(errors="replace").rstrip("\n"))
         symbol = _RowSymbol(row.group(1)) if row else ""
         if symbol:
             if current is None:
@@ -278,7 +314,7 @@ def XyzFrames(data) -> int:
     frames, inBlock = 0, False
     data.seek(0)
     for rawLine in iter(data.readline, b""):
-        row = regex.match(COORDINATE_ROW, rawLine.decode(errors="replace").rstrip("\n"))
+        row = _COORDINATE_ROW_RE.match(rawLine.decode(errors="replace").rstrip("\n"))
         isRow = bool(row and _RowSymbol(row.group(1)))
         frames += isRow and not inBlock
         inBlock = isRow
@@ -315,6 +351,8 @@ def _InputChargeLine(data, program: str) -> regex.Match | None:
         return FindInMap(data, ORCA_CHARGE_LINE, ignoreCase=True)
     return _GaussianChargeLine(data)
 
+_ORCA_ECHO_PREFIX_RE = regex.compile(r"^\|\s*\d+> ?")
+
 def ExtractOrcaInput(data) -> str:
     """ORCA's input as written: from an output, its verbatim echo ('|  N> ' prefixes removed, up to ****END OF INPUT****);
     from an .inp, the whole file. '' for an output without an echo."""
@@ -326,7 +364,7 @@ def ExtractOrcaInput(data) -> str:
     for rawLine in iter(data.readline, b""):
         if not rawLine.startswith(b"|"):
             break
-        line = regex.sub(r"^\|\s*\d+> ?", "", rawLine.decode().rstrip("\r\n"))
+        line = _ORCA_ECHO_PREFIX_RE.sub("", rawLine.decode().rstrip("\r\n"))
         if "****END OF INPUT****" in line:
             break
         lines.append(line + "\n")
@@ -379,13 +417,14 @@ def ExtractRouteLine(data, program: str) -> str:
 
 # A Gaussian input's stages are separated by '--Link1--' lines
 LINK1_SEPARATOR = r"(?im)^\s*--link1--\s*$"
+_LINK1_SEPARATOR_RE = regex.compile(LINK1_SEPARATOR.encode())
 # A Gaussian input's route section: the '#' line and any lines continuing it, up to the blank line ending the section
 GAUSSIAN_INPUT_ROUTE = r"(?m)^[ \t]*(#[^\r\n]*(?:\r?\n[ \t]*[^\s#%][^\r\n]*)*)"
 
 def _GaussianSections(data) -> list[tuple[int, int]]:
     """(start, end) of each stage of a Gaussian input."""
     bounds = [0]
-    for separator in regex.finditer(LINK1_SEPARATOR.encode(), data):
+    for separator in _LINK1_SEPARATOR_RE.finditer(data):
         bounds += [separator.start(), separator.end()]
     bounds.append(len(data))
     return list(zip(bounds[::2], bounds[1::2]))
@@ -460,6 +499,7 @@ def IdentifyMethod(routeLine: str) -> str:
 
 # Common basis-set name stems. Only needed for ORCA-style routes, where the basis is its own token
 BASIS_PATTERN = r"(?i)^(?:ma-|aug-|jun-)?(?:def2|cc-p|6-31|3-21|sto-|lanl|sdd|genecp$|gen$)"
+_BASIS_PATTERN_RE = regex.compile(BASIS_PATTERN)
 
 def SplitRoute(routeLine: str) -> tuple[str, str, str]:
     """Split a route card into (method, basis, remaining keywords) for display. Empty strings where not found."""
@@ -471,7 +511,7 @@ def SplitRoute(routeLine: str) -> tuple[str, str, str]:
         if method and not methodTaken and IdentifyMethod(methodPart) == method:
             methodTaken, basis = True, basis or slashBasis
             continue
-        if not basis and regex.match(BASIS_PATTERN, token):
+        if not basis and _BASIS_PATTERN_RE.match(token):
             basis = token
             continue
         keys.append(token)
@@ -491,8 +531,15 @@ _STEP_KEYWORDS = {
     "irc":       {False: r"(?i)(?:^|\s)irc(?=$|[\s=(])",
                   True:  r"(?i)(?:^|\s)irc(?=\s|$)"},
 }
+_STEP_KEYWORD_RES = {check: {orca: regex.compile(pattern) for orca, pattern in byProg.items()}
+                     for check, byProg in _STEP_KEYWORDS.items()}
 # Gaussian's opt options ('opt=(ts,calcfc)', 'opt=modredundant'), to tell what kind of optimization a step is
 _GAUSSIAN_OPT_OPTIONS = r"(?i)(?:^|\s)opt\s*=?\s*\(?([^\s)]*)"
+_GAUSSIAN_OPT_OPTIONS_RE = regex.compile(_GAUSSIAN_OPT_OPTIONS)
+_OPT_SPLIT_RE = regex.compile(r"[,=]")
+_ORCA_STAB_RE = regex.compile(r"(?i)stabperform\s+true")
+_ORCA_OPTTS_RE = regex.compile(r"(?i)(?:^|\s)(?:opt)?ts(?=\s|$)|(?:^|\s)scants(?=\s|$)")
+_ORCA_GEOM_CONSTR_RE = regex.compile(r"(?is)%geom\b.*?\bconstraints\b")
 
 @dataclass
 class StepChecks:
@@ -514,17 +561,17 @@ def JobChecks(route: str, program: str, inputText: str = "") -> StepChecks:
     """The checks a step with this route needs. inputText: ORCA's input, whose %scf block can ask for the analysis (and
     whose %geom constraints make an optimization ModRed)."""
     isOrca = program == Defaults.orcaExtension
-    found = {check: bool(regex.search(patterns[isOrca], route)) for check, patterns in _STEP_KEYWORDS.items()}
-    if isOrca and regex.search(r"(?i)stabperform\s+true", inputText):
+    found = {check: bool(patterns[isOrca].search(route)) for check, patterns in _STEP_KEYWORD_RES.items()}
+    if isOrca and _ORCA_STAB_RE.search(inputText):
         found["stability"] = True
     optKind = "Opt"
     if found["optimizes"]:
         if isOrca:
-            optKind = ("OptTS" if regex.search(r"(?i)(?:^|\s)(?:opt)?ts(?=\s|$)|(?:^|\s)scants(?=\s|$)", route)
-                       else "ModRed" if regex.search(r"(?is)%geom\b.*?\bconstraints\b", inputText) else "Opt")
+            optKind = ("OptTS" if _ORCA_OPTTS_RE.search(route)
+                       else "ModRed" if _ORCA_GEOM_CONSTR_RE.search(inputText) else "Opt")
         else:
-            optionsMatch = regex.search(_GAUSSIAN_OPT_OPTIONS, route)
-            options = {option.strip().lower() for option in regex.split(r"[,=]", optionsMatch.group(1))} if optionsMatch else set()
+            optionsMatch = _GAUSSIAN_OPT_OPTIONS_RE.search(route)
+            options = {option.strip().lower() for option in _OPT_SPLIT_RE.split(optionsMatch.group(1))} if optionsMatch else set()
             optKind = ("ModRed" if any(option.startswith("modred") for option in options)
                        else "OptTS" if "ts" in options else "Opt")
     label = (optKind if found["optimizes"] else "IRC" if found["irc"] else "Stability" if found["stability"]
@@ -556,14 +603,105 @@ def StageCount(data, program: str) -> int:
 # so only the end of the file is searched for how a job ended (ExtractFrom(path, ExtractTermination, -TERMINATION_TAIL)).
 # A file without one in its tail is running or was killed
 TERMINATION_TAIL = 64 * 1024
+_DEFAULT_TERMINATIONS = ("normal termination", "terminated normally", "error termination")
+_TERMINATION_SUFFIX = b" termination"
+_ORCA_TERMINATION_NEEDLE = b"TERMINATED NORMALLY"
 
-def FindTermination(data, start: int = 0, end: int | None = None, reverse: bool = True) -> regex.Match | None:
+
+def _FindGaussianTermination(data, lo: int, hi: int, reverse: bool) -> _ByteMatch | None:
+    """Single C scan for canonical Gaussian termination lines ('Normal termination' / 'Error termination')."""
+    cursor = hi if reverse else lo
+    while True:
+        pos = data.rfind(_TERMINATION_SUFFIX, lo, cursor) if reverse else data.find(_TERMINATION_SUFFIX, cursor, hi)
+        if pos < 0:
+            return None
+        for word, length in ((b"normal", 6), (b"error", 5)):
+            start = pos - length
+            if start >= lo and data[start:pos].lower() == word:
+                end = pos + len(_TERMINATION_SUFFIX)
+                return _ByteMatch(start, end, data[start:end])
+        if reverse:
+            cursor = pos
+        else:
+            cursor = pos + len(_TERMINATION_SUFFIX)
+
+
+@functools.lru_cache(maxsize=8)
+def _TerminationNeedles(variants: tuple[str, ...]) -> tuple[tuple[bytes, ...], str]:
+    ordered: list[bytes] = []
+    seen: set[bytes] = set()
+    for transform in (str.capitalize, str.upper, lambda text: text, str.lower, str.title):
+        for variant in variants:
+            if not variant:
+                continue
+            raw = transform(variant).encode()
+            if raw not in seen:
+                seen.add(raw)
+                ordered.append(raw)
+    fallback = "|".join(regex.escape(variant) for variant in variants if variant)
+    return tuple(ordered), fallback
+
+
+def FindTermination(data, start: int = 0, end: int | None = None, reverse: bool = True,
+                    program: str = "") -> _ByteMatch | regex.Match | None:
     """The last (or, reverse=False, the first) termination line in data[start:end]. Its offsets are the stalker's
     bookmarks: a later step's reporting is never searched for before one."""
-    pattern = "|".join(regex.escape(variant) for variant in Defaults.terminationVariants)
-    return FindInMap(data, pattern, reverse, True, start, end)
+    lo, hi = _SliceBounds(data, start, end)
+    if lo >= hi:
+        return None
+    variants = tuple(Defaults.terminationVariants)
+    if not variants:
+        return None
+    if tuple(variant.lower() for variant in variants) == _DEFAULT_TERMINATIONS:
+        if program == Defaults.gaussianExtension:
+            found = _FindGaussianTermination(data, lo, hi, reverse)
+            if found is not None:
+                return found
+        elif program == Defaults.orcaExtension:
+            orcaPos = data.rfind(_ORCA_TERMINATION_NEEDLE, lo, hi) if reverse else data.find(_ORCA_TERMINATION_NEEDLE, lo, hi)
+            if orcaPos >= 0:
+                return _ByteMatch(orcaPos, orcaPos + len(_ORCA_TERMINATION_NEEDLE), _ORCA_TERMINATION_NEEDLE)
+        else:
+            best = _FindGaussianTermination(data, lo, hi, reverse)
+            if reverse:
+                searchLo = max(lo, best.start() + 1) if best else lo
+                orcaPos = data.rfind(_ORCA_TERMINATION_NEEDLE, searchLo, hi)
+            else:
+                searchHi = min(hi, best.start() + len(_ORCA_TERMINATION_NEEDLE) - 1) if best else hi
+                orcaPos = data.find(_ORCA_TERMINATION_NEEDLE, lo, searchHi)
+            if orcaPos >= 0:
+                return _ByteMatch(orcaPos, orcaPos + len(_ORCA_TERMINATION_NEEDLE), _ORCA_TERMINATION_NEEDLE)
+            if best is not None:
+                return best
+        _, fallback = _TerminationNeedles(variants)
+    else:
+        needles, fallback = _TerminationNeedles(variants)
+        if not needles:
+            return None
+        if reverse:
+            bestPos, bestRaw = -1, b""
+            for needle in needles:
+                pos = data.rfind(needle, max(lo, bestPos + 1), hi)
+                if pos > bestPos:
+                    bestPos, bestRaw = pos, needle
+            if bestPos >= 0:
+                return _ByteMatch(bestPos, bestPos + len(bestRaw), bestRaw)
+        else:
+            bestPos, bestRaw = hi, b""
+            for needle in needles:
+                limit = hi if not bestRaw else min(hi, bestPos + len(needle) - 1)
+                pos = data.find(needle, lo, limit)
+                if 0 <= pos < bestPos:
+                    bestPos, bestRaw = pos, needle
+            if bestRaw:
+                return _ByteMatch(bestPos, bestPos + len(bestRaw), bestRaw)
+    if reverse:
+        return FindInMap(data, fallback, True, True, max(lo, hi - TERMINATION_TAIL), hi)
+    if hi - lo <= TERMINATION_TAIL:
+        return FindInMap(data, fallback, False, True, lo, hi)
+    return None
 
-def TerminationVariant(termLine: regex.Match | None) -> str:
+def TerminationVariant(termLine: _ByteMatch | regex.Match | None) -> str:
     """The terminationVariants entry a FindTermination match is, or '' for None."""
     if termLine is None:
         return ""
@@ -583,8 +721,11 @@ ENTER_LINE = r"[ \t]*\(Enter "
 # What follows a termination line at the end of a file that stopped inside the next line: Gaussian's own step if it
 # starts that way (an Enter line can only lead into one)
 INTERNAL_STEP_START = rf"(?:{ENTER_LINE}[^\n]*\n)*{INTERNAL_STEP}|{ENTER_LINE}"
+_INTERNAL_STEP_RE = regex.compile(INTERNAL_STEP.encode())
+_ENTER_LINE_RE = regex.compile(ENTER_LINE.encode())
+_INTERNAL_STEP_START_RE = regex.compile(INTERNAL_STEP_START.encode())
 
-def IsInternalStep(data, termLine: regex.Match) -> bool | None:
+def IsInternalStep(data, termLine: _ByteMatch | regex.Match) -> bool | None:
     """Whether the step after this termination line is Gaussian's own (same stage), or None if the next line (past an
     Enter line) isn't complete yet (it can't be told apart until it is)."""
     lineEnd = data.find(b"\n", termLine.end())
@@ -593,8 +734,8 @@ def IsInternalStep(data, termLine: regex.Match) -> bool | None:
         if nextEnd < 0:
             return None
         line = data[lineEnd + 1:nextEnd]
-        if not regex.match(ENTER_LINE.encode(), line):
-            return regex.match(INTERNAL_STEP.encode(), line) is not None
+        if not _ENTER_LINE_RE.match(line):
+            return _INTERNAL_STEP_RE.match(line) is not None
         lineEnd = nextEnd
     return None
 
@@ -607,7 +748,7 @@ def StageSpans(data, program: str) -> list[tuple[int, int, str]]:
         return [(0, len(data), ExtractTermination(data, -TERMINATION_TAIL))]
     spans, start, bookmark = [], 0, 0
     while True:
-        termLine = FindTermination(data, bookmark, reverse=False)
+        termLine = FindTermination(data, bookmark, reverse=False, program=program)
         if termLine is None:
             break
         lineEnd = data.find(b"\n", termLine.end())
@@ -617,7 +758,7 @@ def StageSpans(data, program: str) -> list[tuple[int, int, str]]:
         if internal is None:
             # The file ends inside the next line: Gaussian's own step if that's how it starts (the job stopped there),
             # else nothing follows the termination line (the job's end)
-            internal = lineEnd >= 0 and regex.match(INTERNAL_STEP_START.encode(), data[lineEnd + 1:]) is not None
+            internal = lineEnd >= 0 and _INTERNAL_STEP_START_RE.match(data[lineEnd + 1:]) is not None
         if termination != Defaults.terminationVariants[2] and internal:
             continue
         spans.append((start, bookmark, termination))
@@ -634,13 +775,29 @@ def StageSpans(data, program: str) -> list[tuple[int, int, str]]:
 STABILITY_HEADER = r"Stability analysis|WAVEFUNCTION STABILITY ANALYSIS"
 ORCA_STABLE_VERDICT = r"The stability analysis shows that the wavefunction is stable"
 STABLE_VERDICT = r"The wavefunction is already stable\.|" + ORCA_STABLE_VERDICT
+_STABILITY_HEADERS = {
+    "gauss": (b"Stability analysis",),
+    "orca":  (b"WAVEFUNCTION STABILITY ANALYSIS",),
+    "":      (b"Stability analysis", b"WAVEFUNCTION STABILITY ANALYSIS"),
+}
+_STABILITY_VERDICTS = {
+    "gauss": (b"The wavefunction is already stable.",),
+    "orca":  (b"The stability analysis shows that the wavefunction is stable",),
+    "":      (b"The wavefunction is already stable.",
+              b"The stability analysis shows that the wavefunction is stable"),
+}
 
-def ExtractStability(data, start: int = 0, end: int | None = None) -> bool | None:
+def ExtractStability(data, start: int = 0, end: int | None = None, program: str = "") -> bool | None:
     """Whether the last stability analysis in data[start:end] found the wave function stable; None if there is none.
     An analysis without a stable verdict counts as not stabilized, so the unstable wording never has to be matched."""
-    if FindInMap(data, STABILITY_HEADER, True, start=start, end=end) is None:
+    lo, hi = _SliceBounds(data, start, end)
+    if lo >= hi:
         return None
-    return FindInMap(data, STABLE_VERDICT, True, start=start, end=end) is not None
+    key = ("gauss" if program == Defaults.gaussianExtension
+           else "orca" if program == Defaults.orcaExtension else "")
+    if not any(data.find(header, lo, hi) >= 0 for header in _STABILITY_HEADERS[key]):
+        return None
+    return any(data.find(verdict, lo, hi) >= 0 for verdict in _STABILITY_VERDICTS[key])
 
 # An optimization step's convergence table header (Gaussian: Threshold, ORCA: Tolerance)
 CONVERGENCE_HEADER = r"Item\s+Value\s+(?:Threshold|Tolerance)\s+Converged"
@@ -665,12 +822,24 @@ def ExtractConvergence(data, start: int = 0, end: int | None = None) -> tuple[in
 # An optimization that stopped at its step limit, Gaussian then ORCA. Gaussian ends it with an error termination; ORCA
 # can still end normally, so this is read whatever the termination line says
 OUT_OF_STEPS = r"Number of steps exceeded|the maximum number of optimization cycles"
+_OUT_OF_STEPS_NEEDLES = {
+    "gauss": (b"Number of steps exceeded",),
+    "orca":  (b"the maximum number of optimization cycles",),
+    "":      (b"Number of steps exceeded", b"the maximum number of optimization cycles"),
+}
 
-def ExtractOutOfSteps(data, start: int = 0, end: int | None = None) -> bool:
+def ExtractOutOfSteps(data, start: int = 0, end: int | None = None, program: str = "") -> bool:
     """Whether the optimization in data[start:end] ran out of optimizer steps (the Neva-Touch Scheduler re-runs it).
     Both programs say so after the last convergence table, so only what follows it is searched."""
-    lastTable = FindInMap(data, CONVERGENCE_HEADER, True, True, start, end)
-    return lastTable is not None and FindInMap(data, OUT_OF_STEPS, True, start=lastTable.end(), end=end) is not None
+    lo, hi = _SliceBounds(data, start, end)
+    if lo >= hi:
+        return False
+    lastTable = FindInMap(data, CONVERGENCE_HEADER, True, True, lo, hi)
+    if lastTable is None:
+        return False
+    key = ("gauss" if program == Defaults.gaussianExtension
+           else "orca" if program == Defaults.orcaExtension else "")
+    return any(data.find(needle, lastTable.end(), hi) >= 0 for needle in _OUT_OF_STEPS_NEEDLES[key])
 
 def ExtractResources(data, extensionType: str, name: str = "The input") -> tuple[int, int]:
     """Extract CPU count and SLURM memory request from an mmap data stream.
@@ -704,15 +873,35 @@ def ExtractResources(data, extensionType: str, name: str = "The input") -> tuple
     ram = ToGB(int(ramMatch.group(1)), cpus) if ramMatch else cpus * Defaults.memoryRatio
     return cpus, int(ram + Defaults.memoryBuffer)
 
-def ExtractSpinContamination(data, start: int = 0, end: int | None = None) -> float | None:
+_GAUSSIAN_S2_RE = regex.compile(rb"S\*\*2 before annihilation\s+(-?[\d.]+)")
+_ORCA_S2_RE = regex.compile(rb"Expectation value of <S\*\*2>\s*:\s*(-?[\d.]+)")
+
+
+def _SpinAfter(data, needle: bytes, pattern, lo: int, hi: int) -> float | None:
+    pos = data.rfind(needle, lo, hi)
+    while pos >= 0:
+        matched = pattern.match(data, pos=pos, endpos=min(hi, pos + 120))
+        if matched:
+            return float(matched.group(1).decode())
+        pos = data.rfind(needle, lo, pos)
+    return None
+
+
+def ExtractSpinContamination(data, start: int = 0, end: int | None = None, program: str = "") -> float | None:
     """Return the LAST reported <S**2> in a Gaussian or ORCA output (in data[start:end]: one stage), or None if the file
     reports none."""
-    # Value in a lookahead: see FindInMap. Without it, a file with no <S**2> took ~0.14 s/MB for the ORCA pattern
-    for pattern in (r"S\*\*2 before annihilation(?=\s+(-?[\d.]+))",           # Gaussian
-                    r"Expectation value of <S\*\*2>(?=\s*:\s*(-?[\d.]+))"):    # ORCA
-        spinMatch = FindInMap(data, pattern, reverse=True, start=start, end=end)
-        if spinMatch:
-            return float(spinMatch.group(1).decode())
+    lo, hi = _SliceBounds(data, start, end)
+    if lo >= hi:
+        return None
+    checks = (
+        ((b"S**2 before annihilation", _GAUSSIAN_S2_RE),) if program == Defaults.gaussianExtension
+        else ((b"Expectation value of <S**2>", _ORCA_S2_RE),) if program == Defaults.orcaExtension
+        else ((b"S**2 before annihilation", _GAUSSIAN_S2_RE), (b"Expectation value of <S**2>", _ORCA_S2_RE))
+    )
+    for needle, pattern in checks:
+        value = _SpinAfter(data, needle, pattern, lo, hi)
+        if value is not None:
+            return value
     return None
 
 def _LastNumber(data, pattern: str, start: int = 0, end: int | None = None) -> float | None:
@@ -793,6 +982,8 @@ def ExtractSolvation(data, program: str, inputText: str = "", start: int = 0, en
     model = "SMD" if fields.get("Atomic radii", "").upper().startswith("SMD") else fields.get("Model", "PCM")
     return f"{model} ({fields['Solvent']})" if fields.get("Solvent") else model
 
+_ORCA_FREQ_ROW_RE = regex.compile(rb"\s*\d+:\s+(-?[\d.]+)\s+cm\*\*-1")
+
 def ExtractFrequencies(data, program: str, start: int = 0, end: int | None = None) -> list[float]:
     """The last frequency calculation's vibrational frequencies (cm-1) in data[start:end], lowest first; imaginary
     modes are negative. [] without one. ORCA's 0.00 translation/rotation modes are left out."""
@@ -804,7 +995,7 @@ def ExtractFrequencies(data, program: str, start: int = 0, end: int | None = Non
         frequencies, started = [], False
         # '   6:     -312.40 cm**-1 ***imaginary mode***', after a dashed rule and a scaling-factor line
         for line in iter(data.readline, b""):
-            row = regex.match(rb"\s*\d+:\s+(-?[\d.]+)\s+cm\*\*-1", line)
+            row = _ORCA_FREQ_ROW_RE.match(line)
             if row:
                 started = True
                 if float(row.group(1)) != 0.0:
@@ -830,23 +1021,45 @@ def ExtractFrequencies(data, program: str, start: int = 0, end: int | None = Non
 # step after an optimization Non-Optimized
 PARAMETERS_HEADER = r"(?:Initial|Optimized|Non-Optimized|Current) Parameters"
 PARAMETER_ROW = rb"^ ! (\w+)\s+([A-Z])\(([-\d,]+)\)\s+(-?[\d.]+)\s*(.*?)\s*!?\s*$"
+_PARAMETER_ROW_RE = regex.compile(PARAMETER_ROW)
+_HELD_BYTES = (b"Frozen", b"frozen", b"FROZEN", b"Scan", b"scan", b"SCAN")
 
-def ExtractParameters(data, start: int = 0, end: int | None = None,
-                      first: bool = False) -> dict[str, tuple[str, tuple[int, ...], float, str]]:
+def ExtractParameters(data, start: int = 0, end: int | None = None, first: bool = False,
+                      onlyNames: set[str] | None = None,
+                      onlyHeld: bool = False) -> dict[str, tuple[str, tuple[int, ...], float, str]]:
     """One of Gaussian's internal coordinate tables in data[start:end], the last (its final values) or the first (what
     the stage started with, e.g. which coordinates are frozen): {name: (letter, atoms, value, derivative info)}, e.g.
     'R5': ('R', (1, 46), 2.3428, 'Frozen'). A linear bend's padding indices (0, negative) are dropped. {} without one."""
+    if onlyNames is not None and not onlyNames and not onlyHeld:
+        return {}
     header = FindInMap(data, PARAMETERS_HEADER, not first, start=start, end=end)
     if header is None:
         return {}
     SkipInMap(data, header)
+    byteNames = {name.encode() for name in onlyNames} if onlyNames is not None else None
+    filtering = byteNames is not None or onlyHeld
     parameters, started = {}, False
     for line in iter(data.readline, b""):
         if end is not None and data.tell() > end:
             break
-        row = regex.match(PARAMETER_ROW, line.rstrip(b"\r\n"))
+        if filtering and started:
+            if not line.startswith(b" ! "):
+                if line.lstrip().startswith(b"-"):
+                    break
+                continue
+            parts = line.split(None, 2)
+            tok = parts[1] if len(parts) > 1 else b""
+            if not ((byteNames is not None and tok in byteNames)
+                    or (onlyHeld and any(word in line for word in _HELD_BYTES))):
+                continue
+        row = _PARAMETER_ROW_RE.match(line.rstrip(b"\r\n"))
         if row:
             started = True
+            if filtering:
+                tok = row.group(1)
+                if not ((byteNames is not None and tok in byteNames)
+                        or (onlyHeld and any(word in line for word in _HELD_BYTES))):
+                    continue
             name, letter, atoms, value, info = (group.decode(errors="replace") for group in row.groups())
             parameters[name] = (letter, tuple(int(atom) for atom in atoms.split(",") if int(atom) > 0), float(value),
                                 info)
@@ -882,6 +1095,9 @@ def ExtractModRedInput(data, start: int = 0, end: int | None = None) -> list[tup
 TS_EIGENVECTOR = r"Eigenvectors required to have negative eigenvalues:"
 TS_EIGENVALUE = r"Eigenvalue\s+\d+\s+is\s+(\S+)\s+should be less than"
 
+_TS_COORD_NAME_RE = regex.compile(rb"[A-Z]\d+")
+_INSTABILITY_MARKERS = (b"nstability", b"INSTABILITY")
+
 def ExtractTSEigenvector(data, start: int = 0, end: int | None = None) -> tuple[list[tuple[str, float]], float | None]:
     """A Gaussian TS optimization's last eigenvector in data[start:end], as printed (the internal coordinates the mode
     is made of, largest first: [('R12', -0.68211), …]), and its eigenvalue when Gaussian says it should be less than 0
@@ -897,26 +1113,31 @@ def ExtractTSEigenvector(data, start: int = 0, end: int | None = None) -> tuple[
         if tokens and tokens[0] == b"1" and names and len(tokens) == len(names) + 1:
             vector += [(name, float(value)) for name, value in zip(names, tokens[1:])]
             names = []
-        elif tokens and not names and all(regex.fullmatch(rb"[A-Z]\d+", token) for token in tokens):
+        elif tokens and not names and all(_TS_COORD_NAME_RE.fullmatch(token) for token in tokens):
             names = [token.decode() for token in tokens]
         else:
             break
     eigenvalue = FindInMap(data, TS_EIGENVALUE, start=block.end(), end=end)
     return vector, (float(eigenvalue.group(1).decode().replace("D", "E")) if eigenvalue else None)
 
-def HasRestrictedInstability(data) -> bool:
+def HasRestrictedInstability(data, program: str = "") -> bool:
     """Gaussian stable= output: 'The wavefunction has an RHF -> UHF instability.' ORCA prints no such line, so its
     analysis counts when it lacks the stable verdict (spin.py only asks for singlets whose route has no UKS/UHF)."""
-    if FindInMap(data, r"R\w*\s*->\s*U\w*\s+instability", ignoreCase=True) is not None:
-        return True
-    return (FindInMap(data, "WAVEFUNCTION STABILITY ANALYSIS") is not None
-            and FindInMap(data, ORCA_STABLE_VERDICT, True) is None)
+    if program != Defaults.orcaExtension:
+        if (any(data.find(marker) >= 0 for marker in _INSTABILITY_MARKERS)
+                and FindInMap(data, r"R\w*\s*->\s*U\w*\s+instability", ignoreCase=True) is not None):
+            return True
+    if program != Defaults.gaussianExtension:
+        return (data.find(b"WAVEFUNCTION STABILITY ANALYSIS") >= 0
+                and data.rfind(b"The stability analysis shows that the wavefunction is stable") < 0)
+    return False
 
 # CompUtils writes these itself in genFile(), so user copies would conflict
 RESERVED_ORCA_BLOCKS = {"pal", "maxcore"}
 # '# @NAME' (or '# @tag NAME') names what follows it in a keylists.cusf section: an ORCA block, a method's route.
 # 'tag' needs whitespace after it to be the keyword, so '# @tagged' names 'tagged'
 TAG_DIRECTIVE = r"#\s*@(?:tag\s+)?([\w-]+)"
+_TAG_DIRECTIVE_RE = regex.compile(TAG_DIRECTIVE)
 
 def OrcaBlockName(blockText: str) -> str:
     """'%cpcm\\n  smd true\\nend\\n' -> 'cpcm'."""
@@ -928,7 +1149,7 @@ def _SplitOrcaBlocks(lines: list[str]) -> list[tuple[str, str]]:
     No 'end' counting, so nested ends (e.g. %geom constraints) are safe. Lines outside a block are dropped."""
     blocks, pendingTag, current = [], "", None
     for line in lines + ["%"]:   # the sentinel closes the last block (and is never closed itself)
-        tagMatch = regex.match(TAG_DIRECTIVE, line)
+        tagMatch = _TAG_DIRECTIVE_RE.match(line)
         if (tagMatch or line.startswith("%")) and current is not None:
             while current[1] and (not current[1][-1].strip() or current[1][-1].lstrip().startswith("#")):
                 current[1].pop()
@@ -971,7 +1192,7 @@ def RouteEntries(data) -> list[tuple[str, list[tuple[int, str]]]]:
     data.seek(0)
     for index, rawLine in enumerate(iter(data.readline, b"")):
         line = rawLine.decode().strip()
-        tagMatch = regex.match(TAG_DIRECTIVE, line)
+        tagMatch = _TAG_DIRECTIVE_RE.match(line)
         if tagMatch:
             pendingTag = tagMatch.group(1).lower()
             continue
@@ -1023,6 +1244,9 @@ def ExtractBenchmarkMethods(data) -> list[str]:
 # Blocks an ORCA re-run never carries over: genFile writes %pal/%maxcore, and the new geometry comes from the output
 RERUN_SKIPPED_BLOCKS = RESERVED_ORCA_BLOCKS | {"coords"}
 
+_ORCA_GEOM_BLOCK_RE = regex.compile(r"\*\s*(?:xyz|internal|int|gzmt)\b", regex.IGNORECASE)
+
+
 def OrcaInputBlocks(inputText: str) -> list[str]:
     """The %blocks of an ORCA input (ExtractOrcaInput), as written, for a re-run to carry over. The '!' line and the
     geometry are left out, and so is anything after a $new_job (a re-run repeats the first job)."""
@@ -1036,7 +1260,7 @@ def OrcaInputBlocks(inputText: str) -> list[str]:
             break
         if stripped.startswith("*"):
             # '* xyz 0 1' opens a block closed by a lone '*'; '*xyzfile 0 1 geom.xyz' is one line
-            inGeometry = regex.match(r"\*\s*(?:xyz|internal|int|gzmt)\b", stripped, regex.IGNORECASE) is not None
+            inGeometry = _ORCA_GEOM_BLOCK_RE.match(stripped) is not None
             continue
         if stripped.startswith("!"):
             continue
@@ -1070,15 +1294,21 @@ class MixedBasis:
 def NormalizeElement(token: str) -> str:
     return token.lstrip("-").capitalize()
 
+_ELEMENT_LINE_RE = regex.compile(r"\s*((?:-?\w+\s+)+)0\s*$")
+_ELEMENT_INT_RE = regex.compile(r"-?\d+")
+_ELEMENT_SYM_RE = regex.compile(r"-?[A-Za-z]{1,2}")
+_TAG_DIRECTIVE_FULL_RE = regex.compile(TAG_DIRECTIVE + r"\s*")
+
+
 def _ElementLine(line: str) -> tuple[list[str], bool] | None:
     """'C H N O 0' -> (tokens, False); '1 2 3 0' -> (tokens, True); anything else -> None."""
-    lineMatch = regex.match(r"\s*((?:-?\w+\s+)+)0\s*$", line)
+    lineMatch = _ELEMENT_LINE_RE.match(line)
     if lineMatch is None:
         return None
     tokens = lineMatch.group(1).split()
-    if all(regex.fullmatch(r"-?\d+", token) for token in tokens):
+    if all(_ELEMENT_INT_RE.fullmatch(token) for token in tokens):
         return tokens, True
-    if all(regex.fullmatch(r"-?[A-Za-z]{1,2}", token) and NormalizeElement(token) in ELEMENT_SET for token in tokens):
+    if all(_ELEMENT_SYM_RE.fullmatch(token) and NormalizeElement(token) in ELEMENT_SET for token in tokens):
         return tokens, False
     return None
 
@@ -1090,7 +1320,7 @@ def ExtractMixedBasisSets(data) -> dict[str, MixedBasis]:
     lines = data.read().decode().replace("\r\n", "\n").split("\n")
     chunks, name, current = [], "", []
     for line in lines:
-        directive = regex.fullmatch(TAG_DIRECTIVE + r"\s*", line.strip())
+        directive = _TAG_DIRECTIVE_FULL_RE.fullmatch(line.strip())
         if directive:
             chunks.append((name, current))
             name, current = directive.group(1).lower(), []
@@ -1207,6 +1437,9 @@ def ElectronProblem(coordinateList: list[str], charge: int, multiplicity: int) -
     return ""
 
 
+_ELEMENT_TOKEN_RE = regex.compile(r"[A-Za-z]{1,2}")
+
+
 def MoleculeElements(coordinateList: list[str]) -> set[str]:
     """Element symbols in a coordinate list. Handles atomic numbers, 'C(Fragment=1)', 'C-Bq' (ghost atoms still carry
     basis functions), 'C1' labels; drops bare 'Bq' and dummy 'X' atoms."""
@@ -1219,7 +1452,7 @@ def MoleculeElements(coordinateList: list[str]) -> set[str]:
         if token.isdigit():
             symbol = ATOMIC_SYMBOLS.get(int(token), token)
         else:
-            symbolMatch = regex.match(r"[A-Za-z]{1,2}", token)
+            symbolMatch = _ELEMENT_TOKEN_RE.match(token)
             if symbolMatch is None:
                 continue
             symbol = symbolMatch.group(0).capitalize()

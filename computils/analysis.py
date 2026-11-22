@@ -4,8 +4,6 @@ from pathlib import Path
 
 import regex
 
-import pandas
-
 from .defaults import Defaults
 from .prompts import AskBool, AskFloat, AskStr
 from .fileops import ExtractFrom, ExtractGoodVibes
@@ -31,6 +29,8 @@ CHECK_CATEGORIES = {
     "geometry":   ("SP Geometries", r"differences found between frequency and single-point geometries"
                                     r"|geometries from single-point corrections are missing"),
 }
+_CHECK_CATEGORY_RES = tuple((key, regex.compile(pattern)) for key, (_, pattern) in CHECK_CATEGORIES.items())
+_CAUTION_PREFIX_RE = regex.compile(r"^Caution[!:]\s*")
 ALLOW_ALL = "all"
 # Where GoodVibes' checks start (the table above them can carry 'x' rows of its own)
 CHECKS_HEADER = "Checks for thermochemistry calculations"
@@ -58,8 +58,8 @@ def ReadCheck(output: str) -> list[CheckFinding]:
     findings, current = [], None
     for line in output.split(CHECKS_HEADER, 1)[1].splitlines():
         if line.startswith("x  "):
-            text = regex.sub(r"^Caution[!:]\s*", "", line[3:].strip())
-            category = next((key for key, (_, pattern) in CHECK_CATEGORIES.items() if regex.search(pattern, text)), "")
+            text = _CAUTION_PREFIX_RE.sub("", line[3:].strip())
+            category = next((key for key, pattern in _CHECK_CATEGORY_RES if pattern.search(text)), "")
             current = CheckFinding(category, text)
             findings.append(current)
         elif current is not None and line.startswith("  ") and line.strip() and not line.strip().startswith("*"):
@@ -165,23 +165,20 @@ def SelectionSuffix(files: list[Path]) -> str | None:
     return DetectSuffix(Outputs(Path.cwd()), selected)
 
 
-# An improved version of goodVibesToExcelv3 that now properly formats the numbers in Excel as numbers
 def goodVibesProcessor(inputFile: Path) -> None:
     outputData = ExtractFrom(Path(inputFile), ExtractGoodVibes, empty=[])
     if len(outputData) < 2:
         agent.Fail(f"No GoodVibes table found in {inputFile}. No Excel file was written.")
         return
-    dataFrame = pandas.DataFrame(outputData)
-    # Sets the headers to the table header from GoodVibes
-    dataFrame.columns = dataFrame.iloc[0]
-    # Removes the header from the rest of the data
-    dataFrame = dataFrame[1:]
-    # This whole block is just to get the numbers to number properly
-    writer = pandas.ExcelWriter("GoodVibes.xlsx", engine='xlsxwriter', engine_kwargs={'options': {'strings_to_numbers': True}})
-    dataFrame.to_excel(writer, index=False)
-    workBook = writer.book
-    workSheet = writer.sheets['Sheet1']
-    formatNumber = workBook.add_format({'num_format': '#,##0.000000'})
-    workSheet.set_column('B:J', 12, formatNumber)
-    writer.close()
+    import xlsxwriter
+    # Match pandas.DataFrame.to_excel(..., engine="xlsxwriter", engine_kwargs={"options": {"strings_to_numbers": True}})
+    workBook = xlsxwriter.Workbook("GoodVibes.xlsx", {"strings_to_numbers": True})
+    workSheet = workBook.add_worksheet("Sheet1")
+    headerFormat = workBook.add_format({"bold": True, "border": 1})
+    formatNumber = workBook.add_format({"num_format": "#,##0.000000"})
+    workSheet.write_row(0, 0, outputData[0], headerFormat)
+    for rowIndex, row in enumerate(outputData[1:], 1):
+        workSheet.write_row(rowIndex, 0, row)
+    workSheet.set_column("B:J", 12, formatNumber)
+    workBook.close()
     agent.Written("GoodVibes.xlsx")

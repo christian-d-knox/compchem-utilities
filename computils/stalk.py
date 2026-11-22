@@ -9,7 +9,7 @@ import copy, json, os, subprocess, sys, time
 from dataclasses import dataclass, field, asdict, fields
 from pathlib import Path
 
-from .actions  import NTS_SP, NTS_DONE
+from .actions  import NTS_SP, NTS_DONE, WAIT_ANY, WAIT_CHAIN, WAIT_ALL
 from .console  import console
 from .datafile import RecordEndings
 from .defaults import Defaults, BackUpFile
@@ -792,6 +792,43 @@ def _WaitDone(job: TrackedJob) -> bool:
     """Whether a wait is over for a job: it's no longer watched, or its Neva-Touch Scheduler step is already taken."""
     return not Watched(job) or _StepTaken(job) or job.cancelled
 
+def _ResolveChain(rootKey: str, byKey: dict[str, TrackedJob],
+                  endedSnapshots: dict[str, TrackedJob]) -> list[TrackedJob]:
+    """Follows a waited root job through any Neva-Touch Scheduler follow-ups (re-runs and SPs) in submission order.
+    Returns [] if the root itself was dismissed before finishing."""
+    current = byKey.get(rootKey) or endedSnapshots.get(rootKey)
+    if current is None:
+        return []
+    chain, seen = [current], {current.key}
+    allJobs = [*byKey.values(), *(job for key, job in endedSnapshots.items() if key not in byKey)]
+    while current.stepOutcome in (SUBMITTED, RERUN) and current.nextJob:
+        nxt = next((other for other in allJobs
+                    if f"{other.name} (ID {other.jobID})" == current.nextJob and other.key not in seen), None)
+        if nxt is None:
+            break
+        chain.append(nxt)
+        seen.add(nxt.key)
+        current = nxt
+    return chain
+
+def _ChainDone(chain: list[TrackedJob]) -> bool:
+    """Whether a chain has reached a terminal state (its current tail job is done and either ended the chain,
+    stopped/failed, wasn't an NTS job, or had its next step dismissed)."""
+    return bool(chain) and _WaitDone(chain[-1])
+
+def _JobFailed(job: TrackedJob) -> bool:
+    """Whether a finished job/chain tail warrants reading its output with `cu -info`."""
+    return not job.cancelled and (not job.termination or job.termination == Defaults.terminationVariants[2]
+                                  or job.stepOutcome in (GAVE_UP, FAILED, STOPPED))
+
+def _DeduplicateJobs(jobs: list[TrackedJob]) -> list[TrackedJob]:
+    seen, unique = set(), []
+    for job in jobs:
+        if job.key not in seen:
+            seen.add(job.key)
+            unique.append(job)
+    return unique
+
 def _StoreStamp() -> int:
     """When the store was last written (0: not there). The Neva-Touch Scheduler's hooks run on compute nodes and share
     only the filesystem with a wait on the login node, so this is how a wait hears of their steps at once."""
@@ -825,24 +862,35 @@ def _Sleep(seconds: float, stamp: int) -> str:
         time.sleep(min(WAIT_CHECK, left))
     return WAIT_GONE if _OutputClosed() else WAIT_TIMER
 
-def Wait(names: list[str]) -> list[TrackedJob]:
-    """`cu -st --wait [JOB…]`: pings now and every stalkFrequency minutes until one of the jobs (the named ones; none
-    named: every job still watched) has ended, then reports the jobs that ended, each one's ending message, and the
-    command to wait again for the rest (with any job the Neva-Touch Scheduler submitted). A Neva-Touch Scheduler step
-    ends the wait as soon as its hook records it (a look at the store every WAIT_CHECK seconds; the queue is read only
-    when one is found, for the report). Gives up after trackedJobHours (a backstop), or quietly once nobody reads its
-    output."""
+def Wait(names: list[str], mode: str = WAIT_CHAIN) -> list[TrackedJob]:
+    """`cu -st --wait [JOB…] [--wait-mode any|chain|all]`: pings now and every stalkFrequency minutes until the
+    wait condition for `mode` is met:
+      - `chain` (default): any waited job's full Neva-Touch Scheduler chain reaches a terminal state;
+      - `any`: any individual job ends (even an intermediate stage that submits a follow-up);
+      - `all`: every job/chain in the wait list reaches a terminal state (normal or error).
+    A Neva-Touch Scheduler step wakes the sleep as soon as its hook records it (a look at the store every WAIT_CHECK
+    seconds; the queue is read only when needed for the report). Gives up after trackedJobHours, or quietly once
+    nobody reads its output."""
     from . import agent
     jobs = LoadTracked()
-    waited = set(MatchJobs(names, jobs)) if names else {job.key for job in jobs if not _WaitDone(job)}
+    waited = list(MatchJobs(names, jobs)) if names else [job.key for job in jobs if not _WaitDone(job)]
     if not waited:
         agent.Fail("Nothing to wait for: no tracked job is still in the queue." if not names
                    else "Nothing to wait for: none of those jobs is tracked.")
         return []
-    console.print(f"[operation]Waiting for {len(waited)} job{'s' if len(waited) != 1 else ''} to end (a ping every "
-                  f"{Defaults.stalkFrequency} minutes; a Neva-Touch Scheduler step as soon as it is "
+    modeText = {
+        WAIT_CHAIN: "chain (until a Neva-Touch Scheduler chain finishes)",
+        WAIT_ANY:   "any (until any individual job ends)",
+        WAIT_ALL:   "all (until every waited job and chain finishes)",
+    }[mode]
+    console.print(f"[operation]Waiting for {len(waited)} job{'s' if len(waited) != 1 else ''} (mode: {modeText}; "
+                  f"a ping every {Defaults.stalkFrequency} minutes; a Neva-Touch Scheduler step as soon as it is "
                   f"recorded).[/operation]")
-    start, nextPing, reason, ended = time.monotonic(), 0.0, "", []
+    start, nextPing, reason = time.monotonic(), 0.0, ""
+    ended: list[TrackedJob] = []
+    endedSnapshots: dict[str, TrackedJob] = {}
+    chains: dict[str, list[TrackedJob]] = {}
+    doneKeys: list[str] = []
     while True:
         # Each look re-reads the store, so another stalker's, or a hook's, reading counts too
         jobs = LoadTracked()
@@ -851,16 +899,33 @@ def Wait(names: list[str]) -> list[TrackedJob]:
             if PollQueue(jobs) is None:
                 console.print("[warning]Could not read the queue (squeue failed). Trying again at the next "
                               "ping.[/warning]")
+            else:
+                # PollQueue's fallback may have submitted new follow-up jobs; reload so _ResolveChain sees them
+                jobs = LoadTracked()
             nextPing = time.monotonic() + Defaults.stalkFrequency * 60
         byKey = {job.key: job for job in jobs}
-        ended = [byKey[key] for key in byKey if key in waited and _WaitDone(byKey[key])]
-        if ended and not pinged:
+        if mode == WAIT_ANY:
+            ended = [byKey[key] for key in waited if key in byKey and _WaitDone(byKey[key])]
+            trigger = bool(ended)
+            allDismissed = not any(key in byKey for key in waited)
+        else:
+            chains = {key: _ResolveChain(key, byKey, endedSnapshots) for key in waited}
+            for chain in chains.values():
+                for job in chain:
+                    if _WaitDone(job):
+                        endedSnapshots[job.key] = job
+            doneKeys = [key for key in waited if chains[key] and _ChainDone(chains[key])]
+            dismissedCount = sum(1 for key in waited if not chains[key])
+            trigger = bool(doneKeys) if mode == WAIT_CHAIN else (
+                len(doneKeys) + dismissedCount == len(waited) and bool(doneKeys))
+            allDismissed = dismissedCount == len(waited)
+        if trigger and not pinged:
             # Seen in the store (a hook's step): one ping first, so the report's queue states are current
             nextPing = 0.0
             continue
-        if ended:
+        if trigger:
             reason = "ended"
-        elif not waited & set(byKey):
+        elif allDismissed:
             reason = "dismissed"
         elif time.monotonic() - start >= Defaults.trackedJobHours * 3600:
             reason = "time limit"
@@ -877,35 +942,61 @@ def Wait(names: list[str]) -> list[TrackedJob]:
             # The ping is due (a sleep can end a hair early)
             nextPing = 0.0
 
-    shown = [byKey[key] for key in byKey if key in waited]
-    # The jobs a Neva-Touch Scheduler step submitted are recorded by their hook, maybe after this ping's read
-    latest = LoadTracked()
-    followUps = [other for job in ended for other in FollowUps(job, latest) if other.key not in waited]
-    # A job whose hook has taken its step is done here even while it's still in the queue (its hook finishing)
-    remaining = [job for job in shown + followUps if not _WaitDone(job)]
+    if mode == WAIT_ANY:
+        shown = [byKey[key] for key in waited if key in byKey]
+        # The jobs a Neva-Touch Scheduler step submitted are recorded by their hook, maybe after this ping's read
+        latest = LoadTracked()
+        waitedSet = set(waited)
+        followUps = [other for job in ended for other in FollowUps(job, latest) if other.key not in waitedSet]
+        reportJobs = _DeduplicateJobs(shown + followUps)
+        # A job whose hook has taken its step is done here even while it's still in the queue (its hook finishing)
+        remaining = [job for job in reportJobs if not _WaitDone(job)]
+        endedEntries = [{"name": job.name, "jobId": job.jobID, "message": EndingMessage(job)} for job in ended]
+    else:
+        endedChains = [chains[key] for key in doneKeys]
+        ended = _DeduplicateJobs([chain[-1] for chain in endedChains])
+        doneSet = set(doneKeys)
+        remaining = _DeduplicateJobs([chains[key][-1] for key in waited if chains[key] and key not in doneSet])
+        reportJobs = _DeduplicateJobs([job for key in waited for job in chains[key]])
+        endedEntries = []
+        for chain in endedChains:
+            tail = chain[-1]
+            entry: dict = {"name": tail.name, "jobId": tail.jobID, "message": EndingMessage(tail)}
+            if len(chain) > 1:
+                entry["chain"] = [job.jobID for job in chain]
+            endedEntries.append(entry)
+
     if reason == "ended":
-        console.print(f"[operation]{len(ended)} job{'s' if len(ended) != 1 else ''} ended:[/operation]")
+        unit = "job" if mode == WAIT_ANY else "chain"
+        console.print(f"[operation]{len(ended)} {unit}{'s' if len(ended) != 1 else ''} ended:[/operation]")
     elif reason == "dismissed":
         console.print("[warning]The jobs being waited for are no longer tracked (dismissed).[/warning]")
     else:
         console.print(f"[warning]Stopped waiting after {Defaults.trackedJobHours} hours; the jobs are still "
                       f"running.[/warning]")
-    agent.Result({"wait": {key: value for key, value in (
+    waitResult = {key: value for key, value in (
+        ("mode", mode),
         ("reason", reason),
-        ("ended", [{"name": job.name, "jobId": job.jobID, "message": EndingMessage(job)} for job in ended]),
-        ("waiting", [job.jobID for job in remaining])) if value}})
-    for job in shown + followUps:
+        ("ended", endedEntries),
+        ("waiting", [job.jobID for job in remaining])) if value}
+    agent.Result({"wait": waitResult})
+    for job in reportJobs:
         _PrintJob(job)
         agent.Result(JobRecord(job))
     for job in ended:
-        if job.termination != Defaults.terminationVariants[2] and job.termination:
+        if not _JobFailed(job):
             continue
         agent.Next(agent.CommandLine(["-info", job.outputPath, "--json"]),
                    f"{job.name} didn't end normally: read what its output says before deciding what to do.")
     if remaining:
-        agent.Next(agent.CommandLine(["-st", "--wait", *(job.jobID for job in remaining), "--json"]),
-                   f"{len(remaining)} job{'s' if len(remaining) != 1 else ''} still running: run it as a background "
-                   f"command and end your turn to be woken at the next ending.")
+        waitArgs = ["-st", "--wait", *(job.jobID for job in remaining)]
+        if mode != WAIT_CHAIN:
+            waitArgs += ["--wait-mode", mode]
+        waitArgs.append("--json")
+        why = (f"{len(remaining)} job{'s' if len(remaining) != 1 else ''} still running: run it as a background "
+               f"command and end your turn to be woken "
+               + ("once the whole batch finishes." if mode == WAIT_ALL else "at the next ending."))
+        agent.Next(agent.CommandLine(waitArgs), why)
     return ended
 
 

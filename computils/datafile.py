@@ -21,6 +21,7 @@ It holds exactly what info.FileFacts returns, through FIELDS: `python -m computi
 entry, and checks every sample output reads back as read. Each From line records its file's size and modification
 time, so Lookup answers from the data file only while they match. The geometry and the full frequency list are here
 only (DATA_FILE_ONLY): `cu -info` leaves them out of its report."""
+import functools
 import os
 import sys
 from dataclasses import dataclass
@@ -142,24 +143,28 @@ CONSTRAINT_LINE = (rf"^({COORDINATE_NAMES})((?: (?:{ATOM_LABEL}))*) (Frozen|Scan
 EIGENVECTOR_LINE = rf"^(-?[\d.]+(?:[eE][-+]?\d+)?) ({COORDINATE_NAMES})((?: (?:{ATOM_LABEL}))*)(?: @ (\S+){UNIT})?$"
 # A CREST conformer: its number, energy above the lowest, total energy, population (its set's weight), rotamers
 CONFORMER_LINE = r"^(\d+)\s+(\S+) kcal/mol\s+(\S+) Eh\s+Population (\S+)\s+(\d+) Rotamers?$"
+_FROM_LINE_RE = regex.compile(FROM_LINE)
+_PAIR_SPLIT_RE = regex.compile(r"(.+?)(\s{2,}|$)(.*)")
+_TRAILING_UNIT_RE = regex.compile(r" \([^)]*\)$")
 
 
 # ─── Names and Ranks ──────────────────────────────────────────────────
 
-def _Suffixes() -> tuple[str, ...]:
-    singlePoint, reRun = regex.escape(Defaults.singlePointExtra), regex.escape(Defaults.reRunExtra)
-    # A benchmark's own SP name (BenchmarkName), a single point's (SinglePointName), a re-run's (ReRunName), a CREST
-    # search's (crest.JobName)
-    return (rf"(.+?)-\d+-[^-]+{singlePoint}", rf"(.+){singlePoint}", rf"(.+){reRun}(\d*)",
-            rf"(.+){regex.escape(Defaults.crestExtra)}")
+@functools.lru_cache(maxsize=8)
+def _CompiledSuffixes(singlePoint: str, reRun: str, crest: str) -> tuple:
+    sp, rr, cr = regex.escape(singlePoint), regex.escape(reRun), regex.escape(crest)
+    return tuple(regex.compile(p) for p in (
+        rf"(.+?)-\d+-[^-]+{sp}", rf"(.+){sp}", rf"(.+){rr}(\d*)", rf"(.+){cr}"
+    ))
 
 
 def _Strip(stem: str) -> tuple[str, int]:
     # The root and the re-runs counted on the way down: 8a_re2_SP_re -> ('8a', 3)
+    patterns = _CompiledSuffixes(Defaults.singlePointExtra, Defaults.reRunExtra, Defaults.crestExtra)
     attempts = 0
     while True:
-        for pattern in _Suffixes():
-            found = regex.fullmatch(pattern, stem)
+        for pattern in patterns:
+            found = pattern.fullmatch(stem)
             if found:
                 stem = found.group(1)
                 if found.re.groups == 2:
@@ -469,14 +474,14 @@ def _ParseBlock(text: str) -> tuple[dict, set]:
         rowField, rows = None, []
         if not line.strip():
             continue
-        label, _, value = (part.strip() for part in regex.match(r"(.+?)(\s{2,}|$)(.*)", line).groups())
+        label, _, value = (part.strip() for part in _PAIR_SPLIT_RE.match(line).groups())
         if label == "From":
-            found = regex.match(FROM_LINE, value)
+            found = _FROM_LINE_RE.match(value)
             facts.update(file=found.group(1), _stage=int(found.group(2) or 1), _of=int(found.group(3) or 1),
                          _stamp=(int(found.group(4)), found.group(5)), _reader=int(found.group(6) or 0))
             continue
         # A block's label can carry its unit: 'Frequencies (cm-1)'
-        field = BY_LABEL.get(label) or BY_LABEL.get(regex.sub(r" \([^)]*\)$", "", label))
+        field = BY_LABEL.get(label) or BY_LABEL.get(_TRAILING_UNIT_RE.sub("", label))
         if field is None:
             continue
         if field.kind in ROW_KINDS and not value:

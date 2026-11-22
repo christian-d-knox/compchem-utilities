@@ -16,28 +16,20 @@ profile, SI values, figure labels) is an Excel formula in a workbook**: never a 
 
        {cu} -gv 8a.out 8b.out --spc SP --json
 
-3. **The master copy.** Copy GoodVibes.xlsx to the human's computer, into the project's folder there, under a dated
-   name (GoodVibes_20261119-1430.xlsx). Never edit or overwrite a master; each GoodVibes run gives a new one.
-
-4. **The project workbook** (its name agreed with the human), built with openpyxl (every CompUtils environment has
-   it):
-   - **a raw tab** (GoodVibes Raw): an exact cell-for-cell copy of the master's sheet, with nothing added, removed or
-     reformatted;
-   - **a Sources tab:** which master the raw tab is from, its temperature and concentration, and the date;
-   - **one tab per document** (Delta G Table, REP Pathway A, ...). Its formulas look each value up in the raw tab by
-     structure name and column header (INDEX with MATCH), so a re-run that reorders rows can't break them. Delta G is
-     the difference of `qh-G(T)_SPC` sums (Hartree, the lab's default free energy) times 627.5095, a labelled
-     constant cell;
-   - **mass balance** in the same tab: each species' element counts typed in from its `formula` (step 1), summed and
-     compared by formulas for both sides of every step. If a step doesn't balance, stop and tell the human which
-     species is missing or extra.
+3. **The master copy and project workbook:** Follow `{cu} -agent excel-workbooks` for building and updating the
+   workbook (dated `GoodVibes_YYYYMMDD-HHMM.xlsx` master copy, never edited; `GoodVibes Raw` exact copy; `Sources` tab
+   recording master filename, temperature, concentration, and date; formula tabs per document using `INDEX`/`MATCH` on
+   structure name and column header such as `qh-G(T)_SPC`, labelled `627.5095` conversion cell, and formula-based mass
+   balance from `formula` in `{cu} -info '*.out' --json`). Remember to run your local `cu -env --json` once per session before building
+   workbooks with `openpyxl`.
 
    A script may copy cells and write formulas and labels; **it never writes a number it computed**.
 
-5. **Let Excel calculate.** Open the workbook in Excel, recalculate, save and close it, then read the results back
-   (openpyxl with `data_only=True`, which reads the values Excel saved). Without Excel at hand, ask the human to open
-   and save the workbook. When a new GoodVibes run arrives, replace the raw tab with an exact copy of the new master
-   and update Sources: the formulas pick up the new values.
+4. **Let Excel calculate:** `{cu} -agent excel-workbooks` gives the Windows PowerShell COM and macOS AppleScript
+   commands to trigger `CalculateFull`, save the workbook in Excel, and read evaluated values back via
+   `openpyxl(..., data_only=True)`. Without Excel at hand, ask the human to open and save the workbook. When a new
+   GoodVibes run arrives, replace the raw tab with an exact copy of the new master and update `Sources` (or save a new
+   version `..._v2.xlsx` if the human added charts or formatting).
 
-6. Report every value with its tab, the column it came from and the run's conditions. For the paper's SI, the SI
-   Scraper writes the same energies with the coordinates (see `si-coordinates`).
+5. Report every value with its workbook, tab, column, and `Sources` conditions. For the paper's SI, the SI Scraper writes
+   the same energies with coordinates (see `{cu} -agent si-coordinates`).

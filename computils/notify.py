@@ -1,11 +1,11 @@
 import json, time
-from urllib.request import Request, urlopen
-from urllib.error import URLError, HTTPError
 
 from .console  import console
 from .defaults import Defaults
 
 def _SendTelegram(botToken: str, chatID: str, message: str) -> bool:
+    from urllib.error import URLError, HTTPError
+    from urllib.request import Request, urlopen
     url = f"https://api.telegram.org/bot{botToken}/sendMessage"
     payload = json.dumps({
         "chat_id": chatID,
@@ -26,6 +26,7 @@ def _SendTelegram(botToken: str, chatID: str, message: str) -> bool:
 
 
 def _DetectTelegramChatID(botToken: str, timeoutSeconds: int = 60) -> str | None:
+    from urllib.request import urlopen
     baseURL = f"https://api.telegram.org/bot{botToken}"
     try:
         clearURL = f"{baseURL}/getUpdates?offset=-1"

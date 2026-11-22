@@ -18,6 +18,7 @@ SLURM_NAME = r"[\w.,\-]" # a partition's or cluster's (SLURM takes a comma-separ
 METHOD_NAME_WIDTH = LEFT_WIDTH - 17
 # A geometry row in an input (collapsed in Renders As)
 COORDINATE_ROW = r"^\s*[A-Z][a-z]?\S*\s+-?\d+\.\d+\s+-?\d+\.\d+\s+-?\d+\.\d+"
+_COORDINATE_ROW_RE = regex.compile(COORDINATE_ROW)
 # SLURM rows: their config key
 SLURM_KEYS = {"wall-time": "wallTime", "partition": "partition", "cluster": "cluster"}
 
@@ -104,7 +105,7 @@ def RendersAsText(text: str, extension: str, base: str = "", note: str = "") -> 
         rows.append(Styled(" · ".join(link0), "info"))
         lines = [line for line in lines if not line.startswith("%")]
     for line in lines + [""]:
-        if regex.match(COORDINATE_ROW, line):
+        if _COORDINATE_ROW_RE.match(line):
             atoms += 1
             continue
         if atoms:

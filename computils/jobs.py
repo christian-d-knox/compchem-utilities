@@ -1,4 +1,4 @@
-import os, regex, subprocess, time
+import functools, os, regex, subprocess, time
 from dataclasses import dataclass, field
 from pathlib import Path
 from .console  import console
@@ -21,11 +21,15 @@ def OptMethods(texts: dict[Path, str] | None = None) -> dict[str, str]:
     return Keylist(OPTIMIZATION, texts)
 
 # Route tokens that request a mixed basis, including the slash form (B3LYP/GenECP)
+_ROUTE_SLASH_TOKEN_RE = regex.compile(r"[^\s/]+")
+_ROUTE_LEAK_RE = regex.compile(ROUTE_LEAK_PATTERN)
+
+
 def _IsMixedBasisKeyword(word: str) -> bool:
     return word.lower() in {variant.lower() for variant in Defaults.mixedBasisVariants}
 
 def _UsesMixedBasis(route: str) -> bool:
-    return any(_IsMixedBasisKeyword(word) for word in regex.findall(r"[^\s/]+", route))
+    return any(_IsMixedBasisKeyword(word) for word in _ROUTE_SLASH_TOKEN_RE.findall(route))
 
 # Swaps Gen <-> GenECP in the route, keeping the user's capitalization style (gen / GEN / Gen)
 def _SetMixedBasisKeyword(route: str, needsEcp: bool) -> str:
@@ -36,8 +40,8 @@ def _SetMixedBasisKeyword(route: str, needsEcp: bool) -> str:
         if original.isupper():
             return target.upper()
         return target
-    return regex.sub(r"[^\s/]+", lambda word: Styled(word.group()) if _IsMixedBasisKeyword(word.group())
-                     else word.group(), route)
+    return _ROUTE_SLASH_TOKEN_RE.sub(lambda word: Styled(word.group()) if _IsMixedBasisKeyword(word.group())
+                                     else word.group(), route)
 
 # Writes only the Mixed Basis entries for elements this molecule contains.
 # Returns (basis section, ECP section, elements with no basis entry)
@@ -83,7 +87,7 @@ def MixedBasisSet(sets: dict[str, MixedBasis], tags: list[str]) -> tuple[MixedBa
 def JobFileProblem(route: str, tags: list[str], extensionType: str, elements: set[str],
                    texts: dict[Path, str] | None = None) -> str:
     # {tag} and [group] syntax is parsed out in Catalog.Load and must never reach an input file
-    if regex.search(ROUTE_LEAK_PATTERN, route):
+    if _ROUTE_LEAK_RE.search(route):
         return "Malformed [ ] Group or Unknown % Directive in the Route"
     # The project's solvent ({smd}): RenderRoute leaves the tag only when it can't be written
     from .solvent import SMD_TAG, Problem as SolventProblem
@@ -123,24 +127,34 @@ class RenderedStage:
     newChk: bool = False        # %newchk: starts a new checkpoint, %OldChk-copied from the one so far
     notes: list[str] = field(default_factory=list)     # what CompUtils added, in words (the previews say it)
 
+@functools.lru_cache(maxsize=32)
+def _KeywordPattern(keyword: str):
+    return regex.compile(rf"(?i){keyword}(?:[=(].*)?")
+
+
+_OPT_OPTION_SPLIT_RE = regex.compile(r"[(),]")
+_BASIS_TOKEN_RE = regex.compile(BASIS_PATTERN)
+_CHKBASIS_RE = regex.compile(r"(?i)(?:[^/\s]+/)?chkbas(?:is?)?")
+
+
 def _KeywordAt(tokens: list[str], keyword: str) -> int | None:
     """The index of a route keyword written bare, keyword=... or keyword(...), or None."""
-    return next((index for index, token in enumerate(tokens)
-                 if regex.fullmatch(rf"(?i){keyword}(?:[=(].*)?", token)), None)
+    pattern = _KeywordPattern(keyword)
+    return next((index for index, token in enumerate(tokens) if pattern.fullmatch(token)), None)
 
 def _KeywordOptions(token: str) -> list[str]:
     """'guess=(read,mix)' -> ['read', 'mix']; 'geom=allcheck' -> ['allcheck']; a bare keyword -> []."""
     _, _, options = token.partition("=") if "=" in token else token.partition("(")
-    return [option.strip().lower() for option in regex.split(r"[(),]", options) if option.strip()]
+    return [option.strip().lower() for option in _OPT_OPTION_SPLIT_RE.split(options) if option.strip()]
 
 def _NamesBasis(tokens: list[str]) -> bool:
     """Whether a Gaussian route names a basis: 'method/basis', or a basis token (Gen and GenECP included)."""
-    return any("/" in token or regex.match(BASIS_PATTERN, token) for token in tokens)
+    return any("/" in token or _BASIS_TOKEN_RE.match(token) for token in tokens)
 
 def _ReadsChkBasis(tokens: list[str]) -> bool:
     """Whether a Gaussian route reads its basis from the checkpoint: ChkBasis (or Gaussian's short ChkBas) bare or as
     the basis half of 'method/ChkBas'."""
-    return any(regex.fullmatch(r"(?i)(?:[^/\s]+/)?chkbas(?:is?)?", token) for token in tokens)
+    return any(_CHKBASIS_RE.fullmatch(token) for token in tokens)
 
 def _ReleaseFrozen(tokens: list[str]) -> bool:
     """Add 'nofreeze' to an optimization's options ('opt' -> 'opt=nofreeze', 'opt=(ts,calcfc)' ->
@@ -381,6 +395,8 @@ _TITLE_AND_MOLECULE = r"(\n[ \t]*\n(?:[ \t]*\n)*)((?:[ \t]*\S[^\n]*\n)+)([ \t]*\
 # ORCA's geometry: '* xyz 0 1' rows '*', or '* xyzfile 0 1 file.xyz'
 _ORCA_GEOMETRY = r"(?im)^[ \t]*\*[ \t]*(xyzfile|xyz)[ \t]+(-?\d+)[ \t]+(\d+)[^\n]*\n"
 _ORCA_GEOMETRY_END = r"(?m)^[ \t]*\*[ \t]*$"
+_GAUSSIAN_INPUT_ROUTE_RE = regex.compile(GAUSSIAN_INPUT_ROUTE)
+_TITLE_AND_MOLECULE_RE = regex.compile(_TITLE_AND_MOLECULE)
 
 def _RenamedCheckpoint(line: str, oldName: str, newName: str) -> str:
     """A %chk/%oldchk line with a checkpoint named after the old job renamed for the new one (8a_2.chk -> 8a_re_2.chk)."""
@@ -419,7 +435,7 @@ def RestartInputText(inputPath: Path, program: str, stage: int, molecule: Molecu
     sections = []
     for number, section in enumerate(stages[stage - 1:], stage):
         section = section.strip("\n") + "\n"
-        routeMatch = regex.search(GAUSSIAN_INPUT_ROUTE, section)
+        routeMatch = _GAUSSIAN_INPUT_ROUTE_RE.search(section)
         if routeMatch is None:
             return "", f"stage {number} of {inputPath.name} has no route"
         link0 = [_RenamedCheckpoint(line, oldName, newName) if not (number == stage and line.lower().startswith("%oldchk"))
@@ -441,7 +457,7 @@ def RestartInputText(inputPath: Path, program: str, stage: int, molecule: Molecu
                 route = " ".join(tokens)
             if "allcheck" not in reads:
                 # Its own title and charge line are kept; the coordinates are the last geometry
-                written = regex.match(_TITLE_AND_MOLECULE, after)
+                written = _TITLE_AND_MOLECULE_RE.match(after)
                 if written is None:
                     return "", f"stage {number} of {inputPath.name} has no title and charge line"
                 chargeLine = written.group(4).splitlines()[0].strip()

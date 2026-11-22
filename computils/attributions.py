@@ -406,27 +406,32 @@ def _Key(name: str) -> str:
 def _Roots(repo: Path) -> set[str]:
     """Every package pyproject.toml and the environment files ask for."""
     import regex, tomllib
-    roots = {regex.split(r"[ <>=!~\[;]", entry)[0] for entry in
+    depSplit = regex.compile(r"[ <>=!~\[;]")
+    verSplit = regex.compile(r"[ <>=!~]")
+    pipDirective = regex.compile(r"(?m)^\s*#\s*@pip\s+(\S+)")
+    roots = {depSplit.split(entry)[0] for entry in
              tomllib.loads((repo / "pyproject.toml").read_text())["project"]["dependencies"]}
     roots |= set(tomllib.loads((repo / "pyproject.toml").read_text())["build-system"]["requires"][0:1])
     for yml in repo.glob("compUtils*.yml"):
         # Only the dependencies list (the channels list comes first), and its '# @pip SPEC' lines (environment.ReadYml)
         text = yml.read_text(encoding="utf-8")
         dependencies = text.split("dependencies:", 1)[-1]
-        roots |= {regex.split(r"[ <>=!~]", line.strip()[2:])[0] for line in dependencies.splitlines()
+        roots |= {verSplit.split(line.strip()[2:])[0] for line in dependencies.splitlines()
                   if line.startswith("  - ")}
-        roots |= {regex.split(r"[ <>=!~]", spec)[0] for spec in regex.findall(r"(?m)^\s*#\s*@pip\s+(\S+)", text)}
-    return {regex.split(r"[ <>=!~]", root)[0] for root in roots}
+        roots |= {verSplit.split(spec)[0] for spec in pipDirective.findall(text)}
+    return {verSplit.split(root)[0] for root in roots}
 
 def _Requirements(name: str, extras: set[str]) -> list[tuple[str, set[str]]]:
     import regex
+    extraPat = regex.compile(r"extra\s*==\s*['\"]([^'\"]+)")
+    reqPat = regex.compile(r"\s*([A-Za-z0-9_.-]+)(?:\[([^\]]+)\])?")
     found = []
     for requirement in metadata.requires(name) or []:
         marker = requirement.split(";", 1)[1] if ";" in requirement else ""
-        extra = regex.search(r"extra\s*==\s*['\"]([^'\"]+)", marker)
+        extra = extraPat.search(marker)
         if extra and extra.group(1) not in extras:
             continue
-        match = regex.match(r"\s*([A-Za-z0-9_.-]+)(?:\[([^\]]+)\])?", requirement)
+        match = reqPat.match(requirement)
         found.append((match.group(1), set((match.group(2) or "").replace(" ", "").split(",")) - {""}))
     return found
 
@@ -475,8 +480,9 @@ def Check(repo: Path) -> list[str]:
 def _LicenseTokens(text: str) -> list[str]:
     """The license names in a declaration, normalized (e.g. 'BSD License' -> 'bsd', 'Apache-2.0' -> 'apache-2-0')."""
     import regex
+    tokenPat = regex.compile(r"[A-Za-z][A-Za-z0-9.-]{2,}")
     words = {"license", "licence", "osi", "approved", "and", "with", "the", "software", "foundation", "copyright"}
-    return [_Key(token) for token in regex.findall(r"[A-Za-z][A-Za-z0-9.-]{2,}", text) if token.lower() not in words][:3]
+    return [_Key(token) for token in tokenPat.findall(text) if token.lower() not in words][:3]
 
 
 if __name__ == "__main__":

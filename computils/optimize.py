@@ -25,6 +25,8 @@ FROM_SOURCE = "method-from"
 FROM_SOURCE_NAME = "From Source"
 # A stage whose route needs lines after the geometry: Gaussian's Opt=ModRedundant
 STAGE_INPUT = r"(?i)modred"
+_STAGE_INPUT_RE = regex.compile(STAGE_INPUT)
+_SIGNED_INT_RE = regex.compile(r"-?\d+")
 # How Gaussian stages are separated: split on the separator line alone, so the stages join back exactly
 # (fileops.InputStageTexts also takes the blank lines around it: right for re-runs, not for editing in place)
 LINK1_LINE = r"(?im)^[ \t]*--link1--[ \t]*\r?\n"
@@ -75,7 +77,7 @@ def ModRedCheck(text: str, atoms: int) -> tuple[str, list[str]]:
         for field in fields[1:]:
             if field == "*":
                 continue
-            if not regex.fullmatch(r"-?\d+", field):
+            if not _SIGNED_INT_RE.fullmatch(field):
                 break
             if not 1 <= int(field) <= atoms:
                 problems.append(f"✗ Line {number}: Atom {field} Isn't in the Geometry (1–{atoms})")
@@ -133,7 +135,7 @@ def ModRedStages(template: RouteTemplate, extension: str) -> list[int]:
     """The stages (numbered from 1) whose route takes ModRed lines after the geometry (Gaussian only)."""
     if extension != Defaults.gaussianExtension:
         return []
-    return [number for number, stage in enumerate(template.stages, 1) if regex.search(STAGE_INPUT, stage.base)]
+    return [number for number, stage in enumerate(template.stages, 1) if _STAGE_INPUT_RE.search(stage.base)]
 
 
 def Chained(template: RouteTemplate, extension: str) -> bool:

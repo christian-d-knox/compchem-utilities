@@ -12,30 +12,27 @@ from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import DataTable, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 from textual.worker import get_current_worker
 
 from ..actions  import SpinState
-from ..catalog  import ROUTE_LEAK_PATTERN, STAGE_JOIN, Catalog, RouteTemplate
+from ..catalog  import ROUTE_LEAK_PATTERN, RouteTemplate
 from ..defaults import Defaults
-from ..fileops  import (ExtractFrom, ExtractFromText, ExtractXyz, InputRoutes, JobChecks, extensionGetter,
-                        fileCreation)
-from ..jobs     import HeaderSends, OptMethods
+from ..fileops  import ExtractFrom, ExtractFromText, ExtractXyz, Formula, InputRoutes, JobChecks, fileCreation
+from ..info     import PreviewMolecule
 from ..molecule import Molecule
 from ..smiles   import Available as RDKitAvailable
-from ..optimize import (FROM_SOURCE as FROM_SOURCE_KEY, COORDINATES_MARKER, ModRedCheck, ModRedStages, MethodChoices,
+from ..optimize import (FROM_SOURCE as FROM_SOURCE_KEY, ModRedCheck, ModRedStages, MethodChoices,
                         MethodProblems, CustomMethod, StartingSpin, SinglePointChoices, SinglePointStep, SplitStages,
                         JoinStages, OptimizationJob)
 from .fromsmiles import BUILDING, ConformerCount, ConformerTable, Indented, SmilesBuilder, StructureLines
-from .common    import (NAV_BINDINGS, NUMBER, TEXT, Column, FrameRule, KeyHint, NavFooter, Notice, Popup, Setting, SettingsList,
-                        ValueInput)
+from .common    import NAV_BINDINGS, TEXT, Column, FrameRule, KeyHint, NavFooter, Notice, Popup, Setting, SettingsList, ValueInput
 from .home      import TitleLine
-from .inspect   import SPAN_STYLES, Formula, JobSummary, OutputExtensions, PreviewMolecule, RouteSpans, Styled
+from .inspect   import JobSummary, OutputExtensions, Styled
 from .lists     import Cut, ProblemText, TextEditor
-from .rows      import (COORDINATE_ROW, FILE_NAME, LEFT_WIDTH, FillValue, ListValue, MethodRows, OutputRows, ProgramOf,
+from .rows      import (FILE_NAME, LEFT_WIDTH, FillValue, ListValue, MethodRows, OutputRows, ProgramOf,
                         RendersAsText, ResourceRows, RouteMeaning)
 from .steps     import OPT_STEP, SP_STEP, STEP_TITLES, SchedulerSteps, StepRule
 

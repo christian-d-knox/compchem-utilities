@@ -12,12 +12,11 @@ from ..actions  import Action
 from ..console  import console
 from ..catalog  import Catalog, RouteTemplate
 from ..defaults import Defaults
-from ..fileops  import (MapFile, HasContent, ExtractFrom, ExtractTermination, IdentifyMethod, MoleculeElements,
-                        extensionGetter, ReRunTemplate, OrcaBlockName, ExtractProgram, PROGRAMS,
-                        TERMINATION_TAIL, Formula)
+from ..fileops  import (MapFile, HasContent, ExtractFrom, ExtractTermination, IdentifyMethod,
+                        OrcaBlockName, ExtractProgram, PROGRAMS, TERMINATION_TAIL)
 from ..jobs     import RenderStages, StagesProblem
 from ..molecule import Molecule
-from ..info     import FileFacts, OutputExtensions, PreviewMolecule, SourceProgramName, Status
+from ..info     import FileFacts, OutputExtensions, SourceProgramName, Status
 
 def Styled(text: str, styleName: str) -> Text:
     """Text in one of the CLI's semantic styles (error, good, ...). ApplyTheme has already chosen lowColor or hexCode."""

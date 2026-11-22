@@ -99,6 +99,10 @@ class Variant:
         return not self.platform or self.platform == THIS_PLATFORM
 
 
+_PLATFORM_DIRECTIVE_RE = regex.compile(r"\s*#\s*@platform\s+(\w+)")
+_PIP_DIRECTIVE_RE = regex.compile(r"\s*#\s*@pip\s+(\S+)")
+
+
 def ReadYml(text: str, file: str) -> Variant | str:
     """A variant from an env file's text, or why it can't be read. The twin of conda-installer.py's ReadYml (which
     can't be imported: it is a standalone Python 3.6 script): flat lists only, nodefaults left out. '# @platform NAME'
@@ -106,10 +110,10 @@ def ReadYml(text: str, file: str) -> Variant | str:
     pip-installs without its dependencies (a comment, so the file stays a valid conda env file)."""
     name, channels, specs, pipSpecs, platform, section = "", [], [], [], "", None
     for raw in text.splitlines():
-        directive = regex.match(r"\s*#\s*@platform\s+(\w+)", raw)
+        directive = _PLATFORM_DIRECTIVE_RE.match(raw)
         if directive:
             platform = directive.group(1).lower()
-        pip = regex.match(r"\s*#\s*@pip\s+(\S+)", raw)
+        pip = _PIP_DIRECTIVE_RE.match(raw)
         if pip:
             pipSpecs.append(pip.group(1))
         line = raw.split("#", 1)[0].rstrip()
@@ -290,10 +294,13 @@ def InstalledPackages(prefix: Path) -> dict[str, str]:
 
 # ─── Matching specs (a subset of conda's MatchSpec) ───────────────────
 
+_VERSION_PART_RE = regex.compile(r"\d+|[a-z]+")
+
+
 def _VersionKey(version: str) -> list[tuple]:
     """Comparable components: numbers as numbers, letters below them (1.0rc1 < 1.0), 'post' above."""
     key = []
-    for part in regex.findall(r"\d+|[a-z]+", version.lower()):
+    for part in _VERSION_PART_RE.findall(version.lower()):
         if part.isdigit():
             key.append((1, int(part), ""))
         else:

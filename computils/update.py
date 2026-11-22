@@ -14,9 +14,6 @@ import json
 import os
 import subprocess
 import sys
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -67,7 +64,11 @@ def InstalledSource() -> Source:
         record = {}
     if "dir_info" in record:
         url = record.get("url", "")
-        path = urllib.request.url2pathname(urllib.parse.urlparse(url).path) if url.startswith("file:") else url
+        if url.startswith("file:"):
+            import urllib.parse, urllib.request
+            path = urllib.request.url2pathname(urllib.parse.urlparse(url).path)
+        else:
+            path = url
         return Source(FALLBACK_BRANCH, localPath=path or "a local folder",
                       editable=bool(record["dir_info"].get("editable")))
     vcs = record.get("vcs_info", {})
@@ -76,12 +77,14 @@ def InstalledSource() -> Source:
 
 def _Get(url: str, accept: str = "") -> str:
     """The text at url. Raises urllib.error.URLError / OSError / ValueError."""
+    import urllib.request
     request = urllib.request.Request(url, headers={"User-Agent": "CompUtils", **({"Accept": accept} if accept else {})})
     with urllib.request.urlopen(request, timeout=_timeout) as response:
         return response.read().decode()
 
 
 def _Reason(error: Exception) -> str:
+    import urllib.error
     if isinstance(error, urllib.error.HTTPError):
         return f"GitHub answered {error.code} {error.reason}"
     return str(getattr(error, "reason", error))
@@ -89,6 +92,7 @@ def _Reason(error: Exception) -> str:
 
 def _GitHub(path: str):
     """A GitHub API response (JSON), or a str saying why there isn't one."""
+    import urllib.error
     try:
         return json.loads(_Get(f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/{path}",
                                "application/vnd.github+json"))
@@ -98,6 +102,7 @@ def _GitHub(path: str):
 
 def RepoFiles(ref: str) -> list[str] | str:
     """The names of the files at the repository's root at ref (a branch or commit), or why they couldn't be read."""
+    import urllib.parse
     answer = _GitHub(f"contents?ref={urllib.parse.quote(ref)}")
     return answer if isinstance(answer, str) else [entry["name"] for entry in answer if entry.get("type") == "file"]
 
@@ -105,6 +110,7 @@ def RepoFiles(ref: str) -> list[str] | str:
 def RawFile(ref: str, path: str) -> tuple[bool, str]:
     """(True, the text of the repository's file at ref), or (False, why it couldn't be read). Raw files don't count
     against the API's hourly limit."""
+    import urllib.error
     try:
         return True, _Get(f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{ref}/{path}")
     except (urllib.error.URLError, OSError, ValueError) as error:

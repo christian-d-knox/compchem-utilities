@@ -6,7 +6,6 @@ import tomllib as tom
 from itertools import zip_longest
 from pathlib import Path
 
-import regex
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -16,14 +15,15 @@ from textual.widgets import DataTable, Input, Label, ListItem, ListView, Static
 
 from ..actions  import SpinState
 from ..catalog  import MethodKey, ParseRouteTemplate, UnknownSelectors
+from ..configops import ValidateProjectValue
 from ..defaults import DELETE, Defaults, tomlValue, writeToml
-from ..fileops  import PROGRAMS, RESERVED_ORCA_BLOCKS, TAG_DIRECTIVE, ExtractFromText, StageProblem, extensionGetter
+from ..fileops  import PROGRAMS, ExtractFromText, StageProblem, extensionGetter
 from ..jobs     import RenderStages
 from ..keylists import (BENCHMARK, CONFORMER_SEARCH, FILE_PREAMBLE, KEYLISTS_FILE, OLD_KEYLISTS_FILE, MIXED_BASIS,
                         OPTIMIZATION,
-                        ORCA_BLOCKS, DefaultBody,
+                        ORCA_BLOCKS, DeclaredTags, DefaultBody,
                         SECTIONS as KEYLIST_SECTIONS, FileProblems, Keylist, KeylistSource, LevelSections, Levels,
-                        RemoveSection, ReplaceSection, RouteAt, SectionBody, WriteKeylists)
+                        RemoveSection, ReplaceSection, ReservedOrcaBlocks, RouteAt, SectionBody, WriteKeylists)
 from ..molecule import Molecule
 from ..project  import (PROJECT_CONFIG, PROJECT_FILES, FindProjectRoot, ProjectFilePath, ReloadConfig,
                         SaveProjectConfig)
@@ -218,6 +218,8 @@ def Shown(value, masked: bool = False) -> str:
 
 def ParseValue(key: str, text: str):
     """(value, "") for text typed into the edit box, or (None, why not). Checked like a value loaded from TOML."""
+    if key in Defaults._PROJECT_KEYS:
+        return ValidateProjectValue(key, text, allowEmptyCluster=True)
     expected = Defaults._TYPES[key]
     raw = text
     if expected is not str:
@@ -492,7 +494,7 @@ class ConfigScreen(Screen):
                                     "it (Geom=AllCheck, Guess=Read). Renders As shows each.", "info"))
             if name == OPTIMIZATION:
                 # A name declared twice is numbered, not dropped (two unnamed routes of one method are expected)
-                declared = [found.lower() for found in regex.findall(rf"(?m)^\s*{TAG_DIRECTIVE}", body)]
+                declared = DeclaredTags(body)
                 problems += [f"⚠ @{found} Names {declared.count(found)} Routes (Second Is {found}-2)"
                              for found in dict.fromkeys(declared) if declared.count(found) > 1]
             elif not routes:
@@ -527,7 +529,7 @@ class ConfigScreen(Screen):
                                   f"{Solvation(options) or 'Gas Phase'}"))
                 if OptionsProblem(options):
                     problems.append(f"✗ {label}: {OptionsProblem(options)}")
-            declared = [found.lower() for found in regex.findall(rf"(?m)^\s*{TAG_DIRECTIVE}", body)]
+            declared = DeclaredTags(body)
             problems += [f"⚠ @{found} Names {declared.count(found)} Entries (Second Is {found}-2)"
                          for found in dict.fromkeys(declared) if declared.count(found) > 1]
         else:
@@ -537,7 +539,7 @@ class ConfigScreen(Screen):
                     lines.append(Text(f"{source} Use:"))
                     lines += [Styled(f"  {tag} ✓", "good") if tag in value else Styled(f"  {tag} ✗ Missing", "error")
                               for tag in used]
-            reserved = sorted({found.lower() for found in regex.findall(r"(?m)^%(\w+)", body)} & RESERVED_ORCA_BLOCKS)
+            reserved = ReservedOrcaBlocks(body)
             problems += [f"⚠ %{block} is written by CompUtils; ignored" for block in reserved]
             short = f"{len(value)} Tag{'s' if len(value) != 1 else ''}"
         lines += [Styled(problem, "error" if problem.startswith("✗") else "warning") for problem in problems]

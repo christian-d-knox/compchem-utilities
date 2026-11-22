@@ -48,6 +48,11 @@ def _LoadSpinOverrides(overridePath: Path) -> list[tuple[str, SpinState]]:
     return overrides
 
 
+_GUESS_MIX_RE = regex.compile(r"GUESS[=(]+\(?\s*MIX")
+_BROKENSYM_RE = regex.compile(r"BrokenSym", regex.IGNORECASE)
+_UNSET = object()
+
+
 def _RouteDeclaresBrokenSymmetry(molecule) -> str:
     """Return a reason string if the previous route card already declared an unrestricted/BS singlet, else ''."""
     for token in molecule.sourceRoute.split():
@@ -59,10 +64,10 @@ def _RouteDeclaresBrokenSymmetry(molecule) -> str:
         found = SplitReference(MethodKey(token))
         if found and found[0] == "U":
             return f"Route Has {token.split('/')[0]}"
-        if regex.match(r"GUESS[=(]+\(?\s*MIX", upperToken):
+        if _GUESS_MIX_RE.match(upperToken):
             return f"Route Has {token}"
     # ORCA broken-symmetry block, in the input as written
-    if regex.search(r"BrokenSym", molecule.sourceInput, regex.IGNORECASE):
+    if _BROKENSYM_RE.search(molecule.sourceInput):
         return "Input Has BrokenSym"
     return ""
 
@@ -76,7 +81,7 @@ def SpinOverride(rootName: str) -> tuple[SpinState, str] | None:
                  if fnmatchcase(rootName, pattern)), None)
 
 
-def ClassifySpin(molecule, data) -> tuple[SpinState, str]:
+def ClassifySpin(molecule, data, spinSquared=_UNSET) -> tuple[SpinState, str]:
     """Classify one molecule (fileops.ReadMolecule) from its source file's open map, the one ReadMolecule read.
     Returns (state, short reason for the log)."""
     rootName = molecule.rootName
@@ -107,12 +112,14 @@ def ClassifySpin(molecule, data) -> tuple[SpinState, str]:
         return SpinState.OSS, routeReason
 
     # 4. Spin contamination (heuristic, last resort)
-    spinSquared = ExtractSpinContamination(data)
+    program = getattr(molecule, "sourceProgram", "")
+    if spinSquared is _UNSET:
+        spinSquared = ExtractSpinContamination(data, program=program)
     if spinSquared is not None and spinSquared > Defaults.ossSpinThreshold:
         return SpinState.OSS, f"<S**2>={spinSquared:.3f}"
 
     # 5. Closed-shell, but flag an unresolved instability for the user to decide
-    if HasRestrictedInstability(data):
+    if HasRestrictedInstability(data, program=program):
         console.print(f"[warning]{rootName}: the output reports a restricted -> unrestricted instability, but it "
                       f"is being treated as closed-shell. Add '{rootName}  oss' to spinstates.txt if it is an "
                       f"open-shell singlet.[/warning]")

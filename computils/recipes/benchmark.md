@@ -8,6 +8,6 @@
 
        {cu} -b 8a.out --dry-run --json
 
-3. Follow them (`{cu} -st --json`), then compare energies:
+3. Wait without polling (`{cu} -agent wait-for-jobs`), then compare energies:
 
        {cu} -info 8a_SP.out --json

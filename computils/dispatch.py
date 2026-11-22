@@ -4,42 +4,33 @@ Single execution path for all Intents.
 The CLI (argparse) and the TUI both build typed Intents, which arrive
 here. Dispatch() routes to the per-action handler based on intent type.
 """
-import os, subprocess
+from __future__ import annotations
+
+import os, subprocess, sys
 from pathlib import Path
 
 from rich.markup import escape
 
 from .console   import console
 from .defaults  import Defaults
-from .catalog   import Catalog
-from .molecule  import Molecule
 from .intent    import (
     Intent,
     RunIntent, SinglePointIntent, BenchmarkIntent, ReRunIntent, ThenSP,
     CubeIntent, FormCheckIntent, ExcelIntent, GoodVibesIntent,
     FirstTimeSetupIntent, UpdateIntent, PluginUpdateIntent, InitProjectIntent, ProfileIntent, RefreshIntent, StalkIntent,
     AttributionsIntent, NevaTouchIntent, EnvironmentIntent, InfoIntent, MethodsIntent, OptimizationIntent, SIIntent,
-    CancelIntent, ScrapeIntent,
+    CancelIntent, ScrapeIntent, ConfigIntent,
     AgentIntent, XyzIntent, CrestIntent,
 )
-from .fileops   import grabPaths, formCheck, fileCreation, HasContent, MapFile, ReadMolecule, WriteXyz
-from .jobs      import HeaderSends, runJob
-from .          import jobs
-from .workflows import genBench, genSinglePoint, genReRun, gimmeCubes
-from .analysis  import (goodVibesProcessor, GoodVibesArguments, SpcPartners, GOODVIBES_OUTPUT, ALLOW_ALL,
-                        CHECK_CATEGORIES, CheckArguments, ReadCheck)
-from .notify    import CheckAndBroadcast
-from .          import environment
 from .          import agent
-from .stalk     import TrackedJob, LoadTracked, jobStalking
-from .spin      import ClassifySpin
 
 
 def Dispatch(intent: Intent) -> list[TrackedJob]:
     """Single execution path. Routes to the per-action handler. Returns the jobs it submitted (already tracked), so the
     caller decides how to stalk them: the CLI with -st, the TUI by offering its Job Stalker."""
     # Counted per dispatch: the TUI dispatches many times in one process
-    jobs.submittedJobs = 0
+    if "computils.jobs" in sys.modules:
+        sys.modules["computils.jobs"].submittedJobs = 0
     match intent:
         case RunIntent():             return _DispatchRun(intent)
         case SinglePointIntent():     return _DispatchSinglePoint(intent)
@@ -66,6 +57,9 @@ def Dispatch(intent: Intent) -> list[TrackedJob]:
         case InfoIntent():            _DispatchInfo(intent)
         case XyzIntent():             _DispatchXyz(intent)
         case MethodsIntent():         _DispatchMethods()
+        case ConfigIntent():
+            from .configops import ApplyProjectConfig
+            ApplyProjectConfig(intent)
         case CancelIntent():
             from .stalk import Cancel
             Cancel(intent.jobs)
@@ -86,6 +80,8 @@ def Dispatch(intent: Intent) -> list[TrackedJob]:
 # Shared by the dispatchers that generate new inputs. Returns None (skip this file) if it has no usable geometry.
 # The file is mapped once: everything later steps need from it (route card, ORCA input) is read now, onto the Molecule
 def _LoadMolecule(jobPath, coordExtra: str = "") -> Molecule | None:
+    from .fileops import HasContent, MapFile, ReadMolecule, WriteXyz, fileCreation, grabPaths
+    from .spin    import ClassifySpin
     baseName, extension = grabPaths(jobPath)
     if baseName is None:
         return None
@@ -138,6 +134,8 @@ def _ChargeAndMultiplicity(charge: int | None, multiplicity: int | None, molecul
 
 # Run, Cube and FormChk use their files as-is: no coordinates (coordinateList=0 sentinel). Missing files are skipped
 def _FileMolecules(files: list):
+    from .fileops  import grabPaths
+    from .molecule import Molecule
     for jobPath in files:
         baseName, extension = grabPaths(jobPath)
         if baseName is not None:
@@ -148,11 +146,15 @@ def _FileMolecules(files: list):
 # re-hooked into later (bare -st, the TUI)
 def _AfterSubmission(trackedJobs: list[TrackedJob]) -> list[TrackedJob]:
     # Every job went through jobs.SubmitJob, so this is the total
+    from .       import jobs
+    from .notify import CheckAndBroadcast
     CheckAndBroadcast(jobs.submittedJobs)
-    # An agent waits for them without polling: one background command that exits when one of them ends
+    # An agent waits for them without polling: one background command that exits when a chain (default) or batch ends
     if agent.jsonOutput and trackedJobs:
         agent.Next(agent.CommandLine(["-st", "--wait", *(job.jobID for job in trackedJobs), "--json"]),
-                   "Run it as a background command and end your turn: it exits (waking you) when one of them ends.",
+                   "Run it as a background command and end your turn: defaults to --wait-mode chain (wakes when a "
+                   "chain finishes; pass --wait-mode all for the whole batch or --wait-mode any for every individual "
+                   "job).",
                    show=False)
     return trackedJobs
 
@@ -168,6 +170,7 @@ def _GenerateBatch(intent, workflow, coordExtra: str = "") -> list[TrackedJob]:
 
 
 def _DispatchRun(intent: RunIntent) -> list[TrackedJob]:
+    from .jobs import runJob
     trackedJobs: list[TrackedJob] = []
     for molecule in _FileMolecules(intent.files):
         runJob(molecule, intent, trackedJobs)
@@ -175,10 +178,13 @@ def _DispatchRun(intent: RunIntent) -> list[TrackedJob]:
 
 
 def _DispatchSinglePoint(intent: SinglePointIntent) -> list[TrackedJob]:
+    from .workflows import genSinglePoint
     return _GenerateBatch(intent, genSinglePoint)
 
 
 def _DispatchBenchmark(intent: BenchmarkIntent) -> list[TrackedJob]:
+    from .catalog   import Catalog
+    from .workflows import genBench
     if not Catalog.canBench:
         agent.Human("Benchmarking requires at least 2 Single Point Methods (Config › Job Keylists).", "cu -tui")
         return []
@@ -235,6 +241,7 @@ def _DispatchReRun(intent: ReRunIntent) -> list[TrackedJob]:
         trackedJobs += _ReRunSearches(intent, searches)
     if not others:
         return _AfterSubmission(trackedJobs) if searches else []
+    from .workflows import genReRun
     intent = copy.copy(intent)
     intent.files = others
     # --then-sp: each re-run that optimizes gets the single point as its next job (runJob writes its chain file)
@@ -279,10 +286,10 @@ def _DispatchCrest(intent: CrestIntent) -> list[TrackedJob]:
     """`cu -crest FILE...`: a CREST conformer search of each molecule (crest.py, which the TUI's Conformer Search builder
     uses too), named NAME_CREST (the next attempt, NAME_CREST_re, when that one has run here). Every question (the
     search, a charge or multiplicity an .xyz doesn't carry) is asked before anything is written."""
-    import copy, sys
+    import copy
     from .crest    import CUSTOM, DEFAULT_FORCE_CONSTANT, CrestJob, JobName, Methods, OptionsProblem, Submit
     from .datafile import RootName
-    from .fileops  import ReRunNameIn
+    from .fileops  import ReRunNameIn, fileCreation
     from .info     import SourceMolecule
     from .prompts  import AskChoice
     # The TUI's Conformer Search screen: its job, built from its settings, checked again and submitted as it is
@@ -386,12 +393,12 @@ def _DispatchCrest(intent: CrestIntent) -> list[TrackedJob]:
 def _DispatchOptimize(intent: OptimizationIntent) -> list[TrackedJob]:
     """`cu -opt FILE`: the Optimization builder without its screen (optimize.py, which the screen uses too). Every
     question (method, charge, multiplicity, replacing an input) is asked before anything is written."""
-    import copy, sys
+    import copy
     from .actions  import SpinState
     from .info     import SourceMolecule
-    from .optimize import (FROM_SOURCE_NAME, CustomMethod, MethodChoices, MethodProblems, ModRedStages, OptimizationJob,
-                           SinglePointChoices, SinglePointStep, StartingSpin)
-    from .prompts  import AskBool, AskChoice, AskStr
+    from .jobs     import HeaderSends
+    from .optimize import FROM_SOURCE_NAME, CustomMethod, MethodChoices, MethodProblems, ModRedStages, OptimizationJob, StartingSpin
+    from .prompts  import AskBool, AskChoice
     # The molecule: a file's (an .xyz, a prior input or output), or a SMILES' RDKit conformer (its charge and
     # multiplicity the SMILES', named by --name)
     build = None
@@ -546,6 +553,10 @@ def _DispatchOptimize(intent: OptimizationIntent) -> list[TrackedJob]:
 
 # Cube jobs write .cube files, not outputs with a termination line, so they aren't tracked
 def _DispatchCube(intent: CubeIntent) -> None:
+    from .          import jobs
+    from .fileops   import formCheck
+    from .notify    import CheckAndBroadcast
+    from .workflows import gimmeCubes
     for molecule in _FileMolecules(intent.files):
         if molecule.extensionType == ".chk" and not formCheck(molecule):
             continue
@@ -556,16 +567,19 @@ def _DispatchCube(intent: CubeIntent) -> None:
 # ─── Non-SLURM dispatchers ────────────────────────────────────────────
 
 def _DispatchFormCheck(intent: FormCheckIntent) -> None:
+    from .fileops import formCheck
     for molecule in _FileMolecules(intent.files):
         formCheck(molecule)
 
 
 def _DispatchExcel(intent: ExcelIntent) -> None:
+    from .analysis import goodVibesProcessor
     goodVibesProcessor(intent.inputFile)
 
 
 def _DispatchGoodVibes(intent: GoodVibesIntent) -> None:
     # GoodVibes stops at the first structure without its single point file; name every one of them up front instead
+    from .analysis import ALLOW_ALL, GOODVIBES_OUTPUT, GoodVibesArguments, SpcPartners, goodVibesProcessor
     inputs, _, missing = SpcPartners(intent.files, intent.singlePointPattern)
     if missing:
         for path in missing:
@@ -624,6 +638,7 @@ def _GoodVibesCheckPasses(intent: GoodVibesIntent, inputs: list[Path]) -> bool:
     """The consistency check: a first pass with --check and no corrections, its table discarded. A finding in a
     stopping category (analysis.CHECK_CATEGORIES) that isn't waived stops the run before the real one; every other
     finding, and every waived one, is a warning. Waiving is the human's call (an agent asks them first)."""
+    from .analysis import CHECK_CATEGORIES, GOODVIBES_OUTPUT, CheckArguments, ReadCheck
     console.print("[operation]Checking the files' consistency (GoodVibes --check, no corrections)...[/operation]")
     result = _RunGoodVibes(CheckArguments(intent), inputs)
     Path(GOODVIBES_OUTPUT).unlink(missing_ok=True)
@@ -679,6 +694,7 @@ def _DispatchXyz(intent: XyzIntent) -> None:
     """`cu -xyz`: each file's last geometry (an output's last, an input's own; Gaussian or ORCA), read from one map as
     every workflow reads it (ReadMolecule) and written as NAME.xyz (WriteXyz, as -sp writes its own). With --smiles:
     its RDKit conformer as NAME.xyz, asked before replacing a file (a typed name can hit a hand-made one)."""
+    from .fileops import HasContent, MapFile, ReadMolecule, WriteXyz, fileCreation, grabPaths
     if intent.smiles is not None:
         from .prompts import AskBool
         from .smiles  import SmilesMolecule, SmilesResult
@@ -720,13 +736,13 @@ def _DispatchXyz(intent: XyzIntent) -> None:
 
 
 def _DispatchStalk(intent: StalkIntent) -> None:
-    from .stalk import Dismiss, Snapshot, Wait
+    from .stalk import Dismiss, LoadTracked, Snapshot, Wait, jobStalking
     from . import prompts
     if intent.dismiss:
         Dismiss(intent.dismiss)
-    # An agent's background command: returns once a job it waits for has ended
+    # An agent's background command: returns according to --wait-mode (chain, any, or all)
     elif intent.wait is not None:
-        Wait(intent.wait)
+        Wait(intent.wait, intent.waitMode)
     # With --json, or with nobody at a terminal (an agent's ssh call): one snapshot, never a loop that holds the shell
     elif agent.jsonOutput or not prompts.interactive:
         Snapshot(LoadTracked())
@@ -766,6 +782,7 @@ def _DispatchInfo(intent: InfoIntent) -> None:
     """`cu -info`: each file's facts (one map each), a table for people, records for --json, and what to run next."""
     from rich.table import Table
     from rich.box import SQUARE
+    from .analysis import SpcPartners
     from .info import Optimizes
     from .datafile import Facts, ForReport
     table = Table(box=SQUARE, show_lines=False)
@@ -829,7 +846,7 @@ def _DispatchInfo(intent: InfoIntent) -> None:
 def _DispatchMethods() -> None:
     """`cu -methods`: the Optimization, Benchmark and Conformer Search Methods in force here (an agent picks -opt's and
     -crest's --method from these)."""
-    from .catalog  import ParseRouteTemplate
+    from .catalog  import Catalog, ParseRouteTemplate
     from .fileops  import StageProblem, extensionGetter, PROGRAMS
     from .jobs     import OptMethods
     from .keylists import KeylistSource, OPTIMIZATION, BENCHMARK, CONFORMER_SEARCH
@@ -955,27 +972,8 @@ def _DispatchSI(intent: SIIntent) -> None:
 
 
 def _DispatchAgent(intent: AgentIntent) -> None:
-    """`cu -agent [TOPIC]`: the skill, or a topic, as plain Markdown on stdout (never through Rich, which would wrap
-    and style it); with --json, in the report instead."""
-    import socket, sys
-    from .agentskill import LocalInstall, SkillText, Topic, TopicNames
-    host = intent.sshHost or socket.getfqdn()
-    if intent.topic in ("", "skill"):
-        text = SkillText(host, local=intent.local or LocalInstall())
-        if intent.sshHost:
-            from .agentskill import RememberHost
-            RememberHost(intent.sshHost)
-    elif intent.topic == "topics":
-        text = "".join(f"{name}\n" for name in TopicNames())
-    else:
-        text = Topic(intent.topic, host)
-        if text is None:
-            raise agent.UsageError(f"No topic '{intent.topic}'. Topics: {', '.join(TopicNames())}.")
-    if agent.jsonOutput:
-        agent.Result({"topic": intent.topic or "skill", "text": text})
-    else:
-        sys.stdout.write(text)
-        agent.Acted()
+    from .agentskill import RunAgent
+    RunAgent(intent)
 
 
 def _DispatchFirstTimeSetup(intent: FirstTimeSetupIntent) -> None:
@@ -990,7 +988,7 @@ def _DispatchFirstTimeSetup(intent: FirstTimeSetupIntent) -> None:
 
 
 def _DispatchUpdate(intent: UpdateIntent) -> None:
-    from . import update
+    from . import environment, update
     from .prompts import AskBool
     source = update.InstalledSource()
     if source.localPath:
@@ -1019,7 +1017,7 @@ def _DispatchUpdate(intent: UpdateIntent) -> None:
 
 def _DispatchEnvironment(intent: EnvironmentIntent) -> None:
     """`cu -env`: every variant's status; with a job, starts it in the background on one variant."""
-    from . import update
+    from . import environment, update
     from .prompts import AskBool
     source = update.InstalledSource()
     variants = environment.ReadVariants(source)

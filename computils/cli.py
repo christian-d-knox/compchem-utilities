@@ -18,7 +18,7 @@ ACTION_FLAGS = {
     "profile": Action.PROFILE, "refresh": Action.REFRESH, "attributions": Action.ATTRIBUTIONS,
     "neva_touch": Action.NEVA_TOUCH, "info": Action.INFO, "methods": Action.METHODS, "optimize": Action.OPTIMIZE,
     "si": Action.SI_SCRAPER, "agent": Action.AGENT, "xyz": Action.XYZ, "crest": Action.CREST,
-    "cancel": Action.CANCEL, "scrape": Action.SCRAPE,
+    "cancel": Action.CANCEL, "scrape": Action.SCRAPE, "config": Action.CONFIG,
 }
 
 
@@ -91,6 +91,9 @@ def BuildParser() -> argparse.ArgumentParser:
     actionGroup.add_argument('-methods', '--methods', action='store_true',
                              help="List the Optimization and Single Point Methods in force here (project, else "
                                   "global).")
+    actionGroup.add_argument('-config', '--config', action='store_true',
+                             help="Inspect or edit ONLY the nearest project's .computils/ config (project.toml, "
+                                  "keylists.cusf, spinstates.txt), never global config.")
     # Handled in Main() before parsing; listed here for --help and so argparse rejects it alongside another action
     actionGroup.add_argument('-tui', '--tui', action='store_true', help="Open the TUI. Cannot be combined with any other flag.")
     # The Neva-Touch Scheduler's hook (nevatouch.HookCommand writes it into job scripts): never typed, so not listed
@@ -102,8 +105,13 @@ def BuildParser() -> argparse.ArgumentParser:
     parser.add_argument('--dismiss', nargs='+', metavar="JOB",
                         help="With -st: stop tracking these jobs (IDs or names; 'ended': every ended one).")
     parser.add_argument('--wait', nargs='*', metavar="JOB",
-                        help="With -st: wait until one of these jobs (IDs or names; none: every running one) ends, then "
-                             "report it and exit. For agents: run it as a background command instead of polling.")
+                        help="With -st: wait until the waited jobs (IDs or names; none: every running one) reach "
+                             "the --wait-mode endpoint (default: 'chain'), then report and exit. For agents: run it as "
+                             "a background command instead of polling.")
+    parser.add_argument('--wait-mode', type=str.lower, default=None, metavar="any|chain|all",
+                        help="With --wait: when to wake up — 'chain' (default: when any job's full Neva-Touch "
+                             "Scheduler chain finishes), 'any' (as soon as any individual job ends), or 'all' (only "
+                             "once every waited job/chain has finished).")
     parser.add_argument('-ch', '--checkpoint', action='store_true', help="Enable Gaussian checkpoint files.")
     parser.add_argument('-nbo', '--nbo7', action='store_true', help="Enable NBO7 keylist.")
     parser.add_argument('-ovr', '--override', type=int, default=0, help="Index override for benchmark methods (zero-indexed).")
@@ -224,6 +232,27 @@ def BuildParser() -> argparse.ArgumentParser:
                              help=f"Each match's block: through the first later line matching REGEX (a table; at most "
                                   f"{SCRAPE_MAX_LINES} lines).")
     scrapeGroup.add_argument('--case', action='store_true', help="Match case exactly.")
+
+    # -config: project-level overrides in .computils/ only (never global)
+    configGroup = parser.add_argument_group(
+        "project config (-config; reads or edits only the nearest project's .computils/, never global)"
+    )
+    configGroup.add_argument('--set', action='append', default=[], metavar="KEY=VALUE",
+                             help="Set a project-overridable key in project.toml (e.g. solvent=THF, CPU=32).")
+    configGroup.add_argument('--unset', action='append', default=[], metavar="KEY",
+                             help="Remove a project.toml override so it follows the global value.")
+    configGroup.add_argument('--section', action='append', default=[], metavar="SECTION=CONTENT",
+                             help="Replace a section in project keylists.cusf (file path or text).")
+    configGroup.add_argument('--unset-section', action='append', default=[], metavar="SECTION",
+                             help="Remove a section from project keylists.cusf so it follows the global section.")
+    configGroup.add_argument('--add-entry', action='append', default=[], metavar="SECTION=ENTRY",
+                             help="Add or update an entry in project keylists.cusf (e.g. opt=name:route, sp=route).")
+    configGroup.add_argument('--remove-entry', action='append', default=[], metavar="SECTION=TARGET",
+                             help="Remove an entry from project keylists.cusf by name (or 0-based index for sp).")
+    configGroup.add_argument('--spin-state', action='append', default=[], metavar="PATTERN=STATE",
+                             help="Add or update a singlet override in .computils/spinstates.txt (css or oss).")
+    configGroup.add_argument('--unset-spin-state', action='append', default=[], metavar="PATTERN",
+                             help="Remove a pattern from .computils/spinstates.txt.")
 
     # A Neva-Touch Scheduler re-run's count and the original stage it starts at (written into its hook; not listed)
     parser.add_argument('--reruns', type=int, default=0, help=argparse.SUPPRESS)
@@ -436,23 +465,41 @@ def ParseCLI(argv: list[str]) -> Intent:
     if args.cancel:
         draft.cancelJobs = list(args.cancel)
 
+    configFlags = (args.set, args.unset, args.section, args.unset_section, args.add_entry, args.remove_entry,
+                   args.spin_state, args.unset_spin_state)
+    if any(configFlags) and draft.action != Action.CONFIG:
+        raise agent.UsageError("--set, --unset, --section, --unset-section, --add-entry, --remove-entry, "
+                               "--spin-state and --unset-spin-state go with -config.")
+    if draft.action == Action.CONFIG:
+        draft.setValues = list(args.set)
+        draft.unsetKeys = list(args.unset)
+        draft.sections = list(args.section)
+        draft.unsetSections = list(args.unset_section)
+        draft.addEntries = list(args.add_entry)
+        draft.removeEntries = list(args.remove_entry)
+        draft.spinStates = list(args.spin_state)
+        draft.unsetSpinStates = list(args.unset_spin_state)
+
     # Modifiers
     draft.dismiss       = args.dismiss or []
     draft.wait          = args.wait
+    draft.waitMode      = args.wait_mode
     draft.stalk         = args.stalk
     draft.checkpoint    = args.checkpoint
     draft.nbo7          = args.nbo7
     draft.indexOverride = args.override
     draft.wallTime, draft.partition, draft.cluster = args.wall_time, args.partition, args.cluster
     # Only a line the cluster's submission header has can take one (Bridges2's sends no -M)
-    from .jobs import HeaderSends
-    for flag, key, value in (("--wall-time", "wallTime", args.wall_time), ("--partition", "partition", args.partition),
-                             ("--cluster", "cluster", args.cluster), ("--sp-wall-time", "wallTime", args.sp_wall_time),
-                             ("--sp-partition", "partition", args.sp_partition),
-                             ("--sp-cluster", "cluster", args.sp_cluster)):
-        if value is not None and not HeaderSends(key):
-            raise agent.UsageError(f"{flag} has nothing to set: {Defaults.hpcType}'s submission header has no line for "
-                                   f"it (slurm.toml's submissionList).")
+    resourceOverrides = (("--wall-time", "wallTime", args.wall_time), ("--partition", "partition", args.partition),
+                         ("--cluster", "cluster", args.cluster), ("--sp-wall-time", "wallTime", args.sp_wall_time),
+                         ("--sp-partition", "partition", args.sp_partition),
+                         ("--sp-cluster", "cluster", args.sp_cluster))
+    if any(value is not None for _, _, value in resourceOverrides):
+        from .jobs import HeaderSends
+        for flag, key, value in resourceOverrides:
+            if value is not None and not HeaderSends(key):
+                raise agent.UsageError(f"{flag} has nothing to set: {Defaults.hpcType}'s submission header has no line "
+                                       f"for it (slurm.toml's submissionList).")
     draft.updateBranch  = args.update_branch
     draft.pluginDir     = args.plugin_dir
     draft.pluginUpdater = args.plugin_updater
@@ -467,7 +514,7 @@ def ParseCLI(argv: list[str]) -> Intent:
     # Sub-prompts — preserved from current CLI behavior. With --json, or with nobody at a terminal to answer (an agent's
     # ssh call), -st is one snapshot: never a loop, so never the loop question (nor with --dismiss or --wait)
     from . import prompts
-    if draft.stalk and prompts.interactive and not agent.jsonOutput and not draft.dismiss and draft.wait is None:
+    if draft.stalk and prompts.interactive and not agent.jsonOutput and not draft.dismiss and draft.wait is None and draft.waitMode is None:
         draft.stalkLoop = AskBool("Enable stalk looping (i.e. re-initialize until all jobs terminate)?", "Y", key="stalk-loop")
 
     if draft.action == Action.CUBE:

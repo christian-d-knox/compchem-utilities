@@ -24,9 +24,9 @@ from rich.markup import escape
 
 from .console  import console
 from .defaults import BackUpFile, Defaults
-from .fileops  import (ExtractBenchmarkMethods, ExtractCrestMethods, ExtractFromText, ExtractMixedBasisSets,
-                       ExtractOptMethods, ExtractOrcaBlocks, HasContent, JoinStages, MapFile, MixedBasis, NamedRoutes,
-                       RouteEntries)
+from .fileops  import (RESERVED_ORCA_BLOCKS, TAG_DIRECTIVE, ExtractBenchmarkMethods, ExtractCrestMethods,
+                       ExtractFromText, ExtractMixedBasisSets, ExtractOptMethods, ExtractOrcaBlocks, HasContent,
+                       JoinStages, MapFile, NamedRoutes, RouteEntries)
 from .project  import FindProjectRoot, ProjectFilePath
 
 KEYLISTS_FILE = "keylists.cusf"
@@ -49,6 +49,8 @@ NAMED_SECTIONS = (OPTIMIZATION, CONFORMER_SEARCH)
 # '=== Name ===' on a line of its own. Nothing in any section's format starts with '='
 SECTION_HEADER = r"(?m)^===[ \t]*(.*?)[ \t]*===[ \t]*(?=\r?$)"
 _HEADER_TEXT, _HEADER_BYTES = regex.compile(SECTION_HEADER), regex.compile(SECTION_HEADER.encode())
+_DECLARED_TAG_RE = regex.compile(rf"(?m)^\s*{TAG_DIRECTIVE}")
+_ORCA_BLOCK_START_RE = regex.compile(r"(?m)^%(\w+)")
 FILE_PREAMBLE = ("# keylists.cusf -- CompUtils' settings file: the methods it runs jobs with, and their basis sets\n"
                  "# and blocks. Edit them in the TUI: Config > Job Keylists.\n"
                  "# Each section starts at its '=== Name ===' line; a section a level doesn't have follows the next level.\n")
@@ -75,6 +77,16 @@ def SectionName(header: str) -> str:
     """A header's section, matched case-insensitively ('' for an unknown one); an old header reads as its section."""
     key = header.strip().lower()
     return next((name for name in SECTIONS if name.lower() == key), OLD_SECTION_NAMES.get(key, ""))
+
+
+def DeclaredTags(body: str) -> list[str]:
+    """Lowercased '# @NAME' declarations in a keylist section body, in order."""
+    return [found.lower() for found in _DECLARED_TAG_RE.findall(body)]
+
+
+def ReservedOrcaBlocks(body: str) -> list[str]:
+    """Lowercased CompUtils-reserved ORCA %block names (%pal, %maxcore) present in a section body."""
+    return sorted({found.lower() for found in _ORCA_BLOCK_START_RE.findall(body)} & RESERVED_ORCA_BLOCKS)
 
 
 # ─── Splitting a file's text ──────────────────────────────────────────

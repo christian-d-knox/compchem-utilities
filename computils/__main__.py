@@ -2,7 +2,6 @@
 import sys
 from pathlib import Path
 from .defaults import Defaults
-from .catalog  import Catalog
 from .console  import ApplyTheme, console
 from .project  import LoadProjectConfig
 from . import agent
@@ -86,7 +85,23 @@ def _Run(argv: list[str]) -> None:
     if nevaTouchHook:
         prompts.interactive = False
 
+    # Pure read-only agent docs/skills don't need project config, Catalog, queue checks, or dispatch imports.
+    # (Skip fast path if resource override flags appear so HeaderSends can validate against loaded Defaults.)
+    resourceFlags = ("--wall-time", "--partition", "--cluster", "--sp-wall-time", "--sp-partition", "--sp-cluster")
+    if (any(arg in ("-agent", "--agent") for arg in argv) and "-tui" not in argv and "--tui" not in argv
+            and not any(arg == flag or arg.startswith(flag + "=") for arg in argv for flag in resourceFlags)):
+        from .cli import ParseCLI
+        from .intent import AgentIntent
+        intent = ParseCLI(argv)
+        if isinstance(intent, AgentIntent):
+            if intent.sshHost:
+                Defaults.Load()
+            from .agentskill import RunAgent
+            RunAgent(intent)
+            return
+
     # Load configs and lookup data BEFORE handing control to the CLI.
+    from .catalog import Catalog
     Defaults.Load()
     # Project overrides must land before the Catalog derives route templates (from keylists.cusf)
     LoadProjectConfig()
@@ -138,13 +153,17 @@ def _Run(argv: list[str]) -> None:
             CheckProfileSource()
         # Files the endings of tracked jobs that left the queue since the last run, so a stalker's first ping only
         # covers live jobs (one squeue call, and only while some tracked job is still live)
-        from .stalk import CheckTracked
-        CheckTracked()
+        binDir = Path(Defaults.binDirectory).expanduser()
+        if (binDir / "tracked-jobs.json").is_file():
+            from .stalk import CheckTracked
+            CheckTracked()
         # Environment jobs that ended since the last run, each reported once (the TUI shows them itself)
         if not opensTUI:
-            from .environment import Reports
-            for severity, message in Reports():
-                agent.Notice(severity, message)
+            envDir = binDir / "environments"
+            if envDir.is_dir() and any(envDir.glob("*.json")):
+                from .environment import Reports
+                for severity, message in Reports():
+                    agent.Notice(severity, message)
         if opensTUI and "notifications.toml" in Defaults.generatedFiles:
             from .wizards import NotificationSetup
             NotificationSetup()

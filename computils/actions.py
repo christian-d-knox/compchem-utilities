@@ -37,6 +37,7 @@ class Action(Enum):
     CREST            = "crest"      # -crest: a CREST conformer search of each molecule (crest.py)
     CANCEL           = "cancel"     # -cancel: cancel tracked jobs (stalk.Cancel)
     SCRAPE           = "scrape"     # -scrape: a bounded regex search of files (fileops.ExtractMatches), read-only
+    CONFIG           = "config"     # -config: inspect or edit project-level config (.computils/)
 
 # Actions that submit SLURM jobs, which -st can follow
 JOB_ACTIONS = (Action.RUN, Action.SINGLE_POINT, Action.BENCHMARK, Action.CUBE, Action.RERUN, Action.CREST)
@@ -49,6 +50,10 @@ FILE_ACTIONS = (Action.RUN, Action.SINGLE_POINT, Action.BENCHMARK, Action.CUBE, 
 # DONE ends the chain (the single point's own hook only reports)
 NTS_SP, NTS_DONE = "SP", "Done"
 NTS_STEPS = (NTS_SP, NTS_DONE)
+
+# Wait modes for `cu -st --wait --wait-mode`: when to wake up
+WAIT_ANY, WAIT_CHAIN, WAIT_ALL = "any", "chain", "all"
+WAIT_MODES = (WAIT_ANY, WAIT_CHAIN, WAIT_ALL)
 
 # Spin-state class of a molecule, set once in dispatch by spin.ClassifySpin()
 class SpinState(Enum):

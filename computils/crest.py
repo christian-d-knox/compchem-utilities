@@ -43,6 +43,10 @@ SOLVATION = {"alpb": "ALPB", "gbsa": "GBSA", "g": "GBSA"}
 GEOMETRY_CONSTRAINTS = {"B": ("distance", 2, "Bond"), "A": ("angle", 3, "Angle"), "D": ("dihedral", 4, "Dihedral")}
 LIST_CONSTRAINTS = ("atoms", "elements", "fix")
 CONSTRAINTS_SUFFIX = ".constraints"
+_COMMA_WS_SPLIT_RE = regex.compile(r"[\s,]+")
+_ATOM_RANGE_RE = regex.compile(r"(\d+)(?:-(\d+))?")
+_CONSTRAINT_LINE_SPLIT_RE = regex.compile(r"[;\n]")
+_NON_DIGIT_RE = regex.compile(r"\D")
 DEFAULT_FORCE_CONSTANT = 1.0
 BEST_FILE = "crest_best.xyz"
 CONFORMERS_FILE = "crest_conformers.xyz"
@@ -211,10 +215,10 @@ class Constraint:
 def _AtomList(text: str) -> list[int] | None:
     """'11-14,20' or '2 4 7' as numbers, None if it isn't one."""
     numbers = []
-    for part in regex.split(r"[\s,]+", text.strip()):
+    for part in _COMMA_WS_SPLIT_RE.split(text.strip()):
         if not part:
             continue
-        found = regex.fullmatch(r"(\d+)(?:-(\d+))?", part)
+        found = _ATOM_RANGE_RE.fullmatch(part)
         if found is None:
             return None
         first, last = int(found.group(1)), int(found.group(2) or found.group(1))
@@ -227,7 +231,7 @@ def _AtomList(text: str) -> list[int] | None:
 def ConstraintLines(text: str) -> list[str]:
     """Typed constraints as lines: one per line, or separated by ';' (the command line's form). A line starting with
     '#' is a comment (the TUI's suggestions from the source, until uncommented)."""
-    return [line.strip() for line in regex.split(r"[;\n]", text or "")
+    return [line.strip() for line in _CONSTRAINT_LINE_SPLIT_RE.split(text or "")
             if line.strip() and not line.strip().startswith("#")]
 
 
@@ -261,7 +265,7 @@ def ParseConstraints(text: str, atoms: int) -> tuple[list[Constraint], list[str]
         elif kind.lower() in LIST_CONSTRAINTS:
             rest = line.split(None, 1)[1].lstrip(":") if len(fields) > 1 else ""
             if kind.lower() == "elements":
-                names = tuple(name.capitalize() for name in regex.split(r"[\s,]+", rest.strip()) if name)
+                names = tuple(name.capitalize() for name in _COMMA_WS_SPLIT_RE.split(rest.strip()) if name)
                 if not names:
                     problems.append(f"Line {number}: Elements Takes Element Symbols (elements Pd)")
                     continue
@@ -295,7 +299,7 @@ def Suggestions(facts: dict) -> list[str]:
 
     def Add(record: dict, note: str) -> None:
         letter = COORDINATE_LETTERS.get(record.get("coordinate", ""))
-        numbers = [regex.sub(r"\D", "", atom) for atom in record.get("atoms", [])]
+        numbers = [_NON_DIGIT_RE.sub("", atom) for atom in record.get("atoms", [])]
         if letter and all(numbers):
             found.setdefault(f"{letter} {' '.join(numbers)}", []).append(note)
     for number, stage in reversed(list(enumerate(stages, 1))):
@@ -704,7 +708,7 @@ def ConstraintRecords(echo: list[str], symbols: list[str]) -> tuple[list[dict], 
             records.append({"coordinate": "Atoms", "atoms": [Name(number) for number in numbers],
                             "action": "Fixed" if block == "$fix" else "Constrained"})
         elif keyword == "elements":
-            records.append({"coordinate": "Elements", "atoms": [name for name in regex.split(r"[\s,]+", value) if name],
+            records.append({"coordinate": "Elements", "atoms": [name for name in _COMMA_WS_SPLIT_RE.split(value) if name],
                             "action": "Constrained"})
     return records, forceConstant
 

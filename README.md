@@ -94,6 +94,7 @@ The environments also carry `openpyxl`, so an AI agent can build Excel workbooks
 | `cu -ex FILE` | Converts a GoodVibes output to Excel |
 | `cu -st` | Follows tracked jobs via squeue, reporting on statuses such as convergence criteria. Can be included in a submission command to tag submitted jobs, or called independently |
 | `cu -init` | Makes the current folder a project root. Useful for project-based overrides to global defaults |
+| `cu -config` | Inspects (bare `-config`) or updates ONLY the nearest project's `.computils/` config (`project.toml` via `--set`/`--unset`, `keylists.cusf` via `--section`/`--unset-section`/`--add-entry`/`--remove-entry`, `spinstates.txt` via `--spin-state`/`--unset-spin-state`), never touching global config |
 | `cu -profile [FILE]` | Applies a lab profile |
 | `cu -first` | Re-runs first-time setup |
 | `cu -refresh [project]` | Rewrites the config files in the current layout, keeping your values |

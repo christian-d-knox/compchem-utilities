@@ -22,6 +22,11 @@ STAGE_JOIN = " -> "
 STAGE_SPLIT = r"\s+->\s+"
 # A stage's CompUtils directive (parsed out like {tags}): it starts a new checkpoint, %OldChk-copied from the one so far
 NEW_CHECKPOINT = r"(?i)(?:^|\s)%newchk(?=\s|$)"
+_ROUTE_TAG_RE = regex.compile(ROUTE_TAG_PATTERN)
+_ROUTE_GROUP_RE = regex.compile(ROUTE_GROUP_PATTERN)
+_ROUTE_LEAK_RE = regex.compile(ROUTE_LEAK_PATTERN)
+_STAGE_SPLIT_RE = regex.compile(STAGE_SPLIT)
+_NEW_CHECKPOINT_RE = regex.compile(NEW_CHECKPOINT)
 
 # Named multiplicity selectors
 _MULTIPLICITY_NAMES = {"doublet": 2, "triplet": 3, "quartet": 4, "quintet": 5, "sextet": 6, "septet": 7}
@@ -36,18 +41,22 @@ _ORCA_REFERENCES = {"RKS", "UKS", "ROKS", "RHF", "UHF", "ROHF"}
 _COMPOUND_METHOD = r"(?i)(RO|U|R)?(CBS-(?:QB3|4M|APNO|Q|Lq|4)|G[1-4](?:MP2)?(?:B3)?|W1(?:U|BD|RO)?)(?:\(.*\))?"
 # The compound methods Gaussian has a restricted open-shell form of, written with an RO prefix
 _RO_COMPOUNDS = {"CBS-QB3"}
+_COMPOUND_METHOD_RE = regex.compile(_COMPOUND_METHOD)
+_MULTIPLICITY_SEL_RE = regex.compile(r"m\d+")
+_KEYWORD_SPLIT_RE = regex.compile(r"[=(]")
+_CPCM_RE = regex.compile(r"(?i)cpcm(\(.*\))?")
 
 
 def SplitRouteTags(routeLine: str) -> tuple[str, list[str]]:
     """Split a route card into (clean route, lowercased tags). Tags never survive into the clean route."""
-    tags = [tag.lower() for tag in regex.findall(ROUTE_TAG_PATTERN, routeLine)]
-    cleanRoute = " ".join(regex.sub(ROUTE_TAG_PATTERN, " ", routeLine).split())
+    tags = [tag.lower() for tag in _ROUTE_TAG_RE.findall(routeLine)]
+    cleanRoute = " ".join(_ROUTE_TAG_RE.sub(" ", routeLine).split())
     return cleanRoute, tags
 
 
 def _IsValidSelector(selector: str) -> bool:
     return selector in ("css", "oss", "open", METAL_SELECTOR) or selector in _MULTIPLICITY_NAMES \
-        or regex.fullmatch(r"m\d+", selector) is not None
+        or _MULTIPLICITY_SEL_RE.fullmatch(selector) is not None
 
 
 def MetalSymbols() -> set[str]:
@@ -92,24 +101,24 @@ def _GroupSelectors(selectorText: str) -> tuple[frozenset[str], list[str]]:
 
 def UnknownSelectors(routeLine: str) -> list[str]:
     """Selectors in a route card's [groups] that ParseRouteTemplate would reject (it drops those groups)."""
-    return [invalid for selectorText, _ in regex.findall(ROUTE_GROUP_PATTERN, routeLine)
+    return [invalid for selectorText, _ in _ROUTE_GROUP_RE.findall(routeLine)
             for invalid in _GroupSelectors(selectorText)[1]]
 
 
 def ParseRouteTemplate(routeLine: str) -> RouteTemplate:
     """A route card as a template: each stage ('route -> route') parsed on its own (groups, tags, %newchk), the first
     carrying the rest."""
-    first, *later = [_ParseStage(stage) for stage in regex.split(STAGE_SPLIT, routeLine.strip()) if stage.strip()] or [
+    first, *later = [_ParseStage(stage) for stage in _STAGE_SPLIT_RE.split(routeLine.strip()) if stage.strip()] or [
         _ParseStage("")]
     first.later = later
     return first
 
 
 def _ParseStage(routeLine: str) -> RouteTemplate:
-    newChk = regex.search(NEW_CHECKPOINT, routeLine) is not None
-    routeLine = regex.sub(NEW_CHECKPOINT, " ", routeLine)
+    newChk = _NEW_CHECKPOINT_RE.search(routeLine) is not None
+    routeLine = _NEW_CHECKPOINT_RE.sub(" ", routeLine)
     groups = []
-    for selectorText, content in regex.findall(ROUTE_GROUP_PATTERN, routeLine):
+    for selectorText, content in _ROUTE_GROUP_RE.findall(routeLine):
         selectors, invalid = _GroupSelectors(selectorText)
         if invalid:
             console.print(f"[warning]\\[config] Unknown selector(s) {invalid} in the route "
@@ -117,8 +126,8 @@ def _ParseStage(routeLine: str) -> RouteTemplate:
             continue
         keywords, tags = SplitRouteTags(content)
         groups.append((selectors, keywords, tags))
-    base, tags = SplitRouteTags(regex.sub(ROUTE_GROUP_PATTERN, " ", routeLine))
-    if regex.search(ROUTE_LEAK_PATTERN, base):
+    base, tags = SplitRouteTags(_ROUTE_GROUP_RE.sub(" ", routeLine))
+    if _ROUTE_LEAK_RE.search(base):
         console.print(f"[warning]\\[config] Malformed \\[ ] group or unknown % directive in the route "
                       f"'{escape(routeLine)}'. Jobs using it will be skipped.[/warning]")
     # The first token without Gaussian's '/basis' half, which would otherwise put the basis (and a '/') in filenames
@@ -163,7 +172,7 @@ def _ApplyReference(tokens: list[str], spinState: SpinState, extensionType: str)
     # high-spin species, openShellReference = "RO") takes their RO form where Gaussian has one (ROCBS-QB3); otherwise
     # the route is left as written
     compound = next(((index, match) for index, token in enumerate(tokens)
-                     if (match := regex.fullmatch(_COMPOUND_METHOD, token))), None)
+                     if (match := _COMPOUND_METHOD_RE.fullmatch(token))), None)
     if compound:
         index, match = compound
         if match.group(1) or reference != "RO" or match.group(2).upper() not in _RO_COMPOUNDS:
@@ -182,12 +191,12 @@ def _ApplyReference(tokens: list[str], spinState: SpinState, extensionType: str)
 
 
 def _KeywordName(token: str) -> str:
-    return regex.split(r"[=(]", token, maxsplit=1)[0].upper()
+    return _KEYWORD_SPLIT_RE.split(token, maxsplit=1)[0].upper()
 
 
 def _KeywordOptions(token: str) -> list[str]:
     """A keyword's options as written: 'opt=(ts,calcfc)' and 'opt(ts,calcfc)' -> ['ts', 'calcfc']; 'freq' -> []."""
-    rest = token[len(regex.split(r"[=(]", token, maxsplit=1)[0]):].lstrip("=")
+    rest = token[len(_KEYWORD_SPLIT_RE.split(token, maxsplit=1)[0]):].lstrip("=")
     rest = rest[1:-1] if rest.startswith("(") and rest.endswith(")") else rest
     return [option for option in rest.split(",") if option]
 
@@ -209,7 +218,7 @@ def _AddKeyword(tokens: list[str], token: str) -> None:
     if not added:
         return
     options += added
-    keyword = regex.split(r"[=(]", existing, maxsplit=1)[0]
+    keyword = _KEYWORD_SPLIT_RE.split(existing, maxsplit=1)[0]
     tokens[index] = f"{keyword}={options[0]}" if len(options) == 1 else f"{keyword}=({','.join(options)})"
 
 
@@ -245,7 +254,7 @@ def RenderRoute(template: RouteTemplate, molecule) -> tuple[str, list[str]]:
         elif not problem and program == "gaussian":
             tags.remove(solvent.SMD_TAG)
             _AddKeyword(tokens, solvent.GaussianKeyword())
-        elif not problem and not any(regex.fullmatch(r"(?i)cpcm(\(.*\))?", token) for token in tokens):
+        elif not problem and not any(_CPCM_RE.fullmatch(token) for token in tokens):
             # ORCA: the SMD block (JobInputText writes it for the tag) needs CPCM on the ! line
             tokens.append("CPCM")
     tokens = _ApplyReference(tokens, molecule.spinState, molecule.extensionType)
