@@ -1,6 +1,6 @@
 # Recipe: A Benchmark
 
-1. The Benchmark Methods in force here (one single point per entry):
+1. The Single Point Methods in force here (one single point per entry):
 
        {cu} -methods --json
 

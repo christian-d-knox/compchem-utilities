@@ -45,10 +45,10 @@ class SchedulerSteps:
     spCustomRoute: str = ""
 
     def SinglePointSettings(self) -> list[Setting]:
-        """The Then: SP step: the next job (a choice: later kinds are more rows), its method (Benchmark Methods, then
+        """The Then: SP step: the next job (a choice: later kinds are more rows), its method (Single Point Methods, then
         Custom), resources and SLURM settings (partition and cluster follow the main job's until typed), checkpoint,
         NBO."""
-        noMethods = "" if self.spChoices else "No Benchmark Methods: Add Them in Config › Job Keylists"
+        noMethods = "" if self.spChoices else "No Single Point Methods: Add Them in Config › Job Keylists"
         methods = MethodRows(self.spChoices, self.spProblems, "sp-method", "sp-custom", noMethods)
         chosen = next(setting for setting in methods if setting.on)
         self.spLastMethod = chosen.key

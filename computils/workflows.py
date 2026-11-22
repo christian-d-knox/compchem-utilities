@@ -33,7 +33,7 @@ def genSinglePoint(molecule: Molecule, intent: JobIntent, trackedJobs: list) -> 
     startTime = time.monotonic()
 
     # The job's name, route template and program: a route given (--route, a Neva-Touch Scheduler chain step's), else
-    # Benchmark Methods' entry chosen by -ovr
+    # Single Point Methods' entry chosen by -ovr
     template = (ParseRouteTemplate(intent.route) if getattr(intent, "route", None)
                 else Catalog.templates[intent.indexOverride])
     Retarget(molecule, SinglePointName(molecule), template)

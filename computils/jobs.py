@@ -15,7 +15,7 @@ from .actions   import NTS_SP
 from .nevatouch import HookCommand, HookLines, JOB_ID, ChainPath, WriteChain
 from .          import agent
 
-# The optimization methods (name -> route, in order): jobRelatedKeylists' Optimization Methods from the nearest level
+# The optimization methods (name -> route, in order): keylists.cusf's Optimization Methods from the nearest level
 # that has them, or the unsaved text from the TUI's config editor ({level path: text}); {} without any
 def OptMethods(texts: dict[Path, str] | None = None) -> dict[str, str]:
     return Keylist(OPTIMIZATION, texts)
@@ -55,21 +55,52 @@ def _FilterMixedBasis(master: MixedBasis, elements: set[str]) -> tuple[str, str,
     missing = set() if any(entry.byCenter for entry in master.basis) else elements - covered
     return Section(master.basis), Section(master.ecp), missing
 
+def MixedBasisSet(sets: dict[str, MixedBasis], tags: list[str]) -> tuple[MixedBasis | None, str]:
+    """The Mixed Basis set a Gaussian stage writes, by its tags: the set a tag names; without one, the unnamed set, or
+    the only set there is. An example set ('# @example', keylists.IsExample) is used only when named. (set, '') or
+    (None, why not)."""
+    from .keylists import IsExample
+    from .solvent import SMD_TAG
+    named = [tag for tag in tags if tag != SMD_TAG]
+    chosen = next((tag for tag in named if tag in sets), None)
+    if chosen is not None:
+        return sets[chosen], ""
+    if named:
+        return None, f"Mixed Basis Has No Set {', '.join('@' + tag for tag in named)} ({Where(MIXED_BASIS)})"
+    sets = {name: basisSet for name, basisSet in sets.items() if not IsExample(name)}
+    if "" in sets:
+        return sets[""], ""
+    if len(sets) == 1:
+        return next(iter(sets.values())), ""
+    if not sets:
+        return MixedBasis([], []), ""
+    return None, (f"Mixed Basis Has Sets {', '.join('@' + name for name in sets)}: Name One in the Route "
+                  f"({{name}})")
+
 # Why genFile would skip a job, or '' if it can be generated. The one check shared by genFile and the TUI's route
-# previews. Mixed basis and ORCA blocks come from jobRelatedKeylists (keylists.Keylist: the nearest level with the
+# previews. Mixed basis and ORCA blocks come from keylists.cusf (keylists.Keylist: the nearest level with the
 # section); texts ({level path: unsaved text}, from the TUI's config editor) stands in for those files. Never prompts
 def JobFileProblem(route: str, tags: list[str], extensionType: str, elements: set[str],
                    texts: dict[Path, str] | None = None) -> str:
     # {tag} and [group] syntax is parsed out in Catalog.Load and must never reach an input file
     if regex.search(ROUTE_LEAK_PATTERN, route):
         return "Malformed [ ] Group or Unknown % Directive in the Route"
+    # The project's solvent ({smd}): RenderRoute leaves the tag only when it can't be written
+    from .solvent import SMD_TAG, Problem as SolventProblem
+    if SMD_TAG in tags:
+        problem = SolventProblem("orca" if extensionType == Defaults.orcaExtension else "gaussian")
+        if problem:
+            return problem
     if extensionType == Defaults.gaussianExtension and _UsesMixedBasis(route):
-        _, _, missing = _FilterMixedBasis(Keylist(MIXED_BASIS, texts), elements)
+        chosen, problem = MixedBasisSet(Keylist(MIXED_BASIS, texts), tags)
+        if chosen is None:
+            return problem
+        _, _, missing = _FilterMixedBasis(chosen, elements)
         if missing:
             return f"Mixed Basis Has No Basis for {' '.join(sorted(missing))} ({Where(MIXED_BASIS)})"
     if extensionType == Defaults.orcaExtension and tags:
         blocks = Keylist(ORCA_BLOCKS, texts)
-        missingTags = [tag for tag in tags if tag not in blocks]
+        missingTags = [tag for tag in tags if tag not in blocks and tag != SMD_TAG]
         if missingTags:
             return f"ORCA Blocks Has No {', '.join(missingTags)} ({Where(ORCA_BLOCKS)})"
     return ""
@@ -259,10 +290,11 @@ def JobInputText(molecule: Molecule, checkpoint: bool = False, nbo7: bool = Fals
     match molecule.extensionType:
         case Defaults.gaussianExtension:
             stages = RenderStages(molecule.template, molecule)
-            blockTags = [tag for stage in stages for tag in stage.tags]
-            if blockTags:
-                console.print(f"[warning]Block tags {blockTags} only apply to ORCA jobs. Ignoring them for "
-                              f"{molecule.baseName}.[/warning]")
+            # A Gaussian stage's tags name its Mixed Basis set; on a stage with no Gen basis they do nothing
+            unused = [tag for stage in stages if not _UsesMixedBasis(stage.route) for tag in stage.tags]
+            if unused:
+                console.print(f"[warning]Tags {unused} name Mixed Basis sets, but no Gen basis uses them. Ignoring "
+                              f"them for {molecule.baseName}.[/warning]")
             # A job with stages always writes its checkpoint: it is how the stages pass on what they made
             chained = len(stages) > 1
             checkpointName = f"{molecule.baseName}.chk"
@@ -285,7 +317,8 @@ def JobInputText(molecule: Molecule, checkpoint: bool = False, nbo7: bool = Fals
                 usesMixedBasis = _UsesMixedBasis(route) and not stage.chkBasis
                 if usesMixedBasis:
                     # The Mixed Basis section lists every element the project may need; keep only this molecule's
-                    basisSection, ecpSection, _ = _FilterMixedBasis(Keylist(MIXED_BASIS), elements)
+                    chosen, _ = MixedBasisSet(Keylist(MIXED_BASIS), stage.tags)
+                    basisSection, ecpSection, _ = _FilterMixedBasis(chosen or MixedBasis([], []), elements)
                     # GenECP with an empty ECP section (or Gen with ECP elements) fails in Gaussian
                     switchedRoute = _SetMixedBasisKeyword(route, bool(ecpSection))
                     if switchedRoute != route:
@@ -305,7 +338,7 @@ def JobInputText(molecule: Molecule, checkpoint: bool = False, nbo7: bool = Fals
                 extra = (extraInput[number - 1] if extraInput and number <= len(extraInput) else "").strip("\r\n")
                 if extra:
                     parts.append(extra + "\n")
-                # Mixed basis entries for this molecule's elements (jobRelatedKeylists' Mixed Basis)
+                # Mixed basis entries for this molecule's elements (keylists.cusf's Mixed Basis)
                 if usesMixedBasis:
                     parts.append(basisSection)
                     if ecpSection:
@@ -317,11 +350,14 @@ def JobInputText(molecule: Molecule, checkpoint: bool = False, nbo7: bool = Fals
             return text
 
         case Defaults.orcaExtension:
-            # Tagged blocks from ORCA Blocks, in route-card tag order (JobFileProblem checked they all exist)
+            # Tagged blocks from ORCA Blocks, in route-card tag order (JobFileProblem checked they all exist); {smd}
+            # is the project's solvent's SMD block (solvent.py)
+            from .solvent import SMD_TAG, OrcaBlock
             selectedBlocks = []
             if blockTags:
                 availableBlocks = Keylist(ORCA_BLOCKS)
-                selectedBlocks = [availableBlocks[tag] for tag in blockTags if tag in availableBlocks]
+                selectedBlocks = [OrcaBlock() if tag == SMD_TAG else availableBlocks[tag] for tag in blockTags
+                                  if tag == SMD_TAG or tag in availableBlocks]
             # Then the template's own literal blocks (an ORCA re-run carries the blocks its job ran with)
             selectedBlocks += molecule.template.blocks
             # Writes the standard ORCA formatted opening: the job's CPU and RAM (%maxcore is MB per core)

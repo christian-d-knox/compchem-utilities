@@ -48,7 +48,7 @@ class JobIntent(Intent):
     stage's number in the original job (an opt that ran out of steps in stage 2 of 3 is re-run as stages 2-3).
     wallTime/partition/cluster: the jobs' own SLURM settings (--wall-time/--partition/--cluster, a builder's rows;
     None: the config's), carried in a Neva-Touch Scheduler hook for a re-run. chain: the job's chain file
-    (nevatouch.ChainPath), whose next step the hook submits (None: Benchmark Methods' first entry, nextCpus/...).
+    (nevatouch.ChainPath), whose next step the hook submits (None: Single Point Methods' first entry, nextCpus/...).
     thenSteps: a batch's next job (nevatouch.ChainStep records, e.g. -re --then-sp, the Re-Run screen's Then: SP):
     runJob writes each job that optimizes its own chain file and hook, and gives the others none.
     """
@@ -75,7 +75,7 @@ class JobIntent(Intent):
 @dataclass
 class ThenSP:
     """The Neva-Touch Scheduler's next job as asked for on the command line (--then-sp and the --sp-* flags), resolved
-    to a chain step when dispatched (optimize.SinglePointStep). method: a Benchmark Methods entry by name (None: the
+    to a chain step when dispatched (optimize.SinglePointStep). method: a Single Point Methods entry by name (None: the
     first) or route: one of your own; partition/cluster None follow the job's own."""
     method:     Optional[str]   = None
     route:      Optional[str]   = None
@@ -98,7 +98,7 @@ class RunIntent(JobIntent):
 @dataclass
 class SinglePointIntent(JobIntent):
     """`cu -sp <pattern>` — generate single-point input, then submit. route: a method entry as written (`--route`, a
-    Neva-Touch Scheduler chain step's); None: Benchmark Methods' entry indexOverride (-ovr, default 0)."""
+    Neva-Touch Scheduler chain step's); None: Single Point Methods' entry indexOverride (-ovr, default 0)."""
     route: Optional[str] = None
 
 
@@ -260,7 +260,7 @@ class OptimizationIntent(Intent):
     molecule from a SMILES instead (file None; smiles.py: an RDKit conformer, rdkitConformer by energy, its charge and
     multiplicity the SMILES' unless given). modred: stage
     number -> its ModRed lines (a file, or lines separated by ';'). The scheduled SP (a Neva-Touch Scheduler chain
-    step): spMethod (a Benchmark Methods name; None: the first) or spRoute, its resources (None: the config's, its
+    step): spMethod (a Single Point Methods name; None: the first) or spRoute, its resources (None: the config's, its
     memory as its method needs), and its SLURM settings (partition/cluster None: the opt's)."""
     file:         Optional[Path]
     method:       Optional[str]   = None
@@ -368,7 +368,7 @@ class InfoIntent(Intent):
 
 @dataclass
 class MethodsIntent(Intent):
-    """`cu -methods` — the Optimization and Benchmark Methods in force here (project, else global), read-only."""
+    """`cu -methods` — the Optimization and Single Point Methods in force here (project, else global), read-only."""
     pass
 
 
@@ -426,7 +426,7 @@ class IntentDraft:
     partition:       Optional[str]   = None
     cluster:         Optional[str]   = None
     chain:           Optional[str]   = None
-    # SP: a method entry as written instead of Benchmark Methods' (--route with -sp); -re: a corrected route
+    # SP: a method entry as written instead of Single Point Methods' (--route with -sp); -re: a corrected route
     route:           Optional[str]   = None
     # -re: an Optimization Method by name for the corrected route (--method with -re)
     reRunMethod:     Optional[str]   = None
@@ -657,7 +657,7 @@ class IntentDraft:
                 if value is not None and (not value.strip() or any(c.isspace() for c in value)):
                     errors.append(f"{flag} takes one name, with no spaces (got '{value}').")
         if self.route is not None and self.action not in (Action.SINGLE_POINT, Action.RERUN):
-            errors.append("--route goes with -opt (its method), -sp (instead of Benchmark Methods') or -re (a "
+            errors.append("--route goes with -opt (its method), -sp (instead of Single Point Methods') or -re (a "
                           "corrected route).")
 
         if self.action == Action.SI_SCRAPER and self.siFree not in ("qh", "g"):

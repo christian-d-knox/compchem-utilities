@@ -21,8 +21,10 @@ accessed from the command line or from a full-screen terminal interface.
 - **Treats Gaussian and ORCA equally.** Outputs are recognized by their contents, and a method is sent to the program
   you map it to in your config.
 - **Builds route cards from templates.** Each benchmark or optimization method is a complete route card, with optional
-  spin groups (`[oss: guess=mix stable=opt]`) applied only to matching molecules, automatic U/RO references for
-  open-shell species and, for ORCA, `{tags}` that pull `%` blocks into the input. A method can run in stages (Gaussian
+  spin groups (`[oss: guess=mix stable=opt]`) and metal groups (`[metal: freq=noraman]`) applied only to matching
+  molecules, automatic U/RO references for open-shell species, the project's solvent where a method says `{smd}`
+  (written as each program needs it: Gaussian's `SCRF=(SMD,…)`, ORCA's SMD block, CREST's `--alpb`), named Gen/GenECP
+  basis sets (`{example}`) and, for ORCA, `{tags}` that pull `%` blocks into the input. A method can run in stages (Gaussian
   `--Link1--`, e.g. ModRed → Stability → OptTS), each later stage reading the geometry and orbitals from the checkpoint.
 - **Classifies spin states.** Closed-shell singlets, broken-symmetry (open-shell) singlets and higher multiplicities are
   told apart from the previous route, `<S**2>` and stability analyses, or from your own overrides.
@@ -103,7 +105,7 @@ The environments also carry `openpyxl`, so an AI agent can build Excel workbooks
 | `cu -si` | Writes SI_coordinates.txt from the folder's outputs, as the SI Scraper does |
 | `cu -info FILE…` | Shows what outputs and inputs say: status, energies, frequencies, convergence, an optimization's constraints and a Gaussian TS's eigenvector, stage by stage for a staged job. Each job's results are kept in its data file, `<root>.cudf` (8a.out, 8a_re.out and 8a_SP.out all feed `8a.cudf`): one section per stage of work, each the final successful attempt, also written whenever a tracked job ends |
 | `cu -xyz FILE…` | Writes each file's last geometry (an output's, or an input's own) as `NAME.xyz`; `--smiles 'SMILES' --name NAME` writes a SMILES' RDKit conformer |
-| `cu -methods` | Lists the Optimization and Benchmark Methods in force in this folder |
+| `cu -methods` | Lists the Optimization and Single Point Methods in force in this folder |
 | `cu -agent [TOPIC]` | Prints the skill that teaches an AI agent to use CompUtils (see below) |
 
 | Modifiers | Purpose |
@@ -164,16 +166,19 @@ for a lab profile (can be declined). The settings live in commented TOML files i
 
 Edit them in the interface's Config screen, or by hand.
 
-**Job keylists.** The methods CompUtils writes jobs with live in one file, `jobRelatedKeylists` (in `~/bin`, and
-optionally in a project): Optimization Methods (the routes the Optimization builder offers),
-Benchmark Methods (the benchmark list; entry 0 is the single-point default), Mixed Basis (`Gen`/`GenECP`) and ORCA
-Blocks. Edit it in the interface's Config › Job Keylists, one section at a time; a section a project doesn't have
-follows the global one. A later stage of a method is a line starting with `>`. Older `mixedbasis.txt`, `orcablocks.txt`
-and `optmethods.txt` files, and a `benchmarkMethods` list in the TOML files, are still read until `cu -refresh` merges
-them in.
+**Job keylists.** The methods CompUtils writes jobs with live in one settings file, `keylists.cusf` (in `~/bin`,
+and optionally in a project): Optimization Methods (the routes the Optimization builder offers), Single Point
+Methods (entry 0 is the single-point default; Benchmark runs them all), Conformer Search Methods (CREST's options),
+Mixed Basis (`Gen`/`GenECP`, one set or several named ones) and ORCA Blocks. Edit it in the interface's Config › Job
+Keylists, one section at a time; a section a project doesn't have follows the global one. A later stage of a method
+is a line starting with `>`. A lab profile can carry the lab's standard sections (`[keylists]`), written at the
+global level when it's applied. A project's solvent is `solvent = "THF"` in its `project.toml`. A file still named
+`jobRelatedKeylists` (and its `Benchmark Methods` header) is read as before until `cu -refresh` renames it; older
+`mixedbasis.txt`, `orcablocks.txt` and `optmethods.txt` files, and a `benchmarkMethods` list in the TOML files, are
+likewise read until `cu -refresh` merges them in.
 
 **Projects.** `cu -init` marks a folder as a project root (default: `.computils/` folder). Its `project.toml` overrides
-the resources, cluster and spin settings for every job inside it, and it can hold its own `jobRelatedKeylists` and a
+the resources, cluster and spin settings for every job inside it, and it can hold its own `keylists.cusf` and a
 `spinstates.txt`.
 
 **Lab profiles.** A lab profile is a private TOML file holding a group's clusters and shared settings, such as a

@@ -825,7 +825,7 @@ def HasRestrictedInstability(data) -> bool:
 
 # CompUtils writes these itself in genFile(), so user copies would conflict
 RESERVED_ORCA_BLOCKS = {"pal", "maxcore"}
-# '# @NAME' (or '# @tag NAME') names what follows it in a jobRelatedKeylists section: an ORCA block, a method's route.
+# '# @NAME' (or '# @tag NAME') names what follows it in a keylists.cusf section: an ORCA block, a method's route.
 # 'tag' needs whitespace after it to be the keyword, so '# @tagged' names 'tagged'
 TAG_DIRECTIVE = r"#\s*@(?:tag\s+)?([\w-]+)"
 
@@ -854,7 +854,7 @@ def _SplitOrcaBlocks(lines: list[str]) -> list[tuple[str, str]]:
     return blocks
 
 def ExtractOrcaBlocks(data) -> dict[str, str]:
-    """Extract tagged %blocks from an ORCA Blocks section (jobRelatedKeylists) mmap data stream (split by
+    """Extract tagged %blocks from an ORCA Blocks section (keylists.cusf) mmap data stream (split by
     _SplitOrcaBlocks). A block's tag is the preceding '# @NAME' directive if present, else the block name. Tags are
     lowercased."""
     blocks: dict[str, str] = {}
@@ -873,8 +873,8 @@ def ExtractOrcaBlocks(data) -> dict[str, str]:
     return blocks
 
 def RouteEntries(data) -> list[tuple[str, list[tuple[int, str]]]]:
-    """(directive name or '', [(line index, stage route), ...]) for each route in a methods section (jobRelatedKeylists'
-    Optimization or Benchmark Methods), in order. A route is a line that is neither blank nor a # comment; a line
+    """(directive name or '', [(line index, stage route), ...]) for each route in a methods section (keylists.cusf'
+    Optimization or Single Point Methods), in order. A route is a line that is neither blank nor a # comment; a line
     starting with '>' is a later stage of the route above it ('>' with no route above is skipped). '# @NAME' names the
     route after it (lowercased). Line indices count from 0, so the TUI's editor can tell which stage its cursor is on."""
     entries: list[tuple[str, list[tuple[int, str]]]] = []
@@ -927,7 +927,7 @@ def ExtractCrestMethods(data) -> dict[str, str]:
     return {name: stages[0][1] for name, stages in NamedRoutes(RouteEntries(data))}
 
 def ExtractBenchmarkMethods(data) -> list[str]:
-    """The route cards of a Benchmark Methods section, in order (stages joined with STAGE_JOIN); entry 0 is -sp's
+    """The route cards of a Single Point Methods section, in order (stages joined with STAGE_JOIN); entry 0 is -sp's
     default. '# @NAME' lines are allowed and ignored."""
     return [JoinStages(stages) for _, stages in RouteEntries(data)]
 
@@ -993,8 +993,35 @@ def _ElementLine(line: str) -> tuple[list[str], bool] | None:
         return tokens, False
     return None
 
+def ExtractMixedBasisSets(data) -> dict[str, MixedBasis]:
+    """The Mixed Basis section as its sets: each `# @name` line starts a named set (a Gaussian route picks one with
+    {name}, as an ORCA route picks ORCA Blocks); whatever comes before the first is the unnamed set '' (the one a route
+    naming none uses). Each set is ExtractMixedBasis's syntax. A name given twice keeps its first set."""
+    data.seek(0)
+    lines = data.read().decode().replace("\r\n", "\n").split("\n")
+    chunks, name, current = [], "", []
+    for line in lines:
+        directive = regex.fullmatch(TAG_DIRECTIVE + r"\s*", line.strip())
+        if directive:
+            chunks.append((name, current))
+            name, current = directive.group(1).lower(), []
+        else:
+            current.append(line)
+    chunks.append((name, current))
+    sets = {}
+    for setName, chunk in chunks:
+        text = "\n".join(chunk)
+        if (not setName and not text.strip()) or setName in sets:
+            if setName in sets:
+                console.print(f"[warning]Mixed Basis: the set @{escape(setName)} is named twice. Using the first."
+                              "[/warning]")
+            continue
+        sets[setName] = ExtractFromText(text + "\n", ExtractMixedBasis, empty=MixedBasis([], []))
+    return sets
+
+
 def ExtractMixedBasis(data) -> MixedBasis:
-    """Parse a Mixed Basis section (jobRelatedKeylists: Gaussian Gen/GenECP syntax) from an mmap data stream.
+    """Parse a Mixed Basis section (keylists.cusf: Gaussian Gen/GenECP syntax) from an mmap data stream.
 
     Basis groups run from an element line ('C H N O 0') to '****'; the first blank line after a group ends the basis
     section. ECP entries run from an element line to the next element line or blank line. An element listed in two

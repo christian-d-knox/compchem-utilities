@@ -124,6 +124,8 @@ class Defaults:
     ossSpinThreshold = 0.1
     # Optional job keylist data
     nboKeylist = "$NBO STERIC PLOT"
+    # The project's solvent ({smd} in routes, {alpb} in CREST options; solvent.py): '' for the gas phase
+    solvent = ""
     mixedBasisVariants = ["Gen", "GenECP", "gen", "genecp"]
     # Cube Keylists
     potCube = "Pot"
@@ -193,7 +195,7 @@ class Defaults:
         "programs.toml": [
             "methodNames", "targetProgram",
             "openShellReference", "ossSpinThreshold",
-            "nboKeylist", "mixedBasisVariants",
+            "nboKeylist", "mixedBasisVariants", "solvent",
             "potCube", "denCube", "valenceCube", "spinCube",
             "coreLineVariants", "ramLineVariants", "terminationVariants",
             "gaussianNonVariant", "orcaNonVariant", "orcaResultSuffixes",
@@ -261,6 +263,9 @@ class Defaults:
         "openShellReference": "Reference for open-shell species: \"U\" (default) or \"RO\". OSS (broken-symmetry singlets) always use U.",
         "ossSpinThreshold": "<S**2> above which a multiplicity-1 output is classified as an open-shell singlet (OSS).",
         "nboKeylist": "NBO keylist string appended to relevant Gaussian16 jobs.",
+        "solvent": "The solvent written where a method asks for it ({smd} in a Gaussian or ORCA route, {alpb} in"
+            " CREST's options), in each program's own form, e.g. THF. Usually a project's (project.toml); empty for"
+            " the gas phase.",
         "mixedBasisVariants": "Basis set keylist indicating a mixed/custom basis is in use.",
         "potCube": "Cube file label for electrostatic potential.",
         "denCube": "Cube file label for electron density.",
@@ -301,7 +306,7 @@ class Defaults:
         "routeUnderEachMethod": "Set to true to show each method's route under it in the Optimization builder; false shows"
             " only the chosen method's route, in its Route row.",
         "autoNTS": "Set to true to start the Optimization builder with the Neva-Touch Scheduler on: when the optimization"
-            " ends normally, its single point (Benchmark Methods entry 0) is submitted automatically.",
+            " ends normally, its single point (Single Point Methods entry 0) is submitted automatically.",
         "ntsReRunLimit": "How many times the Neva-Touch Scheduler re-runs any one stage of an optimization that ran out of"
             " optimizer steps (from its last geometry) before it stops the chain.",
         "rdkitConformers": "How many RDKit conformers a SMILES is built as (ETKDG, then MMFF94): the lowest-energy one is"
@@ -334,9 +339,9 @@ class Defaults:
     # Keys a project's <marker>/project.toml may override. Everything else is machine- or program-wide
     _PROJECT_KEYS: list[str] = [
         "CPU", "memoryRatio", "highMemoryRatio", "memoryBuffer", "wallTime", "cluster", "partition",
-        "openShellReference", "ossSpinThreshold", "nboKeylist",
+        "openShellReference", "ossSpinThreshold", "nboKeylist", "solvent",
     ]
-    # Keys that moved out of the TOML files (the benchmark suite is jobRelatedKeylists' Benchmark Methods, keylists.py).
+    # Keys that moved out of the TOML files (the benchmark suite is keylists.cusf's Single Point Methods, keylists.py).
     # Still read from there until `cu -refresh` merges and drops them, so they are skipped here without a warning
     _MOVED_KEYS: set[str] = {"benchmarkMethods"}
     # Global values displaced by project overrides, and the project values that replaced them. Used so project values
@@ -378,7 +383,7 @@ class Defaults:
         from .profile import InstalledProfile
         profile = InstalledProfile()
         cls._profileClusters = profile.clusters if profile else []
-        # jobRelatedKeylists sits beside the TOMLs, and is generated like them when missing
+        # keylists.cusf sits beside the TOMLs, and is generated like them when missing
         from .keylists import EnsureGlobalKeylists, KEYLISTS_FILE
         if EnsureGlobalKeylists():
             cls.generatedFiles.append(KEYLISTS_FILE)

@@ -175,7 +175,7 @@ def _DispatchSinglePoint(intent: SinglePointIntent) -> list[TrackedJob]:
 
 def _DispatchBenchmark(intent: BenchmarkIntent) -> list[TrackedJob]:
     if not Catalog.canBench:
-        agent.Human("Benchmarking requires at least 2 Benchmark Methods (Config › Job Keylists).", "cu -tui")
+        agent.Human("Benchmarking requires at least 2 Single Point Methods (Config › Job Keylists).", "cu -tui")
         return []
     return _GenerateBatch(intent, genBench)
 
@@ -183,7 +183,7 @@ def _DispatchBenchmark(intent: BenchmarkIntent) -> list[TrackedJob]:
 def _ScheduledSinglePoint(asked: ThenSP, partition: str | None, cluster: str | None, required: bool):
     """(the Neva-Touch Scheduler's single point, whether to stop) from --then-sp's flags (-opt's, -re's): a Benchmark
     Methods entry by name (the first by default) or a route of your own; its partition and cluster follow the job's,
-    the rest the config's. No Benchmark Methods: a failure when it was asked for, else no next job."""
+    the rest the config's. No Single Point Methods: a failure when it was asked for, else no next job."""
     from .optimize import CustomMethod, SinglePointChoices, SinglePointStep
     spChoices = SinglePointChoices()
     if asked.route:
@@ -193,7 +193,7 @@ def _ScheduledSinglePoint(asked: ThenSP, partition: str | None, cluster: str | N
         spName, spRoute = "Custom", asked.route
     elif not spChoices:
         if required:
-            agent.Fail("The Neva-Touch Scheduler needs Benchmark Methods for its single point (Config › Job "
+            agent.Fail("The Neva-Touch Scheduler needs Single Point Methods for its single point (Config › Job "
                        "Keylists), or --sp-route.")
             return None, True
         return None, False
@@ -202,7 +202,7 @@ def _ScheduledSinglePoint(asked: ThenSP, partition: str | None, cluster: str | N
         choice = (next((value for value in spChoices.values() if value[0].lower() == wanted), None) if wanted
                   else next(iter(spChoices.values())))
         if choice is None:
-            raise agent.UsageError(f"No Benchmark Methods entry named '{asked.method}'. Here: "
+            raise agent.UsageError(f"No Single Point Methods entry named '{asked.method}'. Here: "
                                    f"{', '.join(value[0] for value in spChoices.values())} (cu -methods).")
         spName, spRoute = choice[0], choice[3]
     step = SinglePointStep(spName, spRoute, asked.cpus or Defaults.CPU, asked.memory, asked.wallTime,
@@ -465,8 +465,8 @@ def _DispatchOptimize(intent: OptimizationIntent) -> list[TrackedJob]:
                                    + (f" (stages that do: {', '.join(map(str, modRedStages))})." if modRedStages else "."))
 
     # The Neva-Touch Scheduler: the SP once the opt ends normally (qol.toml's autoNTS unless told; on with any --sp-
-    # flag), a Benchmark Methods entry by name (the first by default) or a route of your own. Its partition and cluster
-    # follow the opt's, the rest the config's
+    # flag), a Single Point Methods entry by name (the first by default) or a route of your own. Its partition and
+    # cluster follow the opt's, the rest the config's
     given = intent.spMethod or intent.spRoute
     scheduled = (Defaults.autoNTS or bool(given)) if intent.thenSP is None else intent.thenSP
     then = None
@@ -1071,7 +1071,7 @@ def _DispatchAttributions() -> None:
 
 
 def _DispatchRefresh(intent: RefreshIntent) -> None:
-    # The old benchmarkMethods key goes into jobRelatedKeylists first: refresh drops the key, so it rewrites nothing
+    # The old benchmarkMethods key goes into keylists.cusf first: refresh drops the key, so it rewrites nothing
     # while the key's list couldn't be merged
     from .keylists import GlobalLevel, MergeLegacy
     if not MergeLegacy(GlobalLevel()):

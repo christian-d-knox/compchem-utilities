@@ -81,7 +81,8 @@ def BuildParser() -> argparse.ArgumentParser:
                              help="Write each file's last geometry (an output's, or an input's own) as NAME.xyz, Gaussian "
                                   "or ORCA; or, with --smiles and --name, a SMILES' RDKit conformer.")
     actionGroup.add_argument('-methods', '--methods', action='store_true',
-                             help="List the Optimization and Benchmark Methods in force here (project, else global).")
+                             help="List the Optimization and Single Point Methods in force here (project, else "
+                                  "global).")
     # Handled in Main() before parsing; listed here for --help and so argparse rejects it alongside another action
     actionGroup.add_argument('-tui', '--tui', action='store_true', help="Open the TUI. Cannot be combined with any other flag.")
     # The Neva-Touch Scheduler's hook (nevatouch.HookCommand writes it into job scripts): never typed, so not listed
@@ -114,7 +115,7 @@ def BuildParser() -> argparse.ArgumentParser:
                                "job's own route. Asked when not given. With -re: the re-run's corrected route.")
     optGroup.add_argument('--route', metavar="ROUTE",
                           help="A route of your own instead (as in Config › Job Keylists). With -sp: instead of "
-                               "Benchmark Methods' entry. With -re: a corrected route for the re-run (from the last "
+                               "Single Point Methods' entry. With -re: a corrected route for the re-run (from the last "
                                "geometry, named as a re-run).")
     optGroup.add_argument('--charge', type=int, default=None, help="Default: the prior job's; asked for an .xyz.")
     optGroup.add_argument('--mult', type=int, default=None, metavar="MULTIPLICITY",
@@ -136,7 +137,7 @@ def BuildParser() -> argparse.ArgumentParser:
     optGroup.add_argument('--sp-memory', type=float, default=None, metavar="GB",
                           help="The single point's memory per core in GB (default: as its method needs).")
     optGroup.add_argument('--sp-method', default=None, metavar="NAME",
-                          help="The single point's method: a Benchmark Methods entry by name (cu -methods; default: "
+                          help="The single point's method: a Single Point Methods entry by name (cu -methods; default: "
                                "the first).")
     optGroup.add_argument('--sp-route', default=None, metavar="ROUTE",
                           help="The single point's route of your own instead.")

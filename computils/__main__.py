@@ -87,7 +87,7 @@ def _Run(argv: list[str]) -> None:
 
     # Load configs and lookup data BEFORE handing control to the CLI.
     Defaults.Load()
-    # Project overrides must land before the Catalog derives route templates (from jobRelatedKeylists)
+    # Project overrides must land before the Catalog derives route templates (from keylists.cusf)
     LoadProjectConfig()
     Catalog.Load()
 

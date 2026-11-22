@@ -29,7 +29,7 @@ class Action(Enum):
     ATTRIBUTIONS     = "attributions"  # -attributions
     NEVA_TOUCH       = "nevatouch"  # --neva-touch: a job's Neva-Touch Scheduler hook (hidden: written into job scripts)
     INFO             = "info"       # -info: what files say (info.FileFacts), read-only
-    METHODS          = "methods"    # -methods: the Optimization and Benchmark Methods in force here
+    METHODS          = "methods"    # -methods: the Optimization and Single Point Methods in force here
     OPTIMIZE         = "opt"        # -opt: the Optimization builder, headless (optimize.py)
     SI_SCRAPER       = "si"         # -si: the SI Scraper, headless (scrape.py)
     AGENT            = "agent"      # -agent [TOPIC]: the agent skill, or one of its topics (agentskill.py)

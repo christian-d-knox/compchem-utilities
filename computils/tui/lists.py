@@ -227,7 +227,7 @@ class ListEditor(ModalScreen):
 
 
 class TextEditor(ModalScreen):
-    """Text edited in place (a project file, a jobRelatedKeylists section), with a summary(text) -> Text pane re-parsed
+    """Text edited in place (a project file, a keylists.cusf section), with a summary(text) -> Text pane re-parsed
     as you type and, below it, an example of the format (text or any renderable). preview(text, row) -> (title,
     renderable) | None, if given, fills a full-width strip under the text that follows the cursor's line (None: the
     cursor is on nothing to preview). esc is Done (⏎ types a newline here, and nothing is written until the config

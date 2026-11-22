@@ -9,9 +9,11 @@ from .actions  import SpinState
 from .console  import console
 from .defaults import Defaults
 
-# {tag} tokens in a route card select blocks from jobRelatedKeylists' ORCA Blocks
+# {tag} tokens in a route card: an ORCA route's select ORCA Blocks, a Gaussian route's a Mixed Basis set; {smd} is the
+# project's solvent in either (solvent.py)
 ROUTE_TAG_PATTERN = r"\{([\w-]+)\}"
-# [selector, selector: keywords {tags}] groups apply only to matching spin states
+# [selector, selector: keywords {tags}] groups apply only to matching spin states (or, [metal: ...], to a molecule
+# with a d- or f-block metal)
 ROUTE_GROUP_PATTERN = r"\[\s*([^\]:]*?)\s*:\s*([^\]]*)\]"
 # Anything left over from tag/group/directive syntax. Rendered routes containing this are never written
 ROUTE_LEAK_PATTERN = r"\{[\w-]+\}|[\[\]]|(?:^|\s)%"
@@ -23,6 +25,10 @@ NEW_CHECKPOINT = r"(?i)(?:^|\s)%newchk(?=\s|$)"
 
 # Named multiplicity selectors
 _MULTIPLICITY_NAMES = {"doublet": 2, "triplet": 3, "quartet": 4, "quintet": 5, "sextet": 6, "septet": 7}
+# [metal: ...]: a molecule with a d- or f-block metal (Sc-Zn, Y-Cd, La-Hg, Ac-Lr by atomic number); main-group metals
+# don't count
+METAL_SELECTOR = "metal"
+_METAL_NUMBERS = (range(21, 31), range(39, 49), range(57, 81), range(89, 104))
 # ORCA reference keywords. If the route already has one, CompUtils never adds another
 _ORCA_REFERENCES = {"RKS", "UKS", "ROKS", "RHF", "UHF", "ROHF"}
 # Gaussian's compound (composite) methods, with any reference prefix written: CBS-QB3, ROCBS-QB3, G4, G3MP2B3, W1BD...
@@ -40,15 +46,21 @@ def SplitRouteTags(routeLine: str) -> tuple[str, list[str]]:
 
 
 def _IsValidSelector(selector: str) -> bool:
-    return selector in ("css", "oss", "open") or selector in _MULTIPLICITY_NAMES \
+    return selector in ("css", "oss", "open", METAL_SELECTOR) or selector in _MULTIPLICITY_NAMES \
         or regex.fullmatch(r"m\d+", selector) is not None
 
 
-def _SelectorMatches(selector: str, spinState: SpinState, multiplicity: int) -> bool:
+def MetalSymbols() -> set[str]:
+    from .fileops import ATOMIC_SYMBOLS
+    return {ATOMIC_SYMBOLS[number] for numbers in _METAL_NUMBERS for number in numbers if number in ATOMIC_SYMBOLS}
+
+
+def _SelectorMatches(selector: str, spinState: SpinState, multiplicity: int, elements: set[str] = frozenset()) -> bool:
     match selector:
         case "css":  return spinState == SpinState.CSS
         case "oss":  return spinState == SpinState.OSS
         case "open": return spinState in (SpinState.OSS, SpinState.OPEN)
+        case "metal": return bool(elements & MetalSymbols())
     if selector in _MULTIPLICITY_NAMES:
         return multiplicity == _MULTIPLICITY_NAMES[selector]
     return multiplicity == int(selector[1:])
@@ -56,7 +68,7 @@ def _SelectorMatches(selector: str, spinState: SpinState, multiplicity: int) -> 
 
 @dataclass
 class RouteTemplate:
-    """A method's route (jobRelatedKeylists) split into its unconditional part and its spin-state groups. A method with
+    """A method's route (keylists.cusf) split into its unconditional part and its spin-state groups. A method with
     stages ('route -> route') is its first stage, carrying the rest in `later`: everything that takes a template works
     on stage 1, and jobs.RenderStages renders them all."""
     base: str                                   # clean route: no tags, no groups
@@ -100,7 +112,7 @@ def _ParseStage(routeLine: str) -> RouteTemplate:
     for selectorText, content in regex.findall(ROUTE_GROUP_PATTERN, routeLine):
         selectors, invalid = _GroupSelectors(selectorText)
         if invalid:
-            console.print(f"[warning]\\[config] Unknown spin selector(s) {invalid} in the route "
+            console.print(f"[warning]\\[config] Unknown selector(s) {invalid} in the route "
                           f"'{escape(routeLine)}'. Ignoring that group.[/warning]")
             continue
         keywords, tags = SplitRouteTags(content)
@@ -169,32 +181,79 @@ def _ApplyReference(tokens: list[str], spinState: SpinState, extensionType: str)
     return tokens[:position] + [reference + tokens[position]] + tokens[position + 1:]
 
 
-def RenderRoute(template: RouteTemplate, molecule) -> tuple[str, list[str]]:
-    """Render a route template for one molecule's spin state. Returns (route, orcablocks tags).
+def _KeywordName(token: str) -> str:
+    return regex.split(r"[=(]", token, maxsplit=1)[0].upper()
 
-    Additive: base route + unconditional tags, then every matching group in written order, then the U/RO reference.
-    Duplicate keywords and tags keep their first occurrence.
+
+def _KeywordOptions(token: str) -> list[str]:
+    """A keyword's options as written: 'opt=(ts,calcfc)' and 'opt(ts,calcfc)' -> ['ts', 'calcfc']; 'freq' -> []."""
+    rest = token[len(regex.split(r"[=(]", token, maxsplit=1)[0]):].lstrip("=")
+    rest = rest[1:-1] if rest.startswith("(") and rest.endswith(")") else rest
+    return [option for option in rest.split(",") if option]
+
+
+def _AddKeyword(tokens: list[str], token: str) -> None:
+    """A group's keyword joins the route: a keyword the route already has gets its options merged into the route's own
+    (freq + freq=noraman -> freq=noraman; opt=(ts,calcfc) + opt=noeigen -> opt=(ts,calcfc,noeigen)), never a second
+    copy; anything else is appended. Method tokens (with '/') are never merged."""
+    name = _KeywordName(token)
+    index = next((i for i, existing in enumerate(tokens) if "/" not in existing and "/" not in token
+                  and _KeywordName(existing) == name), None)
+    if index is None:
+        if token.upper() not in {existing.upper() for existing in tokens}:
+            tokens.append(token)
+        return
+    existing = tokens[index]
+    options = _KeywordOptions(existing)
+    added = [option for option in _KeywordOptions(token) if option.lower() not in {o.lower() for o in options}]
+    if not added:
+        return
+    options += added
+    keyword = regex.split(r"[=(]", existing, maxsplit=1)[0]
+    tokens[index] = f"{keyword}={options[0]}" if len(options) == 1 else f"{keyword}=({','.join(options)})"
+
+
+def RenderRoute(template: RouteTemplate, molecule) -> tuple[str, list[str]]:
+    """Render a route template for one molecule. Returns (route, tags): an ORCA job's ORCA Blocks tags, a Gaussian
+    job's Mixed Basis set (and {smd} when the project's solvent can't be written: JobFileProblem says why).
+
+    Additive: base route + unconditional tags, then every matching group in written order (spin state, or [metal: ...]
+    by the molecule's elements; a keyword the route has already gets the group's options merged in), then the project's
+    solvent for {smd} (solvent.py; nothing in the gas phase), then the U/RO reference. Tags keep their first occurrence.
     """
+    from . import solvent
     try:
         multiplicity = int(molecule.multiplicity)
     except (TypeError, ValueError):
         multiplicity = 0
+    elements = set()
+    if template.groups and isinstance(molecule.coordinateList, list):
+        from .fileops import MoleculeElements
+        elements = MoleculeElements(molecule.coordinateList)
     tokens, tags = template.base.split(), list(template.tags)
-    seenTokens = {token.upper() for token in tokens}
     for selectors, keywords, groupTags in template.groups:
-        if not any(_SelectorMatches(s, molecule.spinState, multiplicity) for s in selectors):
+        if not any(_SelectorMatches(s, molecule.spinState, multiplicity, elements) for s in selectors):
             continue
         for token in keywords.split():
-            if token.upper() not in seenTokens:
-                tokens.append(token)
-                seenTokens.add(token.upper())
+            _AddKeyword(tokens, token)
         tags += [tag for tag in groupTags if tag not in tags]
+    if solvent.SMD_TAG in tags:
+        program = "orca" if molecule.extensionType == Defaults.orcaExtension else "gaussian"
+        problem = solvent.Problem(program)
+        if not solvent.ProjectSolvent():
+            tags.remove(solvent.SMD_TAG)
+        elif not problem and program == "gaussian":
+            tags.remove(solvent.SMD_TAG)
+            _AddKeyword(tokens, solvent.GaussianKeyword())
+        elif not problem and not any(regex.fullmatch(r"(?i)cpcm(\(.*\))?", token) for token in tokens):
+            # ORCA: the SMD block (JobInputText writes it for the tag) needs CPCM on the ! line
+            tokens.append("CPCM")
     tokens = _ApplyReference(tokens, molecule.spinState, molecule.extensionType)
     return " ".join(tokens), tags
 
 
 def MatchTemplate(routeLine: str, molecule) -> RouteTemplate | None:
-    """The Benchmark Methods entry that renders to this (already rendered) route for this molecule, so a re-run can
+    """The Single Point Methods entry that renders to this (already rendered) route for this molecule, so a re-run can
     recover its orcablocks tags. None if no entry matches. Shared by genReRun and the TUI's Re-run preview."""
     tokens = routeLine.upper().split()
     return next((template for template in Catalog.templates
@@ -203,7 +262,7 @@ def MatchTemplate(routeLine: str, molecule) -> RouteTemplate | None:
 
 class Catalog:
     # ── Data derived from Defaults at startup ────────────────────────────────
-    benchmarkLines = []     # the Benchmark Methods in force (jobRelatedKeylists, keylists.Keylist), as written
+    benchmarkLines = []     # the Single Point Methods in force (keylists.cusf, keylists.Keylist), as written
     templates = []          # templates[i] = parsed benchmarkLines[i] (.base clean route, .method); see RenderRoute
     methodList = []
     targetProgram = []
@@ -224,7 +283,7 @@ class Catalog:
             cls.methodKeys.setdefault(MethodKey(method), method)
         cls.programOf     = dict(zip(cls.methodList, cls.targetProgram))
 
-        # Benchmark method lines: the nearest jobRelatedKeylists level with Benchmark Methods. Tags and groups are parsed
+        # Benchmark method lines: the nearest keylists.cusf level with Single Point Methods. Tags and groups are parsed
         # out here so no downstream code ever sees them
         from .keylists import BENCHMARK, Keylist
         cls.benchmarkLines = list(Keylist(BENCHMARK))

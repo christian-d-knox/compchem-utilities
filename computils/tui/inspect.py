@@ -140,7 +140,7 @@ def RenderedRow(row: PreviewRow, template: RouteTemplate, molecule: Molecule, el
                 texts: dict | None = None, stage: int | None = None, programOf: dict | None = None) -> PreviewRow:
     """Fill row with the template rendered for molecule (spans, orcablocks tags) and why genFile would skip the job.
     A method with stages shows them all, joined by ' → ', or only stage N (the config editor's strip, which follows the
-    cursor); keywords the chaining adds show as added. texts: unsaved jobRelatedKeylists text to check against instead
+    cursor); keywords the chaining adds show as added. texts: unsaved keylists.cusf text to check against instead
     of the files, and programOf the unsaved method map (the config editor)."""
     rendered = RenderStages(template, molecule)
     shown = range(len(rendered)) if stage is None else [stage - 1]

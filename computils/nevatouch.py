@@ -93,7 +93,7 @@ def HookCommand(step: str, output: Path, cpus: int | None = None, memoryRatio: f
     count and the original stage it starts at (so a hook without its record still counts right). wallTime/partition/
     cluster are the job's own SLURM settings (None: the config's), which a re-run of it repeats. chain: the job's chain
     file (ChainPath), whose next step is what this step submits; without one (a hook written before chains), the SP is
-    Benchmark Methods' first entry with --cpus/--memory and the config's SLURM settings."""
+    Single Point Methods' first entry with --cpus/--memory and the config's SLURM settings."""
     # <env>/bin/python, not python3.11: a queued job's hook still runs after its environment is rebuilt on a new Python
     command = [StablePython(), "-m", "computils", "--neva-touch", step, str(output), JOB_ID]
     if cpus is not None:
@@ -140,7 +140,7 @@ def _FindJob(jobID: str, output: Path, wait: bool) -> TrackedJob | None:
 
 def _SubmitSinglePoint(intent: NevaTouchIntent, output: Path) -> TrackedJob | None:
     """The single point of a finished opt, through the one execution path (what `cu -sp OUTPUT` runs): the chain's next
-    step (its method, resources and SLURM settings), else (a hook from before chains) Benchmark Methods' first entry
+    step (its method, resources and SLURM settings), else (a hook from before chains) Single Point Methods' first entry
     with the resources the hook carries. Its own hook ends the chain. None if it wasn't submitted (the chain file,
     genFile or sbatch said why)."""
     from .dispatch import Dispatch

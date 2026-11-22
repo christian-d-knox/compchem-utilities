@@ -2,7 +2,7 @@
 
 A project root is any directory containing a marker directory (Defaults.projectMarker, default `.computils/`).
 CompUtils walks upward from the CWD to the nearest marker, the same way git finds `.git/`. Shareable reference files
-(jobRelatedKeylists, spinstates.txt) live inside the marker so every subdirectory of the project can find them.
+(keylists.cusf, spinstates.txt) live inside the marker so every subdirectory of the project can find them.
 """
 import functools, os, shutil
 import tomllib as tom
@@ -12,8 +12,9 @@ from .console  import ApplyTheme, console
 from .defaults import DELETE, BackUpFile, Defaults, loadToml, writeToml
 from .prompts  import AskBool
 
-# Known shareable files. -init offers to move these from the CWD into a new marker (jobRelatedKeylists: keylists.py)
-PROJECT_FILES = ["jobRelatedKeylists", "spinstates.txt"]
+# Known shareable files. -init offers to move these from the CWD into a new marker (keylists.cusf, or its old name:
+# keylists.py)
+PROJECT_FILES = ["keylists.cusf", "jobRelatedKeylists", "spinstates.txt"]
 # Project-level overrides of the global config. Only ever lives inside the marker
 PROJECT_CONFIG = "project.toml"
 
@@ -74,7 +75,7 @@ def RefreshProjectConfig() -> None:
     """`cu -refresh project`: rewrite the nearest project.toml in the current layout, keeping the overrides that applied
     (LoadProjectConfig). Keys a project can't override, stale keys and invalid values are dropped (they follow global).
     A missing or unparseable file goes through EnsureProjectConfig, since there is nothing to keep. The project's old
-    mixedbasis.txt / orcablocks.txt / optmethods.txt and its benchmarkMethods key are merged into its jobRelatedKeylists
+    mixedbasis.txt / orcablocks.txt / optmethods.txt and its benchmarkMethods key are merged into its keylists.cusf
     first (keylists.MergeLegacy), so dropping the key loses nothing: project.toml isn't rewritten while any of them
     couldn't be merged."""
     root = FindProjectRoot()
@@ -162,7 +163,7 @@ def ChangeDirectory(target: Path) -> bool:
 
 
 # Cached so a batch resolves (and prints) once, not once per molecule. Only the project's copy is read (config is
-# Global / Project only, never the CWD), and a missing file is never prompted for (the job files are jobRelatedKeylists,
+# Global / Project only, never the CWD), and a missing file is never prompted for (the job files are keylists.cusf,
 # which has a global level: keylists.py)
 @functools.cache
 def ResolveProjectFile(fileName: str) -> Path | None:

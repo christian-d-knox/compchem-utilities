@@ -15,7 +15,7 @@ name = "Example Lab"
 
 # Any global config key (see the TOML files in ~/bin), applied to every labmate's config. Leave a key out
 # (or commented out) rather than empty: an empty value is applied too, e.g. wiping a labmate's own bot token.
-# benchmarkMethods (route cards) becomes the Benchmark Methods of every labmate's global jobRelatedKeylists
+# benchmarkMethods (route cards) becomes the Single Point Methods of every labmate's global keylists.cusf
 [settings]
 isNotifications = true
 # botToken = "123456789:ABC..."   # the lab bot's token, from Telegram's @BotFather
@@ -55,3 +55,26 @@ memoryRatio = 4.0
 # A built-in cluster's table only overrides its settings (its header stays)
 [clusters.Bridges2]
 partition = "RM-shared"
+
+# The lab's standard methods: whole keylists.cusf sections, written into each labmate's global file when the
+# profile is applied (a project's own section still wins). Any of: "Optimization Methods", "Single Point Methods" (in
+# place of benchmarkMethods above), "Mixed Basis", "ORCA Blocks", "Conformer Search Methods". {smd} / {alpb} write the project's solvent (project.toml:
+# solvent = "THF"), nothing in the gas phase; {name} picks a named Mixed Basis set; [metal: ...] applies to molecules
+# with a d- or f-block metal.
+[keylists]
+"Optimization Methods" = '''
+# @opt
+B3LYP EmpiricalDispersion=GD3BJ GenECP {light-sdd} opt freq [metal: freq=noraman]
+'''
+"Mixed Basis" = '''
+# @light-sdd
+H C N O 0
+6-31G(d)
+****
+Pd 0
+SDD
+****
+
+Pd 0
+SDD
+'''

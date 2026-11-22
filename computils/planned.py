@@ -80,7 +80,7 @@ def _Generated(molecule: Molecule | None, source: Path, name: str, template: Rou
 
 def PlanSinglePoints(molecules: list[tuple[Path, Molecule | None]], template: RouteTemplate | None,
                      resources: Resources, problem: str = "") -> list[PlannedJob]:
-    """-sp: each file's single point with one template (a Benchmark Methods entry, or a route of your own)."""
+    """-sp: each file's single point with one template (a Single Point Methods entry, or a route of your own)."""
     jobs = []
     for source, molecule in molecules:
         name = SinglePointName(molecule) if molecule is not None else source.stem + Defaults.singlePointExtra
@@ -89,7 +89,7 @@ def PlanSinglePoints(molecules: list[tuple[Path, Molecule | None]], template: Ro
 
 
 def PlanBenchmark(molecules: list[tuple[Path, Molecule | None]], start: int, resources: Resources) -> list[PlannedJob]:
-    """-b -ovr start: every Benchmark Methods entry from start on, for each file (genBench: the first named as a
+    """-b -ovr start: every Single Point Methods entry from start on, for each file (genBench: the first named as a
     single point, the rest by index and method)."""
     jobs = []
     for source, molecule in molecules:

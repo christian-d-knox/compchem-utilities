@@ -495,8 +495,8 @@ class OptimizationScreen(SchedulerSteps, Screen):
         self.prefilled: dict[str, str] = {"sp-partition": Defaults.partition, "sp-cluster": Defaults.cluster}
         self.ready = False
         self.path: Path | None = None
-        # The Neva-Touch Scheduler's next job (the Then: SP step): its method choices (Benchmark Methods, then Custom),
-        # as the Opt's, and its stages as they will be written (read only: coordinates marked)
+        # The Neva-Touch Scheduler's next job (the Then: SP step): its method choices (Single Point Methods, then
+        # Custom), as the Opt's, and its stages as they will be written (read only: coordinates marked)
         self.step = OPT_STEP
         self.spChoices = SinglePointChoices()
         self.spProblems = MethodProblems(self.spChoices)

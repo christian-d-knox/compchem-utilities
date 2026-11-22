@@ -1,7 +1,7 @@
-"""jobRelatedKeylists: every job-running set in one sectioned file.
+"""keylists.cusf: every job-running set in one sectioned file.
 
     === Optimization Methods ===     named routes for the Optimization builder ('# @NAME' above each; '>' later stages)
-    === Benchmark Methods ===        the benchmark suite, one route per entry (entry 0 is -sp's default)
+    === Single Point Methods ===        the benchmark suite, one route per entry (entry 0 is -sp's default)
     === Mixed Basis ===              Gen/GenECP basis groups and ECPs
     === ORCA Blocks ===              %blocks, pulled into ORCA jobs by {tag} tokens
     === Conformer Search Methods === named CREST option lines for conformer searches ('# @NAME' above each; crest.py)
@@ -9,7 +9,7 @@
 Each section keeps its own format and extractor (fileops). The file has no extension: it is edited in the TUI (Config ›
 Job Keylists, one section at a time). It lives at two levels, and the nearer level that HAS a section wins, section by
 section: the project marker (<root>/.computils/), then binDirectory (global). So a project can override only its
-Benchmark Methods and keep the global ORCA blocks. A copy in the CWD is never read.
+Single Point Methods and keep the global ORCA blocks. A copy in the CWD is never read.
 
 Until `cu -refresh` merges them (MergeLegacy), the files these sections replaced (mixedbasis.txt, orcablocks.txt,
 optmethods.txt in the marker) and the old benchmarkMethods TOML key (project.toml, programs.toml) still stand in for
@@ -24,15 +24,20 @@ from rich.markup import escape
 
 from .console  import console
 from .defaults import BackUpFile, Defaults
-from .fileops  import (ExtractBenchmarkMethods, ExtractCrestMethods, ExtractFromText, ExtractMixedBasis,
+from .fileops  import (ExtractBenchmarkMethods, ExtractCrestMethods, ExtractFromText, ExtractMixedBasisSets,
                        ExtractOptMethods, ExtractOrcaBlocks, HasContent, JoinStages, MapFile, MixedBasis, NamedRoutes,
                        RouteEntries)
 from .project  import FindProjectRoot, ProjectFilePath
 
-KEYLISTS_FILE = "jobRelatedKeylists"
-OPTIMIZATION, BENCHMARK, MIXED_BASIS, ORCA_BLOCKS = "Optimization Methods", "Benchmark Methods", "Mixed Basis", "ORCA Blocks"
+KEYLISTS_FILE = "keylists.cusf"
+# Its name until 2026-11-21: a level's file while it has no keylists.cusf, until `cu -refresh` renames it (OldKeylists)
+OLD_KEYLISTS_FILE = "jobRelatedKeylists"
+OPTIMIZATION, BENCHMARK, MIXED_BASIS, ORCA_BLOCKS = ("Optimization Methods", "Single Point Methods", "Mixed Basis",
+                                                     "ORCA Blocks")
+# Headers a section had before: still read as that section; a write (or `cu -refresh`) gives the part its own header
+OLD_SECTION_NAMES = {"benchmark methods": BENCHMARK}
 CONFORMER_SEARCH = "Conformer Search Methods"
-# The TOML key the Benchmark Methods section replaced (programs.toml, project.toml, a lab profile's [settings])
+# The TOML key the Single Point Methods section replaced (programs.toml, project.toml, a lab profile's [settings])
 LEGACY_KEY = "benchmarkMethods"
 # The suite when no level has one
 DEFAULT_BENCHMARK = ["M062X 6-311+G(d,p)"]
@@ -44,7 +49,8 @@ NAMED_SECTIONS = (OPTIMIZATION, CONFORMER_SEARCH)
 # '=== Name ===' on a line of its own. Nothing in any section's format starts with '='
 SECTION_HEADER = r"(?m)^===[ \t]*(.*?)[ \t]*===[ \t]*(?=\r?$)"
 _HEADER_TEXT, _HEADER_BYTES = regex.compile(SECTION_HEADER), regex.compile(SECTION_HEADER.encode())
-FILE_PREAMBLE = ("# jobRelatedKeylists -- CompUtils' job-related keylists. Edit them in the TUI: Config > Job Keylists.\n"
+FILE_PREAMBLE = ("# keylists.cusf -- CompUtils' settings file: the methods it runs jobs with, and their basis sets\n"
+                 "# and blocks. Edit them in the TUI: Config > Job Keylists.\n"
                  "# Each section starts at its '=== Name ===' line; a section a level doesn't have follows the next level.\n")
 
 
@@ -59,15 +65,16 @@ class Section:
 SECTIONS = {section.name: section for section in (
     Section(OPTIMIZATION, ExtractOptMethods, dict, "optmethods.txt"),
     Section(BENCHMARK, ExtractBenchmarkMethods, list),
-    Section(MIXED_BASIS, ExtractMixedBasis, lambda: MixedBasis([], []), "mixedbasis.txt"),
+    Section(MIXED_BASIS, ExtractMixedBasisSets, dict, "mixedbasis.txt"),
     Section(ORCA_BLOCKS, ExtractOrcaBlocks, dict, "orcablocks.txt"),
     Section(CONFORMER_SEARCH, ExtractCrestMethods, dict),
 )}
 
 
 def SectionName(header: str) -> str:
-    """A header's section, matched case-insensitively ('' for an unknown one)."""
-    return next((name for name in SECTIONS if name.lower() == header.strip().lower()), "")
+    """A header's section, matched case-insensitively ('' for an unknown one); an old header reads as its section."""
+    key = header.strip().lower()
+    return next((name for name in SECTIONS if name.lower() == key), OLD_SECTION_NAMES.get(key, ""))
 
 
 # ─── Splitting a file's text ──────────────────────────────────────────
@@ -106,7 +113,7 @@ def ReplaceSection(text: str, name: str, body: str) -> str:
     preamble, parts = SplitSections(text)
     for part in parts:
         if part.name == name:
-            part.body = written
+            part.header, part.body = f"=== {name} ===", written
             break
     else:
         if parts or preamble.strip():
@@ -143,8 +150,8 @@ def FileProblems(text: str) -> list[str]:
 
 
 def _ParseParts(parts) -> dict:
-    """{section: parsed value} from (name, body text) pairs; a section written twice keeps its first. A Benchmark Methods
-    section with no routes counts as missing (an empty suite runs nothing), so the next level's applies."""
+    """{section: parsed value} from (name, body text) pairs; a section written twice keeps its first. A Single Point
+    Methods section with no routes counts as missing (an empty suite runs nothing), so the next level's applies."""
     parsed = {}
     for name, body in parts:
         if name and name not in parsed:
@@ -216,14 +223,21 @@ def ClearCaches() -> None:
 @dataclass(frozen=True)
 class Level:
     label: str                  # Project, Global
-    path: Path                  # this level's jobRelatedKeylists (absolute; may not exist)
+    path: Path                  # this level's keylists.cusf (absolute; may not exist), or its old jobRelatedKeylists
     legacyFolder: Path | None   # where the files the sections replaced are still read from
     legacyToml: Path | None     # the TOML whose old benchmarkMethods key is still read
 
 
+def KeylistsPath(folder: Path) -> Path:
+    """A level's file: keylists.cusf, or the old jobRelatedKeylists while it is the only one (read and written under its
+    old name until `cu -refresh` renames it, so a level is never split across two files)."""
+    new, old = folder / KEYLISTS_FILE, folder / OLD_KEYLISTS_FILE
+    return old if old.is_file() and not new.exists() else new
+
+
 def GlobalLevel() -> Level:
     binDirectory = Path(Defaults.binDirectory).expanduser().absolute()
-    return Level("Global", binDirectory / KEYLISTS_FILE, None, binDirectory / "programs.toml")
+    return Level("Global", KeylistsPath(binDirectory), None, binDirectory / "programs.toml")
 
 
 def Levels() -> list[Level]:
@@ -233,7 +247,7 @@ def Levels() -> list[Level]:
     levels = []
     if root is not None:
         marker = ProjectFilePath(root, "").absolute()
-        levels.append(Level("Project", marker / KEYLISTS_FILE, marker, marker / "project.toml"))
+        levels.append(Level("Project", KeylistsPath(marker), marker, marker / "project.toml"))
     global_ = GlobalLevel()
     if all(global_.path != level.path for level in levels):
         levels.append(global_)
@@ -274,8 +288,8 @@ def KeylistSource(name: str, texts: dict[Path, str] | None = None) -> tuple[Leve
 def Keylist(name: str, texts: dict[Path, str] | None = None):
     """A section's parsed value from the nearest level that has it: OptMethods' {name: route}, the benchmark list,
     MixedBasis, ORCA {tag: block}, Conformer Search {name: options}. Without one anywhere: its empty value (the
-    default suite for Benchmark Methods, the default search for Conformer Search Methods). texts ({level path: unsaved
-    text}) stands in for files (the TUI's config editor)."""
+    default suite for Single Point Methods, the default search for Conformer Search Methods). texts ({level path:
+    unsaved text}) stands in for files (the TUI's config editor)."""
     for level in Levels():
         found = LevelSections(level, texts)
         if name in found:
@@ -292,12 +306,42 @@ def DefaultValue(name: str):
     return SECTIONS[name].empty()
 
 
+# A name starting with 'example' marks an entry as the format shown by example: a new file's Mixed Basis and ORCA Blocks
+# hold one each, and a route uses it only by naming it ({example}), never as a fallback (jobs.MixedBasisSet)
+EXAMPLE_NAME = "example"
+EXAMPLE_MIXED_BASIS = """# @example
+C H N O 0
+6-31G(d)
+****
+Pd 0
+SDD
+****
+
+Pd 0
+SDD"""
+# The SMD block {smd} writes for the project's solvent (solvent.py), as one would write it by hand
+EXAMPLE_ORCA_BLOCKS = """# @example-smd
+%cpcm
+    smd true
+    SMDsolvent "water"
+end"""
+
+
+def IsExample(name: str) -> bool:
+    return name.lower() == EXAMPLE_NAME or name.lower().startswith(EXAMPLE_NAME + "-")
+
+
 def DefaultBody(name: str, benchmark: list[str] | None = None) -> str:
-    """A new file's text for a section: the benchmark suite, the default conformer search ('# @name' above it)."""
+    """A new file's text for a section: the benchmark suite, the default conformer search ('# @name' above it), and
+    an example of the Mixed Basis and ORCA Blocks formats ('# @example', '# @example-smd')."""
     if name == BENCHMARK:
         return "\n".join(benchmark or DEFAULT_BENCHMARK)
     if name == CONFORMER_SEARCH:
         return "\n".join(f"# @{entry}\n{options}" for entry, options in DEFAULT_CONFORMER_SEARCH.items())
+    if name == MIXED_BASIS:
+        return EXAMPLE_MIXED_BASIS
+    if name == ORCA_BLOCKS:
+        return EXAMPLE_ORCA_BLOCKS
     return ""
 
 
@@ -337,14 +381,14 @@ def DefaultText(benchmark: list[str]) -> str:
 
 
 def EnsureGlobalKeylists() -> bool:
-    """Generate the global file if it is missing (Defaults.Load, like a missing TOML): its Benchmark Methods seeded from
-    programs.toml's old benchmarkMethods key, else the default suite. True if it was written."""
+    """Generate the global file if it is missing (Defaults.Load, like a missing TOML): its Single Point Methods seeded
+    from programs.toml's old benchmarkMethods key, else the default suite. True if it was written."""
     global_ = GlobalLevel()
     if global_.path.exists():
         return False
     seeded = _LegacyBenchmark(global_.legacyToml) if global_.legacyToml.is_file() else None
     console.print(f"[warning]\\[config] {KEYLISTS_FILE} not found — generating it"
-                  f"{' (Benchmark Methods from programs.toml)' if seeded else ''}.[/warning]")
+                  f"{' (Single Point Methods from programs.toml)' if seeded else ''}.[/warning]")
     if not WriteKeylists(global_.path, DefaultText(seeded or DEFAULT_BENCHMARK)):
         return False
     ClearCaches()
@@ -352,14 +396,26 @@ def EnsureGlobalKeylists() -> bool:
 
 
 def GlobalBenchmark() -> list[str] | None:
-    """The global level's Benchmark Methods (its file, else programs.toml's old key), or None without one."""
+    """The global level's Single Point Methods (its file, else programs.toml's old key), or None without one."""
     global_ = GlobalLevel()
     found = LevelSections(global_).get(BENCHMARK)
     return None if found is None else found[0]
 
 
+def SetGlobalSection(name: str, body: str) -> bool:
+    """A lab profile's [keylists] section, written into the global file (a project's own section still wins). True
+    only when the file changed."""
+    path = GlobalLevel().path
+    current = path.read_text(encoding="utf-8") if path.is_file() else FILE_PREAMBLE + "\n"
+    text = ReplaceSection(current, name, body)
+    if text == current:
+        return False
+    ClearCaches()
+    return WriteKeylists(path, text)
+
+
 def SetGlobalBenchmark(entries: list[str]) -> bool:
-    """A lab profile's benchmarkMethods: the global file's Benchmark Methods section."""
+    """A lab profile's benchmarkMethods: the global file's Single Point Methods section."""
     global_ = GlobalLevel()
     return SaveSection(global_.path, BENCHMARK, "\n".join(entries))
 
@@ -385,12 +441,46 @@ def _Difference(expected, readBack) -> str:
     return ": its basis or ECP entries would read differently"
 
 
+def _RenameOld(level: Level) -> Level | None:
+    """`cu -refresh`: a level's old jobRelatedKeylists becomes keylists.cusf, its old section headers their current
+    ones (Benchmark Methods -> Single Point Methods). The level as it now is, or None if the file couldn't be moved."""
+    if level.path.name != OLD_KEYLISTS_FILE:
+        return level
+    new = level.path.with_name(KEYLISTS_FILE)
+    try:
+        text = level.path.read_text(encoding="utf-8")
+        preamble, parts = SplitSections(text)
+        # CompUtils' own first line from before (not a person's comment) becomes the current one
+        oldLine = ("# jobRelatedKeylists -- CompUtils' job-related keylists. Edit them in the TUI: "
+                   "Config > Job Keylists.")
+        if preamble.startswith(oldLine):
+            preamble = FILE_PREAMBLE.split("\n# Each section")[0] + preamble[len(oldLine):]
+        for part in parts:
+            # A known section gets its current header; an unknown one keeps its text
+            if part.name:
+                part.header = f"=== {part.name} ==="
+        if not WriteKeylists(new, preamble + "".join(part.header + part.body for part in parts)):
+            return None
+        BackUpFile(level.path)
+    except OSError as error:
+        console.print(f"[error]Could not rename {level.path} to {new.name}: {error}[/error]")
+        return None
+    ClearCaches()
+    console.print(f"[good]Renamed {level.path.name} to {new.name} ({level.label}); the old file is kept as a "
+                  f"backup.[/good]")
+    from dataclasses import replace
+    return replace(level, path=new)
+
+
 def MergeLegacy(level: Level) -> bool:
     """`cu -refresh`: write what the old files and TOML key give this level into its keylists file, section by section
     (only for sections it doesn't have yet), and back the merged old files up to .bak (refresh drops the TOML key
     itself). A section is merged only if it reads back the same: TOML entries as the old Catalog read them (stripped,
     blank ones skipped), old files as their extractor reads them (bytes, line endings as written). A section that
     wouldn't is named and left where it is. False if any was left, so refresh rewrites nothing that still holds it."""
+    level = _RenameOld(level)
+    if level is None:
+        return False
     found = LevelSections(level)
     legacy = {name: (value, source) for name, (value, source) in found.items() if source != level.path}
     if not legacy:

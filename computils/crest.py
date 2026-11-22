@@ -9,7 +9,7 @@ A search of 8a is the job 8a_CREST (Defaults.crestExtra), so its output feeds 8a
     8a_CREST.out            CREST's output (SLURM -o)
     8a_CREST-scratch/       CREST's result files (crestResultFiles), copied back however the job ends
 
-CREST's options are a Conformer Search Methods entry (jobRelatedKeylists: '# @gfn2' then '--gfn2 --ewin 8 ...') or a line
+CREST's options are a Conformer Search Methods entry (keylists.cusf: '# @gfn2' then '--gfn2 --ewin 8 ...') or a line
 typed in full; CompUtils writes the threads, charge, unpaired electrons and the constraints file itself (RESERVED).
 Constraints are typed in the ModRed letters the lab already writes ('B 12 15', 'A 1 2 3', 'D 1 2 3 4', 'atoms 11-14',
 'elements Pd', 'fix 2,4,7,34'); a bond, angle or dihedral without a value gets the starting geometry's, computed here
@@ -68,17 +68,34 @@ def Level(options: str) -> str:
 
 
 def Solvation(options: str) -> str:
-    """'ALPB (toluene)', 'GBSA (water)', or '' for the gas phase."""
-    tokens = options.split()
+    """'ALPB (toluene)', 'GBSA (water)', or '' for the gas phase. {alpb} reads as the project's solvent."""
+    from .solvent import ALPB_TAG, HasTag, ProjectSolvent
+    if HasTag(options, ALPB_TAG) and not ProjectSolvent():
+        return "ALPB (the Project's Solvent: None Set Here)"
+    tokens = RenderOptions(options).split()
     for index, token in enumerate(tokens[:-1]):
         if Flag(token) in SOLVATION:
             return f"{SOLVATION[Flag(token)]} ({tokens[index + 1]})"
     return ""
 
 
+def RenderOptions(options: str) -> str:
+    """An option line as CREST gets it: {alpb} becomes the project's solvent ('--alpb thf'; nothing in the gas phase or
+    for a solvent ALPB lacks, which OptionsProblem reports). solvent.py."""
+    from .solvent import ALPB_TAG, AlpbOptions
+    return " ".join(regex.sub(r"(?i)\{" + ALPB_TAG + r"\}", AlpbOptions(), options).split())
+
+
 def OptionsProblem(options: str) -> str:
-    """Why an option line can't be used ('' if it can): a flag CompUtils writes itself, or an input file."""
-    for token in options.split():
+    """Why an option line can't be used ('' if it can): the project's solvent where it asks for one ({alpb}) that ALPB
+    can't write, a tag CREST has none of, a flag CompUtils writes itself, or an input file."""
+    from .solvent import ALPB_TAG, HasTag, Problem
+    if HasTag(options, ALPB_TAG) and Problem("alpb"):
+        return Problem("alpb")
+    stray = regex.findall(r"\{([\w-]+)\}", regex.sub(r"(?i)\{" + ALPB_TAG + r"\}", "", options))
+    if stray:
+        return f"Unknown Tag {{{stray[0]}}} (CREST Takes Only {{{ALPB_TAG}}})"
+    for token in RenderOptions(options).split():
         name = Flag(token)
         if name in RESERVED:
             return f"{RESERVED[name]} Is Written by CompUtils"
@@ -416,7 +433,7 @@ class CrestJob:
         words = [self.executable, str(self.xyz), "--T", str(self.cpus), "--chrg", str(charge), "--uhf", str(self.uhf)]
         if self.ConstraintsFileText():
             words += ["--cinp", str(self.constraintsFile)]
-        return words + self.options.split()
+        return words + RenderOptions(self.options).split()
 
     def CommandLine(self) -> str:
         return " ".join(self.CommandWords())
@@ -464,7 +481,8 @@ class CrestJob:
         from .jobs import HeaderSends
         result = {"job": self.name, "xyz": str(self.xyz), "method": self.method, "options": self.options,
                   "charge": self.charge, "multiplicity": self.multiplicity, "uhf": self.uhf,
-                  "level": Level(self.options) or "CREST's Default (GFN2-xTB)", "solvation": Solvation(self.options),
+                  "level": Level(self.options) or "CREST's Default (GFN2-xTB)",
+                  "solvation": Solvation(RenderOptions(self.options)),
                   "command": self.CommandLine(), "cpus": self.cpus, "memoryPerCore": self.memoryRatio,
                   "wallTimeHours": self.wallTime or Defaults.wallTime, "partition": self.partition or Defaults.partition,
                   "output": str(self.output), "results": str(self.resultsFolder)}

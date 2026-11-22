@@ -1,4 +1,4 @@
-"""Config editor: global values and project overrides, one TOML file per section, patched in place; jobRelatedKeylists'
+"""Config editor: global values and project overrides, one TOML file per section, patched in place; keylists.cusf'
 sections (Job Keylists ›, a sub-menu: one section at a time, per level); and the project files.
 Lists are edited in a ListEditor pop-up, keylist sections and project files in a TextEditor pop-up."""
 import textwrap
@@ -19,7 +19,8 @@ from ..catalog  import MethodKey, ParseRouteTemplate, UnknownSelectors
 from ..defaults import DELETE, Defaults, tomlValue, writeToml
 from ..fileops  import PROGRAMS, RESERVED_ORCA_BLOCKS, TAG_DIRECTIVE, ExtractFromText, StageProblem, extensionGetter
 from ..jobs     import RenderStages
-from ..keylists import (BENCHMARK, CONFORMER_SEARCH, FILE_PREAMBLE, KEYLISTS_FILE, MIXED_BASIS, OPTIMIZATION,
+from ..keylists import (BENCHMARK, CONFORMER_SEARCH, FILE_PREAMBLE, KEYLISTS_FILE, OLD_KEYLISTS_FILE, MIXED_BASIS,
+                        OPTIMIZATION,
                         ORCA_BLOCKS, DefaultBody,
                         SECTIONS as KEYLIST_SECTIONS, FileProblems, Keylist, KeylistSource, LevelSections, Levels,
                         RemoveSection, ReplaceSection, RouteAt, SectionBody, WriteKeylists)
@@ -32,7 +33,7 @@ from .home      import TitleLine
 from .inspect   import PreviewRow, ProgramName, RenderedRow, RowText, Styled
 from .lists     import Cut, FitColumns, ListEditor, ProblemText, TextEditor
 
-# (label, kind): a TOML file, the divider, Job Keylists › (a sub-menu of jobRelatedKeylists' sections), or the project
+# (label, kind): a TOML file, the divider, Job Keylists › (a sub-menu of keylists.cusf's sections), or the project
 # files. The divider and Project Files sit below the TOML sections, as in Home's Actions list
 FILES_SECTION = "project files"
 KEYLISTS_MENU = "keylists"          # Job Keylists ›: swaps the list for KEYLIST_ENTRIES (as Home's Input Builders ›)
@@ -44,8 +45,8 @@ SECTIONS = [("SLURM", "slurm.toml"), ("Programs", "programs.toml"), ("Job Keylis
             ("Project Files", FILES_SECTION)]
 # One entry per section, so a new section is one keylists.SECTIONS entry
 KEYLIST_ENTRIES = [("‹ Config", KEYLISTS_BACK)] + [(name, KEYLIST + name) for name in KEYLIST_SECTIONS]
-# The project files edited here as whole files (jobRelatedKeylists is edited by section)
-FILE_KEYS = [name for name in PROJECT_FILES if name != KEYLISTS_FILE]
+# The project files edited here as whole files (keylists.cusf is edited by section)
+FILE_KEYS = [name for name in PROJECT_FILES if name not in (KEYLISTS_FILE, OLD_KEYLISTS_FILE)]
 # Set by first-time setup only (the TUI opens only once it has run), or power-user edits made by hand in the file
 HIDDEN = {"hpcType", "submissionList", "gaussianNonVariant", "orcaNonVariant", "crestNonVariant"}
 READ_ONLY = {"binDirectory", "projectMarker", "botToken", "chatID", "broadcastGroupChatID", "broadcastThreshold"}
@@ -71,7 +72,9 @@ ROUTE_GUIDE_ROWS = [
     ("[open: stable=opt]", "Every open shell multiplicity"),
     ("[triplet: keywords]", "One multiplicity by name: doublet, triplet … septet"),
     ("[oss, triplet: …]", "Several selectors share one group"),
-    ("{cpcm}", "Adds the cpcm block from ORCA Blocks (ORCA only)"),
+    ("[metal: freq=noraman]", "A molecule with a d- or f-block metal; merges into the route's own freq"),
+    ("{smd}", "The project's solvent by SMD (project.toml solvent); nothing in the gas phase"),
+    ("{example}", "Gaussian: that Mixed Basis set. ORCA: that ORCA Blocks block"),
 ]
 ROUTE_GUIDE_CLOSING = "Groups apply in the order written. U / RO (UKS, UHF…) is added for you."
 # The Example panel is 32 columns wide
@@ -122,15 +125,10 @@ every entry from the chosen one.
 
 """ + RouteGuide(),
     ORCA_BLOCKS: """\
+# @example-smd
 %cpcm
     smd true
     SMDsolvent "water"
-end
-
-# @toluene
-%cpcm
-    smd true
-    SMDsolvent "toluene"
 end
 
 %tddft
@@ -138,14 +136,18 @@ end
 end
 Tag: its %name, or the # @NAME
 (or # @tag NAME) line above it.
+{smd} writes the project's
+solvent this way by itself.
+A name starting with example
+marks the format's example.
 Use them in routes:
-{cpcm} {toluene} {tddft}""",
+{example-smd} {tddft}""",
     CONFORMER_SEARCH: """\
 # @gfn2
 --gfn2 --ewin 8 --rthr 0.5 ...
 
-# @gfn2-water
---gfn2 --alpb water --ewin 10
+# @gfn2-solvated
+--gfn2 --ewin 10 {alpb}
 
 # @large
 --gfn2//gfnff --ewin 8
@@ -159,8 +161,10 @@ above it (else its first flag).
 CompUtils writes --T, --chrg,
 --uhf and --cinp (the
 constraints) itself: they can't
-be written here.""",
+be written here. {alpb} is the
+project's solvent (--alpb thf).""",
     MIXED_BASIS: """\
+# @example
 C H N O 0
 6-31G(d)
 ****
@@ -174,7 +178,11 @@ SDD
 Basis groups end with ****.
 The first blank line starts the
 ECP section. Each job keeps only
-the elements it contains.""",
+the elements it contains.
+A # @name line starts a named
+set: a route picks it with
+{example}; one with no name
+is used by routes naming none.""",
     "spinstates.txt": """\
 Fe2S2_*     oss
 Cu2O2_bis   oss
@@ -269,7 +277,7 @@ class ConfigScreen(Screen):
         # The section list's entries: SECTIONS, or KEYLIST_ENTRIES while in Job Keylists ›
         self.entries = list(SECTIONS)
         self.section = next(index for index, (label, _) in enumerate(self.entries) if label == section)
-        # jobRelatedKeylists' levels, nearest first (the project can't change while the editor is open)
+        # keylists.cusf's levels, nearest first (the project can't change while the editor is open)
         self.levels = Levels()
         self.keys: list[str] = []                   # the table's rows
         self.pending: dict[tuple[int, str], object] = {}   # (column, key) -> unsaved value (DELETE: follow global)
@@ -383,13 +391,13 @@ class ConfigScreen(Screen):
             short += f" · {len(problems)} Bad"
         return short, Text("\n").join(lines)
 
-    # ─── Job Keylists (jobRelatedKeylists, one section at a time) ─────
+    # ─── Job Keylists (keylists.cusf, one section at a time) ─────
 
     def Level(self, label: str):
         return next(level for level in self.levels if level.label == label)
 
     def SavedSection(self, label: str, name: str) -> str | None:
-        """A level's section as saved: its jobRelatedKeylists section, else the old file or TOML key standing in for it
+        """A level's section as saved: its keylists.cusf section, else the old file or TOML key standing in for it
         (keylists.LevelSections); None when the level doesn't have the section."""
         level = self.Level(label)
         if level.path.is_file():
@@ -404,7 +412,7 @@ class ConfigScreen(Screen):
         return found[1].read_text(encoding="utf-8").strip("\r\n")
 
     def InFile(self, label: str, name: str) -> bool:
-        """Whether the level's own jobRelatedKeylists has the section (saved or pending), not an old file standing in."""
+        """Whether the level's own keylists.cusf has the section (saved or pending), not an old file standing in."""
         pending = self.pending.get((SECTION_TEXT, (label, name)))
         if pending is not None:
             return pending is not DELETE
@@ -412,7 +420,7 @@ class ConfigScreen(Screen):
         return path.is_file() and SectionBody(path.read_text(encoding="utf-8"), name) is not None
 
     def PendingTexts(self) -> dict[Path, str]:
-        """{level path: its jobRelatedKeylists text with the unsaved section edits applied}, for the levels with any.
+        """{level path: its keylists.cusf text with the unsaved section edits applied}, for the levels with any.
         It stands in for the files everywhere the editor checks (keylists' texts)."""
         texts = {}
         for (column, key), value in self.pending.items():
@@ -491,14 +499,24 @@ class ConfigScreen(Screen):
                 problems.append("⚠ No Routes: the Global (or Default) Suite Applies")
             short = counted
         elif name == MIXED_BASIS:
-            elements = [element for entry in value.basis for element in entry.elements]
-            ecp = [element for entry in value.ecp for element in entry.elements]
-            byCenter = sum(entry.byCenter for entry in value.basis + value.ecp)
-            lines.append(Text(f"Basis: {' '.join(elements) or 'None'}"))
-            lines.append(Text(f"ECP: {' '.join(ecp) or 'None'}"))
-            if byCenter:
-                lines.append(Styled(f"{byCenter} Group(s) by Center Number (Written As-Is)", "info"))
-            short = f"{len(elements)} Element{'s' if len(elements) != 1 else ''} · {len(ecp)} ECP"
+            # One block per set: the unnamed one (a route naming none) and each @name a route picks with {name}
+            counts = []
+            for setName, basisSet in value.items():
+                elements = [element for entry in basisSet.basis for element in entry.elements]
+                ecp = [element for entry in basisSet.ecp for element in entry.elements]
+                byCenter = sum(entry.byCenter for entry in basisSet.basis + basisSet.ecp)
+                if len(value) > 1 or setName:
+                    lines.append(Text(f"@{setName}" if setName else "Unnamed Set", style="bold"))
+                lines.append(Text(f"Basis: {' '.join(elements) or 'None'}"))
+                lines.append(Text(f"ECP: {' '.join(ecp) or 'None'}"))
+                if byCenter:
+                    lines.append(Styled(f"{byCenter} Group(s) by Center Number (Written As-Is)", "info"))
+                counts.append((elements, ecp))
+            if len(value) > 1:
+                short = f"{len(value)} Sets"
+            else:
+                elements, ecp = counts[0] if counts else ([], [])
+                short = f"{len(elements)} Element{'s' if len(elements) != 1 else ''} · {len(ecp)} ECP"
         elif name == CONFORMER_SEARCH:
             # Each search's level and solvation, and a flag CompUtils writes itself
             from ..crest import Level, OptionsProblem, Solvation
@@ -1022,7 +1040,7 @@ class ConfigScreen(Screen):
             if done and projectUpdates:
                 done = SaveProjectConfig(self.root, projectUpdates)
             (written if done else failed).append(PROJECT_CONFIG)
-        # Project files are written exactly as edited; jobRelatedKeylists keeps every part it isn't given
+        # Project files are written exactly as edited; keylists.cusf keeps every part it isn't given
         for name, text in self.FileTexts().items():
             path = self.FilePath(name)
             (written if writeToml(path.parent, path.name, text) else failed).append(name)

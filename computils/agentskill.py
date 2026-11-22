@@ -115,8 +115,8 @@ COMMANDS = [
                  "written[], submitted[].",
                  ("crest-method", "charge", "mult"), ("builder-crest",)),
     AgentCommand("sp", ("singlePoint",), Action.SINGLE_POINT,
-                 "Write and submit each output's single point (Benchmark Methods' first entry; -ovr N picks another, "
-                 "--route gives a route of your own; --cpus N and --memory GB set its resources).",
+                 "Write and submit each output's single point (Single Point Methods' first entry; -ovr N picks "
+                 "another, --route gives a route of your own; --cpus N and --memory GB set its resources).",
                  "-sp 8a.out --dry-run --json", "written[], submitted[], skipped[] with reasons.",
                  tui=(f"action-{Action.SINGLE_POINT.value}",)),
     AgentCommand("bench", ("bench",), Action.BENCHMARK,
@@ -552,15 +552,21 @@ One JSON object on stdout, at the end of every run. Empty fields are left out.
 - `error`: a usage error's message, or a crash's last traceback line.
 """
 
-ROUTES_TOPIC = """# Route Templates (Optimization and Benchmark Methods)
+ROUTES_TOPIC = """# Route Templates (Optimization and Single Point Methods)
 
 People write these in the TUI (Config > Job Keylists); an agent passes one to `-opt --route` only when the human asks.
 
 - A route is a program's route line: Gaussian `wB97XD def2SVP opt freq`, ORCA `B3LYP def2-SVP Opt Freq`. The method
   (its first known token) picks the program.
 - `[selectors: keywords]` add keywords for some molecules only: `css`, `oss` (broken-symmetry singlet), `open`
-  (OSS or multiplicity > 1), `doublet`..`septet`, `mN`. E.g. `[oss: guess=mix stable=opt]`.
-- `{tag}` adds an ORCA Blocks block by its tag.
+  (OSS or multiplicity > 1), `doublet`..`septet`, `mN`, `metal` (a d- or f-block metal). E.g.
+  `[oss: guess=mix stable=opt]`, `[metal: freq=noraman]`. A keyword the route already has gets the group's options
+  merged in (`freq` becomes `freq=noraman`).
+- `{tag}`: in an ORCA route, an ORCA Blocks block by its tag; in a Gaussian route, a Mixed Basis set by its `# @name`
+  (a Gen/GenECP route naming none uses the unnamed set). Each job keeps only its elements' basis entries, so a GenECP
+  route without a heavy element is written as Gen.
+- `{smd}`: the project's solvent by SMD (`project.toml` `solvent`, the human's): Gaussian `SCRF=(SMD,Solvent=...)`,
+  ORCA `CPCM` with an SMD block; nothing in the gas phase. CREST options take `{alpb}` (`--alpb ...`).
 - Stages: `route -> route` (later stages read the earlier one's geometry and orbitals through the checkpoint).
   `%newchk` starts a new checkpoint.
 - The U/RO reference (open shells) is added by CompUtils: never write it yourself.

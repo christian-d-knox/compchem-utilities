@@ -169,8 +169,8 @@ def SlurmProblems(wallTime: str | None, partition: str | None, cluster: str | No
 
 def SinglePointChoices() -> dict[str, tuple[str, RouteTemplate, str, str]]:
     """The scheduled SP's methods, keyed and shaped as MethodChoices' are ({key: (label, template, input extension,
-    route as written)}): Benchmark Methods in force, named as Optimization Methods are (the method, a repeat numbered;
-    fileops.NamedRoutes), entry 0 first (cu -sp's default)."""
+    route as written)}): Single Point Methods in force, named as Optimization Methods are (the method, a repeat
+    numbered; fileops.NamedRoutes), entry 0 first (cu -sp's default)."""
     entries = NamedRoutes([("", [(0, route)]) for route in Catalog.benchmarkLines])
     choices = {}
     for index, ((label, _), route, template) in enumerate(zip(entries, Catalog.benchmarkLines, Catalog.templates)):
@@ -182,7 +182,7 @@ def SinglePointChoices() -> dict[str, tuple[str, RouteTemplate, str, str]]:
 class SinglePointStep:
     """The Neva-Touch Scheduler's next job after an optimization: a single point of its last geometry, written when it
     ends as `cu -sp` writes one (its charge, multiplicity and spin read from the output then). name: the method's
-    label; route: its entry as written (a Benchmark Methods entry, or a Custom route). memory None: as the method
+    label; route: its entry as written (a Single Point Methods entry, or a Custom route). memory None: as the method
     needs. wallTime/partition/cluster None: the config's. Carried to the hook as a nevatouch.ChainStep."""
     name:       str
     route:      str

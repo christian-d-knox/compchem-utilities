@@ -84,7 +84,7 @@ class JobScreen(SchedulerSteps, Screen):
         self.ready = False
         self.step = MAIN_STEP
         self.prefilled: dict[str, str] = {"sp-partition": Defaults.partition, "sp-cluster": Defaults.cluster}
-        # Single Point and Benchmark: Benchmark Methods, named as the Opt builder names them (keys method-N, N its
+        # Single Point and Benchmark: Single Point Methods, named as the Opt builder names them (keys method-N, N its
         # entry); a greyed one says why it can't be written
         self.methods = {key.replace("sp-method", "method", 1): value for key, value in SinglePointChoices().items()}
         if action == Action.RERUN:
@@ -101,7 +101,7 @@ class JobScreen(SchedulerSteps, Screen):
     # ─── Settings ─────────────────────────────────────────────────────
 
     def JobSettings(self) -> list[Setting]:
-        none = "No Benchmark Methods: Add Them in Config › Job Keylists" if not self.methods else ""
+        none = "No Single Point Methods: Add Them in Config › Job Keylists" if not self.methods else ""
         match self.action:
             case Action.SINGLE_POINT:
                 methods = MethodRows(self.methods, self.problems, "method", "custom", none)
@@ -206,7 +206,7 @@ class JobScreen(SchedulerSteps, Screen):
     # ─── The jobs ─────────────────────────────────────────────────────
 
     def MethodIndex(self) -> int | None:
-        """The chosen Benchmark Methods entry (its index), None for Custom."""
+        """The chosen Single Point Methods entry (its index), None for Custom."""
         chosen = self.settings.Chosen("method")
         return list(self.methods).index(chosen) if chosen in self.methods else None
 
@@ -258,7 +258,7 @@ class JobScreen(SchedulerSteps, Screen):
                 return PlanSinglePoints(molecules, template, resources, problem), [problem] if problem else []
             case Action.BENCHMARK:
                 if not Catalog.canBench:
-                    return [], ["Benchmarking Needs at Least 2 Benchmark Methods (Config › Job Keylists)"]
+                    return [], ["Benchmarking Needs at Least 2 Single Point Methods (Config › Job Keylists)"]
                 index = self.MethodIndex()
                 return (PlanBenchmark(molecules, index, resources), []) if index is not None else ([], [])
             case Action.RERUN:
