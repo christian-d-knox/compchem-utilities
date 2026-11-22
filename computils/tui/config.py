@@ -28,8 +28,7 @@ from ..molecule import Molecule
 from ..project  import (PROJECT_CONFIG, PROJECT_FILES, FindProjectRoot, ProjectFilePath, ReloadConfig,
                         SaveProjectConfig)
 from ..spin     import ParseSpinOverrides
-from .common    import NAV_BINDINGS, EditableTable, FrameRule, KeyHint, NavFooter, Notice, Popup, SwapItems
-from .home      import TitleLine
+from .common    import NAV_BINDINGS, EditableTable, FrameRule, KeyHint, NavFooter, Notice, Popup, SwapItems, TitleLine
 from .inspect   import PreviewRow, ProgramName, RenderedRow, RowText, Styled
 from .lists     import Cut, FitColumns, ListEditor, ProblemText, TextEditor
 

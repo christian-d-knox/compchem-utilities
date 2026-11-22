@@ -7,8 +7,8 @@ from pathlib import Path
 
 from .catalog  import Catalog, RouteTemplate
 from .defaults import Defaults
-from .fileops  import (ExtractFromText, ExtractResources, HasContent, InputRoutes, JobChecks,
-                       MapFile, MoleculeElements, ReRunTemplate, Retarget)
+from .elements import MoleculeElements
+from .fileops  import ExtractFromText, ExtractResources, HasContent, InputRoutes, JobChecks, MapFile, ReRunTemplate, Retarget
 from .jobs     import JobInputText, StagesProblem
 from .molecule import Molecule
 from .workflows import BenchmarkName, ReRunName, SinglePointName

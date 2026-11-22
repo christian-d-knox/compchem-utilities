@@ -6,11 +6,12 @@ from pathlib import Path
 import regex
 
 from .defaults import Defaults
-from .fileops  import (ElectronProblem, MapFile, FindInMap, HasContent, ExtractFrom, ExtractXyz, ExtractTermination, ExtractResources,
+from .elements import ElectronProblem, Formula, Symbols
+from .fileops  import (MapFile, FindInMap, HasContent, ExtractFrom, ExtractXyz, ExtractTermination, ExtractResources,
                        ExtractEnergy, ExtractThermalCorrections, ExtractFrequencies, ExtractConvergence,
                        ExtractStability, ExtractOutOfSteps, ExtractSpinContamination, ExtractThermochemistry,
-                       ExtractSolvation, ExtractRouteEcho, InputRoutes, JobChecks, SplitRoute, ReadMolecule, Formula,
-                       StageSpans, ExtractParameters, ExtractModRedInput, ExtractTSEigenvector, Symbols, PROGRAMS,
+                       ExtractSolvation, ExtractRouteEcho, InputRoutes, JobChecks, SplitRoute, ReadMolecule,
+                       StageSpans, ExtractParameters, ExtractModRedInput, ExtractTSEigenvector, PROGRAMS,
                        TERMINATION_TAIL, CREST_PROGRAM, ExtractProgram)
 from .molecule import Molecule
 from .spin     import ClassifySpin

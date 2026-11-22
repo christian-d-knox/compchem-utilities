@@ -127,3 +127,14 @@ def RendersAsText(text: str, extension: str, base: str = "", note: str = "") -> 
     if note:
         rows.append(Styled(note, "warning"))
     return Text("\n").join(rows)
+
+
+def SyncRouteRow(settings, rowKey: str, methodKey: str, customKey: str, customRoute: str, choices: dict) -> None:
+    """Keep a Route row in sync with the chosen method (or customRoute when Custom is chosen), unless focused."""
+    row = settings.Row(rowKey)
+    if row.target.has_focus:
+        return
+    chosen = settings.Chosen(methodKey)
+    route = (customRoute or row.value) if chosen == customKey else choices[chosen][3]
+    if row.value != route:
+        row.SetValue(route)

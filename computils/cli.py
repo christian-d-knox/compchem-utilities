@@ -302,6 +302,9 @@ def BuildParser() -> argparse.ArgumentParser:
     agentGroup.add_argument('--no-local', action='store_true',
                             help="With -agent: the human chose not to install CompUtils on their own computer "
                                  "(recorded in the skill, never offered again).")
+    agentGroup.add_argument('--write-skill', default=None, metavar="PATH",
+                            help="With -agent: write SKILL.md directly to PATH in UTF-8 without BOM (avoids shell "
+                                 "redirection encoding bugs such as PowerShell UTF-16).")
 
     return parser
 
@@ -378,11 +381,17 @@ def ParseCLI(argv: list[str]) -> Intent:
     if args.spc is not None and draft.action not in (Action.GOODVIBES, Action.SI_SCRAPER):
         raise agent.UsageError("--spc goes with -gv or -si.")
     localFlags = (args.local_cu is not None, args.local_python is not None, args.no_local)
-    if (args.ssh_host is not None or any(localFlags)) and draft.action != Action.AGENT:
-        raise agent.UsageError("--ssh-host, --local-cu, --local-python and --no-local go with -agent.")
+    if (args.ssh_host is not None or args.write_skill is not None or any(localFlags)) and draft.action != Action.AGENT:
+        raise agent.UsageError("--ssh-host, --write-skill, --local-cu, --local-python and --no-local go with -agent.")
     if draft.action == Action.AGENT:
         draft.agentTopic, draft.agentSshHost = args.agent.strip().lower(), args.ssh_host or ""
         draft.agentLocal = _LocalInstall(args)
+        if args.write_skill is not None:
+            if draft.agentTopic not in ("", "skill"):
+                raise agent.UsageError("--write-skill writes SKILL.md only (omit TOPIC).")
+            if not args.write_skill.strip():
+                raise agent.UsageError("--write-skill requires a non-empty file path.")
+            draft.agentWriteSkill = args.write_skill.strip()
     if draft.action == Action.SI_SCRAPER:
         draft.siOptLabel, draft.siSpLabel, draft.siOutput = args.opt_label, args.sp_label, args.output
         draft.siPhase = args.phase if args.phase is not None else draft.siPhase

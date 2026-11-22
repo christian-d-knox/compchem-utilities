@@ -17,8 +17,7 @@ from ..scrape  import (ORDER_FILE, PROGRAM_NAMES, SI_FILE, BlockedProblems, Find
                        GoodVibesNeeded, GoodVibesRun, GoodVibesTable, MissingFromTable, NaturalKey, ReadOrder,
                        ReadSpecies, SIText, SPThermo, Species, StartsIncluded, TableUsed, WriteOrder)
 from .common   import (NAME, NAV_BINDINGS, TEXT, Column, FrameRule, KeyHint, MoveRow, NavFooter, Notice, Popup,
-                       ReorderableTable, Setting, SettingsList, ValueInput)
-from .home     import TitleLine
+                       ReorderableTable, Setting, SettingsList, TitleLine, ValueInput)
 from .inspect  import Styled
 
 LEFT_WIDTH = 30          # the Settings column, its borders included (the frame's junction sits on its right edge)

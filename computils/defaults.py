@@ -341,9 +341,6 @@ class Defaults:
         "CPU", "memoryRatio", "highMemoryRatio", "memoryBuffer", "wallTime", "cluster", "partition",
         "openShellReference", "ossSpinThreshold", "nboKeylist", "solvent",
     ]
-    # Keys that moved out of the TOML files (the benchmark suite is keylists.cusf's Single Point Methods, keylists.py).
-    # Still read from there until `cu -refresh` merges and drops them, so they are skipped here without a warning
-    _MOVED_KEYS: set[str] = {"benchmarkMethods"}
     # Global values displaced by project overrides, and the project values that replaced them. Used so project values
     # never leak into the global TOML files when a wizard re-saves a section
     _globalValues: dict[str, Any] = {}
@@ -679,8 +676,6 @@ class Defaults:
         """Overlay a project.toml onto the loaded globals. Returns the keys whose value differs from the global one."""
         applied = []
         for key, rawValue in data.items():
-            if key in cls._MOVED_KEYS:
-                continue
             if key not in cls._PROJECT_KEYS:
                 console.print(f"[warning]\\[config] Key '{key}' in {source} is not project-overridable. Ignored.[/warning]")
                 continue

@@ -313,9 +313,10 @@ class SIIntent(Intent):
 @dataclass
 class AgentIntent(Intent):
     """`cu -agent [TOPIC]` — the agent skill (SKILL.md), or one topic of it (agentskill.py)."""
-    topic:   str = ""
-    sshHost: str = ""
-    local:   object = None              # agentskill.LocalInstall: the agent's own computer (None: undecided)
+    topic:      str = ""
+    sshHost:    str = ""
+    local:      object = None           # agentskill.LocalInstall: the agent's own computer (None: undecided)
+    writeSkill: str = ""
 
 
 @dataclass
@@ -537,9 +538,10 @@ class IntentDraft:
     scrapeCase:   bool          = False
 
     # AGENT
-    agentTopic:   str = ""
-    agentSshHost: str = ""
-    agentLocal: object = None
+    agentTopic:      str = ""
+    agentSshHost:    str = ""
+    agentLocal:      object = None
+    agentWriteSkill: str = ""
 
     # SI_SCRAPER
     siOptLabel: Optional[str]       = None
@@ -829,7 +831,8 @@ class IntentDraft:
                                    wait=None if self.wait is None else list(self.wait),
                                    waitMode=self.waitMode or WAIT_CHAIN)
             case Action.AGENT:
-                return AgentIntent(topic=self.agentTopic, sshHost=self.agentSshHost, local=self.agentLocal)
+                return AgentIntent(topic=self.agentTopic, sshHost=self.agentSshHost, local=self.agentLocal,
+                                   writeSkill=self.agentWriteSkill)
             case Action.SI_SCRAPER:
                 return SIIntent(optLabel=self.siOptLabel, spLabel=self.siSpLabel, phase=self.siPhase,
                                 suffix=self.singlePointPattern, free=self.siFree, output=self.siOutput,

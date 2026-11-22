@@ -12,7 +12,8 @@ from textual.worker import get_current_worker
 
 from ..console  import console
 from ..defaults import Defaults
-from ..fileops  import Formula, fileCreation
+from ..elements import Formula
+from ..fileops  import fileCreation
 from ..intent   import XyzIntent
 from ..smiles   import RDKitBuild, RDKitConformers
 from .common    import Column, FrameRule, KeyHint, Setting, SettingsList, ValueInput

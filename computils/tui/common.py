@@ -2,6 +2,7 @@
 import io, threading
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 
 import regex
 from rich.text import Text
@@ -11,11 +12,13 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import Checkbox, DataTable, Footer, Input, ListView, OptionList, Static
+from textual.widgets import Checkbox, DataTable, Footer, Input, ListView, OptionList, Static, TextArea
 from textual.widgets._footer import FooterKey
 from textual.widgets.option_list import Option
 
+from ..actions import Action
 from ..console import console
+from ..project import FindProjectRoot
 
 # Every screen puts these at the end of its BINDINGS (so Quit is the footer's last hint) and yields NavFooter, so the footer always shows how to move around
 _PANE = Binding.Group("Pane", compact=False)
@@ -25,6 +28,35 @@ NAV_BINDINGS = [
     # Textual's own ctrl+q is a hidden priority binding, which would replace a non-priority one here in the footer
     Binding("ctrl+q", "app.quit", "Quit", key_display="^q", priority=True),
 ]
+ACTION_LABELS = {
+    Action.RUN: "Run as Written", Action.SINGLE_POINT: "Single Point", Action.BENCHMARK: "Benchmark",
+    Action.RERUN: "Re-Run", Action.CUBE: "Cube Files", Action.FORM_CHECK: "FormChk", Action.GOODVIBES: "GoodVibes",
+    Action.XYZ: "Write XYZ",
+}
+
+
+def ShortPath(path: Path) -> str:
+    """The CWD relative to the project root (or home), so the title line stays readable."""
+    root = FindProjectRoot()
+    for base, prefix in ((root, root.name if root else ""), (Path.home(), "~")):
+        if base is not None and path.is_relative_to(base):
+            relative = path.relative_to(base)
+            return prefix if str(relative) == "." else f"{prefix}/{relative.as_posix()}"
+    return str(path)
+
+
+def TitleLine(label: str, *extra) -> Text:
+    line = Text.assemble((f" {label}", "bold"), f"   {ShortPath(Path.cwd())}")
+    for part in extra:
+        line.append("   ·   ")
+        line.append_text(part)
+    line.no_wrap, line.overflow = True, "ellipsis"
+    return line
+
+
+class LeaveText(TextArea):
+    """A text box in a builder: esc leaves it for the settings (⏎ types a newline here, as in every text box)."""
+    BINDINGS = [Binding("escape", "screen.leave_text", "Done")]
 
 
 class NavFooter(Footer):
@@ -482,14 +514,6 @@ class SettingsList(Vertical):
         """Whether the row takes part: available, not off, and not under a row that doesn't."""
         return (row.available and row.on is not False
                 and (not row.setting.under or self.Applies(self.Row(row.setting.under))))
-
-    def SetShown(self, key: str, shown: bool) -> None:
-        """Show or hide a row (e.g. a stage's ModRed row, only while the chosen method has that stage). ↑↓ skip hidden
-        rows; the current row moves off one that is hidden."""
-        row = self.Row(key)
-        row.display = shown
-        if not shown and row is self.current:
-            self.action_move(-1 if self.index else 1)
 
     def SetAvailable(self, key: str, available: bool) -> None:
         """Grey a row out (or bring it back): it can't be turned on or chosen, and doesn't apply. A choice keeps its

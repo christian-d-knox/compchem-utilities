@@ -176,9 +176,7 @@ Mixed Basis (`Gen`/`GenECP`, one set or several named ones) and ORCA Blocks. Edi
 Keylists, one section at a time; a section a project doesn't have follows the global one. A later stage of a method
 is a line starting with `>`. A lab profile can carry the lab's standard sections (`[keylists]`), written at the
 global level when it's applied. A project's solvent is `solvent = "THF"` in its `project.toml`. A file still named
-`jobRelatedKeylists` (and its `Benchmark Methods` header) is read as before until `cu -refresh` renames it; older
-`mixedbasis.txt`, `orcablocks.txt` and `optmethods.txt` files, and a `benchmarkMethods` list in the TOML files, are
-likewise read until `cu -refresh` merges them in.
+`jobRelatedKeylists` (and its `Benchmark Methods` header) is read as before until `cu -refresh` renames it.
 
 **Projects.** `cu -init` marks a folder as a project root (default: `.computils/` folder). Its `project.toml` overrides
 the resources, cluster and spin settings for every job inside it, and it can hold its own `keylists.cusf` and a

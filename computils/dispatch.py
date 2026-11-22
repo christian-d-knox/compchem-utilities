@@ -1103,11 +1103,10 @@ def _DispatchAttributions() -> None:
 
 
 def _DispatchRefresh(intent: RefreshIntent) -> None:
-    # The old benchmarkMethods key goes into keylists.cusf first: refresh drops the key, so it rewrites nothing
-    # while the key's list couldn't be merged
-    from .keylists import GlobalLevel, MergeLegacy
-    if not MergeLegacy(GlobalLevel()):
-        agent.Fail("Refresh stopped: nothing was rewritten, so programs.toml keeps its benchmarkMethods.")
+    # Rename any older jobRelatedKeylists to keylists.cusf before refreshing TOML configs
+    from .keylists import GlobalLevel, RenameOld
+    if not RenameOld(GlobalLevel()):
+        agent.Fail("Refresh stopped cleanly before rewriting files.")
         return
     Defaults.RefreshFiles()
     if intent.project:

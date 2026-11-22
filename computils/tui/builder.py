@@ -15,9 +15,8 @@ from ..analysis import (ALLOW_ALL, CHECK_CATEGORIES, DEFAULT_CONCENTRATION, DEFA
                          DEFAULT_TEMPERATURE, CheckArguments, GoodVibesArguments, SelectionSuffix, SpcPartners)
 from ..defaults import Defaults
 from ..intent   import IntentDraft
-from .common    import (NAME, NAV_BINDINGS, TEXT, Column, FrameRule, KeyHint, NavFooter, Notice, OptionRow, Setting,
-                        SettingsList)
-from .home      import ACTION_LABELS, TitleLine
+from .common    import (ACTION_LABELS, NAME, NAV_BINDINGS, TEXT, Column, FrameRule, KeyHint, NavFooter, Notice,
+                        OptionRow, Setting, SettingsList, TitleLine)
 from .inspect   import Styled
 
 RESOURCE_KEYS = [("CPU", "CPU"), ("memoryRatio", "Memory Ratio"), ("wallTime", "WallTime"), ("partition", "Partition")]

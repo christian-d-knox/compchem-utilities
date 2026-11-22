@@ -7,8 +7,7 @@ from textual.screen import Screen
 from textual.widgets import Static
 
 from ..attributions import AttributionText
-from .common import NAV_BINDINGS, NavFooter
-from .home import TitleLine
+from .common import NAV_BINDINGS, NavFooter, TitleLine
 
 
 class AttributionsScreen(Screen):

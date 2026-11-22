@@ -74,18 +74,15 @@ def EnsureProjectConfig(root: Path) -> None:
 def RefreshProjectConfig() -> None:
     """`cu -refresh project`: rewrite the nearest project.toml in the current layout, keeping the overrides that applied
     (LoadProjectConfig). Keys a project can't override, stale keys and invalid values are dropped (they follow global).
-    A missing or unparseable file goes through EnsureProjectConfig, since there is nothing to keep. The project's old
-    mixedbasis.txt / orcablocks.txt / optmethods.txt and its benchmarkMethods key are merged into its keylists.cusf
-    first (keylists.MergeLegacy), so dropping the key loses nothing: project.toml isn't rewritten while any of them
-    couldn't be merged."""
+    A missing or unparseable file goes through EnsureProjectConfig, since there is nothing to keep. Any older
+    jobRelatedKeylists file is renamed to keylists.cusf first (keylists.RenameOld)."""
     root = FindProjectRoot()
     if root is None:
         console.print("[info]Not inside a project, so there is no project.toml to refresh (`cu -init` creates one).[/info]")
         return
-    from .keylists import Levels, MergeLegacy
-    if not MergeLegacy(next(level for level in Levels() if level.label == "Project")):
-        console.print(f"[error]{ProjectFilePath(root, PROJECT_CONFIG)} was not refreshed, so it keeps its "
-                      f"benchmarkMethods.[/error]")
+    from .keylists import Levels, RenameOld
+    if not RenameOld(next(level for level in Levels() if level.label == "Project")):
+        console.print(f"[error]{ProjectFilePath(root, PROJECT_CONFIG)} was not refreshed cleanly.[/error]")
         return
     configPath = ProjectFilePath(root, PROJECT_CONFIG)
     try:

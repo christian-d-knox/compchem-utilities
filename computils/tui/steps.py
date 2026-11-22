@@ -8,7 +8,7 @@ from ..defaults import Defaults
 from ..optimize import CustomMethod, SinglePointStep
 from .common    import TEXT, FrameRule, KeyHint, Setting, SettingsList
 from .inspect   import Styled
-from .rows      import FillValue, ListValue, MethodRows, OutputRows, ResourceRows, RouteMeaning
+from .rows      import FillValue, ListValue, MethodRows, OutputRows, ResourceRows, RouteMeaning, SyncRouteRow
 
 # The steps (step tabs on the top rule): the job's own, then the Neva-Touch Scheduler's next job
 OPT_STEP, RERUN_STEP, SP_STEP = "opt", "rerun", "sp"
@@ -143,13 +143,7 @@ class SchedulerSteps:
 
     def ShowSinglePointRoute(self) -> None:
         """The next job's Route row, as the main job's: the chosen method's route, or Custom's as last typed."""
-        row = self.spSettings.Row("sp-route")
-        if row.target.has_focus:
-            return
-        chosen = self.spSettings.Chosen("sp-method")
-        route = (self.spCustomRoute or row.value) if chosen == "sp-custom" else self.spChoices[chosen][3]
-        if row.value != route:
-            row.SetValue(route)
+        SyncRouteRow(self.spSettings, "sp-route", "sp-method", "sp-custom", self.spCustomRoute, self.spChoices)
 
     # ─── The step tabs ────────────────────────────────────────────────
 

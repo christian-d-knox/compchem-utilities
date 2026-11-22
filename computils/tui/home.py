@@ -16,14 +16,9 @@ from textual.worker import get_current_worker
 from ..actions  import Action, FILE_ACTIONS
 from ..intent   import FormCheckIntent, XyzIntent
 from ..project  import ChangeDirectory, FindProjectRoot
-from .common    import NAV_BINDINGS, KeyHint, NavFooter, Notice, SwapItems
+from .common    import ACTION_LABELS, NAV_BINDINGS, KeyHint, NavFooter, Notice, SwapItems, TitleLine
 from .inspect   import ActionExtensions, FileDetails, FileStatus, Styled
 
-ACTION_LABELS = {
-    Action.RUN: "Run as Written", Action.SINGLE_POINT: "Single Point", Action.BENCHMARK: "Benchmark",
-    Action.RERUN: "Re-Run", Action.CUBE: "Cube Files", Action.FORM_CHECK: "FormChk", Action.GOODVIBES: "GoodVibes",
-    Action.XYZ: "Write XYZ",
-}
 # Screens below the divider, opened with ␣, ⏎ or a click (HomeScreen.OpenScreenItem): item id -> label
 SCREEN_ITEMS = {"screen-scrapers": "Scrapers ›", "screen-stalker": "Job Stalker", "screen-config": "Config",
                 "screen-files": "Project Files", "screen-update": "Update CompUtils",
@@ -61,25 +56,6 @@ HELP = {
     "glob":    "Type a Pattern to Select Matching Files · enter / esc Return to the File List",
     "files":   "space Select · a All · n None · / Glob · enter Continue to the Builder · s on Write XYZ: From a SMILES (RDKit Conformers, No File Needed)",
 }
-
-
-def ShortPath(path: Path) -> str:
-    """The CWD relative to the project root (or home), so the title line stays readable."""
-    root = FindProjectRoot()
-    for base, prefix in ((root, root.name if root else ""), (Path.home(), "~")):
-        if base is not None and path.is_relative_to(base):
-            relative = path.relative_to(base)
-            return prefix if str(relative) == "." else f"{prefix}/{relative.as_posix()}"
-    return str(path)
-
-
-def TitleLine(label: str, *extra) -> Text:
-    line = Text.assemble((f" {label}", "bold"), f"   {ShortPath(Path.cwd())}")
-    for part in extra:
-        line.append("   ·   ")
-        line.append_text(part)
-    line.no_wrap, line.overflow = True, "ellipsis"
-    return line
 
 
 class ActionList(ListView):
@@ -467,10 +443,10 @@ class HomeScreen(Screen):
             case "submenu-back":
                 self.call_later(self.ShowSubmenu, None)
             case "builder-opt":
-                from .inputs import CoordinatesScreen
+                from .coordinates import CoordinatesScreen
                 self.app.push_screen(CoordinatesScreen())
             case "builder-crest":
-                from .inputs import CoordinatesScreen
+                from .coordinates import CoordinatesScreen
                 self.app.push_screen(CoordinatesScreen("Conformer Search"))
             case "scraper-si":
                 from .scrapers import SIScraperScreen

@@ -7,7 +7,8 @@ from pathlib import Path
 from .console  import console
 from rich.markup import escape
 from .defaults import Defaults
-from .catalog  import Catalog, MethodKey, SplitReference, RouteTemplate, MatchTemplate, STAGE_JOIN
+from .catalog  import Catalog, MethodKey, SplitReference, RouteTemplate, MatchTemplate
+from .elements import ATOMIC_SYMBOLS, ELEMENT_SET
 from .molecule import Molecule
 from .         import agent
 
@@ -770,11 +771,6 @@ def StageSpans(data, program: str) -> list[tuple[int, int, str]]:
         spans.append((start, len(data), ""))
     return spans
 
-# Stability analysis section headers, Gaussian then ORCA. Case-sensitive: ORCA also prints 'stability analysis' (its
-# contributor list) and 'SCF Stability Analysis' (its timings)
-STABILITY_HEADER = r"Stability analysis|WAVEFUNCTION STABILITY ANALYSIS"
-ORCA_STABLE_VERDICT = r"The stability analysis shows that the wavefunction is stable"
-STABLE_VERDICT = r"The wavefunction is already stable\.|" + ORCA_STABLE_VERDICT
 _STABILITY_HEADERS = {
     "gauss": (b"Stability analysis",),
     "orca":  (b"WAVEFUNCTION STABILITY ANALYSIS",),
@@ -819,9 +815,6 @@ def ExtractConvergence(data, start: int = 0, end: int | None = None) -> tuple[in
             break
     return (met, total) if total else None
 
-# An optimization that stopped at its step limit, Gaussian then ORCA. Gaussian ends it with an error termination; ORCA
-# can still end normally, so this is read whatever the termination line says
-OUT_OF_STEPS = r"Number of steps exceeded|the maximum number of optimization cycles"
 _OUT_OF_STEPS_NEEDLES = {
     "gauss": (b"Number of steps exceeded",),
     "orca":  (b"the maximum number of optimization cycles",),
@@ -1143,7 +1136,7 @@ def OrcaBlockName(blockText: str) -> str:
     """'%cpcm\\n  smd true\\nend\\n' -> 'cpcm'."""
     return regex.match(r"\s*%(\w*)", blockText).group(1).lower()
 
-def _SplitOrcaBlocks(lines: list[str]) -> list[tuple[str, str]]:
+def SplitOrcaBlocks(lines: list[str]) -> list[tuple[str, str]]:
     """Split lines into (directive tag, block text). A block starts at a column-0 '%' line and runs until the next one,
     a '# @tag NAME' directive (which tags the block after it), or the end. Trailing blank/comment lines are trimmed.
     No 'end' counting, so nested ends (e.g. %geom constraints) are safe. Lines outside a block are dropped."""
@@ -1162,84 +1155,6 @@ def _SplitOrcaBlocks(lines: list[str]) -> list[tuple[str, str]]:
         if current is not None:
             current[1].append(line)
     return blocks
-
-def ExtractOrcaBlocks(data) -> dict[str, str]:
-    """Extract tagged %blocks from an ORCA Blocks section (keylists.cusf) mmap data stream (split by
-    _SplitOrcaBlocks). A block's tag is the preceding '# @NAME' directive if present, else the block name. Tags are
-    lowercased."""
-    blocks: dict[str, str] = {}
-    data.seek(0)
-    lines = [rawLine.decode().replace("\r\n", "\n") for rawLine in iter(data.readline, b"")]
-    for directiveTag, blockText in _SplitOrcaBlocks(lines):
-        blockName = OrcaBlockName(blockText)
-        if blockName in RESERVED_ORCA_BLOCKS:
-            console.print(f"[warning]ORCA Blocks: %{blockName} is written by CompUtils. Ignoring this block.[/warning]")
-            continue
-        tag = directiveTag or blockName
-        if tag in blocks:
-            console.print(f"[error]Duplicate tag '{tag}' in ORCA Blocks. Keeping the first definition.[/error]")
-            continue
-        blocks[tag] = blockText
-    return blocks
-
-def RouteEntries(data) -> list[tuple[str, list[tuple[int, str]]]]:
-    """(directive name or '', [(line index, stage route), ...]) for each route in a methods section (keylists.cusf'
-    Optimization or Single Point Methods), in order. A route is a line that is neither blank nor a # comment; a line
-    starting with '>' is a later stage of the route above it ('>' with no route above is skipped). '# @NAME' names the
-    route after it (lowercased). Line indices count from 0, so the TUI's editor can tell which stage its cursor is on."""
-    entries: list[tuple[str, list[tuple[int, str]]]] = []
-    pendingTag = ""
-    data.seek(0)
-    for index, rawLine in enumerate(iter(data.readline, b"")):
-        line = rawLine.decode().strip()
-        tagMatch = _TAG_DIRECTIVE_RE.match(line)
-        if tagMatch:
-            pendingTag = tagMatch.group(1).lower()
-            continue
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith(">"):
-            stage = line[1:].strip()
-            if entries and stage:
-                entries[-1][1].append((index, stage))
-            continue
-        entries.append((pendingTag, [(index, line)]))
-        pendingTag = ""
-    return entries
-
-def JoinStages(stages: list[tuple[int, str]]) -> str:
-    """A route's stages as one route card: 'route -> route' (STAGE_JOIN)."""
-    return STAGE_JOIN.join(route for _, route in stages)
-
-def NamedRoutes(entries: list[tuple[str, list[tuple[int, str]]]]) -> list[tuple[str, list[tuple[int, str]]]]:
-    """RouteEntries named as the Optimization Methods are: the '# @NAME' directive, else the method (the first token
-    without Gaussian's /basis), both lowercased. No route is dropped: a repeated name is numbered (ts, ts-2, ...), as
-    two unnamed routes of one method are."""
-    named, taken = [], set()
-    for tag, stages in entries:
-        # A CREST option line's first flag names it without its dashes (--gfn2: gfn2)
-        tag = tag or stages[0][1].split()[0].split("/")[0].lstrip("-").lower()
-        name, number = tag, 2
-        while name in taken:
-            name, number = f"{tag}-{number}", number + 1
-        taken.add(name)
-        named.append((name, stages))
-    return named
-
-def ExtractOptMethods(data) -> dict[str, str]:
-    """Named routes from an Optimization Methods section (NamedRoutes): name -> route card (stages joined with
-    STAGE_JOIN), in order."""
-    return {name: JoinStages(stages) for name, stages in NamedRoutes(RouteEntries(data))}
-
-def ExtractCrestMethods(data) -> dict[str, str]:
-    """Named option lines from a Conformer Search Methods section (NamedRoutes): name -> CREST's options, one line each
-    ('>' lines mean nothing to CREST, so only an entry's first line counts)."""
-    return {name: stages[0][1] for name, stages in NamedRoutes(RouteEntries(data))}
-
-def ExtractBenchmarkMethods(data) -> list[str]:
-    """The route cards of a Single Point Methods section, in order (stages joined with STAGE_JOIN); entry 0 is -sp's
-    default. '# @NAME' lines are allowed and ignored."""
-    return [JoinStages(stages) for _, stages in RouteEntries(data)]
 
 # Blocks an ORCA re-run never carries over: genFile writes %pal/%maxcore, and the new geometry comes from the output
 RERUN_SKIPPED_BLOCKS = RESERVED_ORCA_BLOCKS | {"coords"}
@@ -1266,200 +1181,7 @@ def OrcaInputBlocks(inputText: str) -> list[str]:
             continue
         # ORCA allows an indented block start
         lines.append(line.lstrip() if stripped.startswith("%") else line)
-    return [blockText for _, blockText in _SplitOrcaBlocks(lines) if OrcaBlockName(blockText) not in RERUN_SKIPPED_BLOCKS]
-
-# Atomic number -> symbol, 1-103. Shared by getCoords() and the mixed basis element checks
-ATOMIC_SYMBOLS = dict(enumerate((
-    "H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr "
-    "Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb "
-    "Lu Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf Es Fm Md No Lr"
-).split(), start=1))
-ELEMENT_SET = set(ATOMIC_SYMBOLS.values())
-
-@dataclass
-class BasisEntry:
-    tokens: list[str]   # element tokens as written (e.g. "-C"), or center numbers when byCenter
-    body: str           # everything after the element line ('****' included for basis groups)
-    byCenter: bool = False
-
-    @property
-    def elements(self) -> list[str]:
-        return [] if self.byCenter else [NormalizeElement(token) for token in self.tokens]
-
-@dataclass
-class MixedBasis:
-    basis: list[BasisEntry]
-    ecp: list[BasisEntry]
-
-def NormalizeElement(token: str) -> str:
-    return token.lstrip("-").capitalize()
-
-_ELEMENT_LINE_RE = regex.compile(r"\s*((?:-?\w+\s+)+)0\s*$")
-_ELEMENT_INT_RE = regex.compile(r"-?\d+")
-_ELEMENT_SYM_RE = regex.compile(r"-?[A-Za-z]{1,2}")
-_TAG_DIRECTIVE_FULL_RE = regex.compile(TAG_DIRECTIVE + r"\s*")
-
-
-def _ElementLine(line: str) -> tuple[list[str], bool] | None:
-    """'C H N O 0' -> (tokens, False); '1 2 3 0' -> (tokens, True); anything else -> None."""
-    lineMatch = _ELEMENT_LINE_RE.match(line)
-    if lineMatch is None:
-        return None
-    tokens = lineMatch.group(1).split()
-    if all(_ELEMENT_INT_RE.fullmatch(token) for token in tokens):
-        return tokens, True
-    if all(_ELEMENT_SYM_RE.fullmatch(token) and NormalizeElement(token) in ELEMENT_SET for token in tokens):
-        return tokens, False
-    return None
-
-def ExtractMixedBasisSets(data) -> dict[str, MixedBasis]:
-    """The Mixed Basis section as its sets: each `# @name` line starts a named set (a Gaussian route picks one with
-    {name}, as an ORCA route picks ORCA Blocks); whatever comes before the first is the unnamed set '' (the one a route
-    naming none uses). Each set is ExtractMixedBasis's syntax. A name given twice keeps its first set."""
-    data.seek(0)
-    lines = data.read().decode().replace("\r\n", "\n").split("\n")
-    chunks, name, current = [], "", []
-    for line in lines:
-        directive = _TAG_DIRECTIVE_FULL_RE.fullmatch(line.strip())
-        if directive:
-            chunks.append((name, current))
-            name, current = directive.group(1).lower(), []
-        else:
-            current.append(line)
-    chunks.append((name, current))
-    sets = {}
-    for setName, chunk in chunks:
-        text = "\n".join(chunk)
-        if (not setName and not text.strip()) or setName in sets:
-            if setName in sets:
-                console.print(f"[warning]Mixed Basis: the set @{escape(setName)} is named twice. Using the first."
-                              "[/warning]")
-            continue
-        sets[setName] = ExtractFromText(text + "\n", ExtractMixedBasis, empty=MixedBasis([], []))
-    return sets
-
-
-def ExtractMixedBasis(data) -> MixedBasis:
-    """Parse a Mixed Basis section (keylists.cusf: Gaussian Gen/GenECP syntax) from an mmap data stream.
-
-    Basis groups run from an element line ('C H N O 0') to '****'; the first blank line after a group ends the basis
-    section. ECP entries run from an element line to the next element line or blank line. An element listed in two
-    groups of the same section is kept only in the first.
-    """
-    data.seek(0)
-    lines = [rawLine.decode().replace("\r\n", "\n").rstrip() for rawLine in iter(data.readline, b"")]
-    basis, ecp = [], []
-    index = 0
-
-    def SkipBlank() -> None:
-        nonlocal index
-        while index < len(lines) and not lines[index].strip():
-            index += 1
-
-    # Basis section: element line, body, ****
-    SkipBlank()
-    while index < len(lines) and lines[index].strip():
-        header = _ElementLine(lines[index])
-        if header is None:
-            console.print(f"[warning]Mixed Basis line {index + 1}: expected an element line like 'C H N O 0', "
-                          f"got '{escape(lines[index])}'. Ignoring the rest of the section.[/warning]")
-            return MixedBasis(basis, ecp)
-        index += 1
-        body = []
-        while index < len(lines) and lines[index].strip() != "****":
-            body.append(lines[index])
-            index += 1
-        body.append("****")
-        index += 1
-        basis.append(BasisEntry(header[0], "\n".join(body) + "\n", header[1]))
-
-    # ECP section: element line, body until the next element line or blank line
-    SkipBlank()
-    while index < len(lines) and lines[index].strip():
-        header = _ElementLine(lines[index])
-        if header is None:
-            console.print(f"[warning]Mixed Basis line {index + 1}: expected an ECP element line like 'Co 0', "
-                          f"got '{escape(lines[index])}'. Ignoring the rest of the section.[/warning]")
-            break
-        index += 1
-        body = []
-        # Only an element line ends an entry: explicit ECP data can contain all-numeric lines ending in 0
-        while index < len(lines) and lines[index].strip():
-            nextHeader = _ElementLine(lines[index])
-            if nextHeader and not nextHeader[1]:
-                break
-            body.append(lines[index])
-            index += 1
-        ecp.append(BasisEntry(header[0], "\n".join(body) + "\n", header[1]))
-
-    for sectionName, entries in (("basis", basis), ("ECP", ecp)):
-        seen = set()
-        for entry in entries:
-            if entry.byCenter:
-                console.print(f"[warning]Mixed Basis: {sectionName} group '{' '.join(entry.tokens)} 0' addresses atoms "
-                              "by center number and can't be filtered by element. It is written to every job as-is.[/warning]")
-                continue
-            duplicates = [token for token in entry.tokens if NormalizeElement(token) in seen]
-            if duplicates:
-                console.print(f"[warning]Mixed Basis: {', '.join(NormalizeElement(t) for t in duplicates)} already has "
-                              f"a {sectionName} entry. Keeping the first one.[/warning]")
-                entry.tokens = [token for token in entry.tokens if token not in duplicates]
-            seen.update(entry.elements)
-    return MixedBasis([entry for entry in basis if entry.tokens], [entry for entry in ecp if entry.tokens])
-
-# Element symbol -> atomic number
-ATOMIC_NUMBERS = {symbol: number for number, symbol in ATOMIC_SYMBOLS.items()}
-
-
-def Symbols(coordinateList: list[str]) -> list[str]:
-    # A coordinate line's element (fileops.CoordinateLines writes the symbol first)
-    return [line.split()[0] for line in coordinateList if line.split()]
-
-
-def Formula(coordinateList: list[str]) -> str:
-    """The molecular formula in Hill order (C, then H, then alphabetical; alphabetical without carbon): C12H10N2."""
-    counts = {}
-    for symbol in Symbols(coordinateList):
-        counts[symbol] = counts.get(symbol, 0) + 1
-    order = sorted(counts, key=lambda symbol: (("C", "H").index(symbol) if "C" in counts and symbol in ("C", "H")
-                                               else 2, symbol))
-    return "".join(f"{symbol}{counts[symbol] if counts[symbol] > 1 else ''}" for symbol in order)
-
-
-def ElectronProblem(coordinateList: list[str], charge: int, multiplicity: int) -> str:
-    """Why this charge and multiplicity can't describe the molecule ('' if they can): Gaussian and ORCA stop at once."""
-    electrons = sum(ATOMIC_NUMBERS.get(symbol, 0) for symbol in Symbols(coordinateList)) - charge
-    if electrons < 1:
-        return f"Charge {charge} Leaves No Electrons"
-    # Multiplicity 2S + 1: an even electron count has odd multiplicities, at most one more than the electrons
-    if multiplicity < 1 or multiplicity > electrons + 1 or (electrons + multiplicity) % 2 == 0:
-        return f"Multiplicity {multiplicity} Can't Fit {electrons} Electrons"
-    return ""
-
-
-_ELEMENT_TOKEN_RE = regex.compile(r"[A-Za-z]{1,2}")
-
-
-def MoleculeElements(coordinateList: list[str]) -> set[str]:
-    """Element symbols in a coordinate list. Handles atomic numbers, 'C(Fragment=1)', 'C-Bq' (ghost atoms still carry
-    basis functions), 'C1' labels; drops bare 'Bq' and dummy 'X' atoms."""
-    elements = set()
-    for line in coordinateList:
-        fields = line.split()
-        if not fields:
-            continue
-        token = fields[0]
-        if token.isdigit():
-            symbol = ATOMIC_SYMBOLS.get(int(token), token)
-        else:
-            symbolMatch = _ELEMENT_TOKEN_RE.match(token)
-            if symbolMatch is None:
-                continue
-            symbol = symbolMatch.group(0).capitalize()
-        # Bq and X are not in the table, so ghost-only and dummy atoms are dropped here
-        if symbol in ELEMENT_SET:
-            elements.add(symbol)
-    return elements
+    return [blockText for _, blockText in SplitOrcaBlocks(lines) if OrcaBlockName(blockText) not in RERUN_SKIPPED_BLOCKS]
 
 # Finally handle filename creation in one place to stop the infinite copypasta
 def fileCreation(baseName: str, extensionType: str, extra: str = "") -> Path:

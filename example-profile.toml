@@ -15,7 +15,6 @@ name = "Example Lab"
 
 # Any global config key (see the TOML files in ~/bin), applied to every labmate's config. Leave a key out
 # (or commented out) rather than empty: an empty value is applied too, e.g. wiping a labmate's own bot token.
-# benchmarkMethods (route cards) becomes the Single Point Methods of every labmate's global keylists.cusf
 [settings]
 isNotifications = true
 # botToken = "123456789:ABC..."   # the lab bot's token, from Telegram's @BotFather
@@ -28,10 +27,6 @@ isNotifications = true
 # agentPluginBranch = "main"
 # agentPluginProfile = "lab-profile.toml"         # this profile's path in the plugin, if the plugin carries it: a newer
 #                                                 # one is relayed to each labmate's cluster account, asking first
-benchmarkMethods = [
-    "M062X 6-311+G(d,p)",
-    "B3LYP 6-311+G(d,p) EmpiricalDispersion=GD3BJ",
-]
 
 # A cluster setup offers (listed before the built-in Bridges2 and Stampede3).
 # submissionList is its SLURM header: each line is filled in by the flag it holds
@@ -57,14 +52,18 @@ memoryRatio = 4.0
 partition = "RM-shared"
 
 # The lab's standard methods: whole keylists.cusf sections, written into each labmate's global file when the
-# profile is applied (a project's own section still wins). Any of: "Optimization Methods", "Single Point Methods" (in
-# place of benchmarkMethods above), "Mixed Basis", "ORCA Blocks", "Conformer Search Methods". {smd} / {alpb} write the project's solvent (project.toml:
+# profile is applied (a project's own section still wins). Any of: "Optimization Methods", "Single Point Methods",
+# "Mixed Basis", "ORCA Blocks", "Conformer Search Methods". {smd} / {alpb} write the project's solvent (project.toml:
 # solvent = "THF"), nothing in the gas phase; {name} picks a named Mixed Basis set; [metal: ...] applies to molecules
 # with a d- or f-block metal.
 [keylists]
 "Optimization Methods" = '''
 # @opt
 B3LYP EmpiricalDispersion=GD3BJ GenECP {light-sdd} opt freq [metal: freq=noraman]
+'''
+"Single Point Methods" = '''
+M062X 6-311+G(d,p)
+B3LYP 6-311+G(d,p) EmpiricalDispersion=GD3BJ
 '''
 "Mixed Basis" = '''
 # @light-sdd

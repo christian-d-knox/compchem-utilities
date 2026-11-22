@@ -24,8 +24,8 @@ from ..optimize import (CustomMethod, MethodChoices, MethodProblems, SinglePoint
                         SplitStages)
 from ..planned  import (LoadMolecules, PlanAsWritten, PlanBenchmark, PlannedJob, PlanReRuns, PlanSinglePoints,
                         Resources)
-from .common    import NAV_BINDINGS, TEXT, Column, FrameRule, KeyHint, NavFooter, Notice, Setting, SettingsList, ValueInput
-from .home      import ACTION_LABELS, TitleLine
+from .common    import (ACTION_LABELS, NAV_BINDINGS, TEXT, Column, FrameRule, KeyHint, NavFooter, Notice, Setting,
+                        SettingsList, TitleLine, ValueInput)
 from .inspect   import Styled
 from .lists     import Cut
 from .rows      import (LEFT_WIDTH, FillValue, ListValue, MethodRows, OutputRows, ProgramOf, RendersAsText,

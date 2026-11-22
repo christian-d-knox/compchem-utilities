@@ -21,8 +21,7 @@ from ..fileops  import ReRunNameIn, fileCreation
 from ..intent   import CrestIntent
 from ..molecule import Molecule
 from .common    import (NAV_BINDINGS, NUMBER, TEXT, Column, FrameRule, KeyHint, NavFooter, Notice, Setting, SettingsList,
-                        ValueInput)
-from .home      import TitleLine
+                        TitleLine, ValueInput)
 from .inspect   import Styled
 from .lists     import Cut, ProblemText, TextEditor
 from .rows      import FILE_NAME, LEFT_WIDTH, FillValue, ListValue, ResourceRows
@@ -153,10 +152,6 @@ class ConformerSearchScreen(Screen):
         if chosen in self.methodKeys:
             return self.methods[self.methodKeys[chosen]]
         return self.preset.options if self.preset is not None else ""
-
-    @property
-    def asRanMethod(self) -> bool:
-        return self.preset is not None and self.preset.method not in self.methods
 
     def compose(self) -> ComposeResult:
         atoms = len(self.molecule.coordinateList)

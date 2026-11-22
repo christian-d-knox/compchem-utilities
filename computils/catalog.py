@@ -60,7 +60,7 @@ def _IsValidSelector(selector: str) -> bool:
 
 
 def MetalSymbols() -> set[str]:
-    from .fileops import ATOMIC_SYMBOLS
+    from .elements import ATOMIC_SYMBOLS
     return {ATOMIC_SYMBOLS[number] for numbers in _METAL_NUMBERS for number in numbers if number in ATOMIC_SYMBOLS}
 
 
@@ -237,7 +237,7 @@ def RenderRoute(template: RouteTemplate, molecule) -> tuple[str, list[str]]:
         multiplicity = 0
     elements = set()
     if template.groups and isinstance(molecule.coordinateList, list):
-        from .fileops import MoleculeElements
+        from .elements import MoleculeElements
         elements = MoleculeElements(molecule.coordinateList)
     tokens, tags = template.base.split(), list(template.tags)
     for selectors, keywords, groupTags in template.groups:

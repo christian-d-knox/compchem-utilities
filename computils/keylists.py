@@ -6,39 +6,32 @@
     === ORCA Blocks ===              %blocks, pulled into ORCA jobs by {tag} tokens
     === Conformer Search Methods === named CREST option lines for conformer searches ('# @NAME' above each; crest.py)
 
-Each section keeps its own format and extractor (fileops). The file has no extension: it is edited in the TUI (Config ›
-Job Keylists, one section at a time). It lives at two levels, and the nearer level that HAS a section wins, section by
-section: the project marker (<root>/.computils/), then binDirectory (global). So a project can override only its
-Single Point Methods and keep the global ORCA blocks. A copy in the CWD is never read.
-
-Until `cu -refresh` merges them (MergeLegacy), the files these sections replaced (mixedbasis.txt, orcablocks.txt,
-optmethods.txt in the marker) and the old benchmarkMethods TOML key (project.toml, programs.toml) still stand in for
-their section at their level. No Textual import."""
+It lives at two levels, and the nearer level that HAS a section wins, section by section: the project marker
+(<root>/.computils/), then binDirectory (global). So a project can override only its Single Point Methods and keep the
+global ORCA blocks. A copy in the CWD is never read. No Textual import."""
 import functools
-import tomllib as tom
 from dataclasses import dataclass
 from pathlib import Path
 
 import regex
 from rich.markup import escape
 
+from .catalog  import STAGE_JOIN
 from .console  import console
 from .defaults import BackUpFile, Defaults
-from .fileops  import (RESERVED_ORCA_BLOCKS, TAG_DIRECTIVE, ExtractBenchmarkMethods, ExtractCrestMethods,
-                       ExtractFromText, ExtractMixedBasisSets, ExtractOptMethods, ExtractOrcaBlocks, HasContent,
-                       JoinStages, MapFile, NamedRoutes, RouteEntries)
+from .elements import ELEMENT_SET, NormalizeElement
+from .fileops  import (RESERVED_ORCA_BLOCKS, TAG_DIRECTIVE, ExtractFromText, HasContent, MapFile, OrcaBlockName,
+                       SplitOrcaBlocks)
 from .project  import FindProjectRoot, ProjectFilePath
 
 KEYLISTS_FILE = "keylists.cusf"
-# Its name until 2026-11-21: a level's file while it has no keylists.cusf, until `cu -refresh` renames it (OldKeylists)
+# Its name until 2026-11-21: a level's file while it has no keylists.cusf, until `cu -refresh` renames it
 OLD_KEYLISTS_FILE = "jobRelatedKeylists"
 OPTIMIZATION, BENCHMARK, MIXED_BASIS, ORCA_BLOCKS = ("Optimization Methods", "Single Point Methods", "Mixed Basis",
                                                      "ORCA Blocks")
 # Headers a section had before: still read as that section; a write (or `cu -refresh`) gives the part its own header
 OLD_SECTION_NAMES = {"benchmark methods": BENCHMARK}
 CONFORMER_SEARCH = "Conformer Search Methods"
-# The TOML key the Single Point Methods section replaced (programs.toml, project.toml, a lab profile's [settings])
-LEGACY_KEY = "benchmarkMethods"
 # The suite when no level has one
 DEFAULT_BENCHMARK = ["M062X 6-311+G(d,p)"]
 # The conformer searches when no level has any: GFN2-xTB in the gas phase, with looser deduplication thresholds than
@@ -49,26 +42,238 @@ NAMED_SECTIONS = (OPTIMIZATION, CONFORMER_SEARCH)
 # '=== Name ===' on a line of its own. Nothing in any section's format starts with '='
 SECTION_HEADER = r"(?m)^===[ \t]*(.*?)[ \t]*===[ \t]*(?=\r?$)"
 _HEADER_TEXT, _HEADER_BYTES = regex.compile(SECTION_HEADER), regex.compile(SECTION_HEADER.encode())
+_TAG_DIRECTIVE_RE = regex.compile(TAG_DIRECTIVE)
 _DECLARED_TAG_RE = regex.compile(rf"(?m)^\s*{TAG_DIRECTIVE}")
 _ORCA_BLOCK_START_RE = regex.compile(r"(?m)^%(\w+)")
+_ELEMENT_LINE_RE = regex.compile(r"\s*((?:-?\w+\s+)+)0\s*$")
+_ELEMENT_INT_RE = regex.compile(r"-?\d+")
+_ELEMENT_SYM_RE = regex.compile(r"-?[A-Za-z]{1,2}")
+_TAG_DIRECTIVE_FULL_RE = regex.compile(TAG_DIRECTIVE + r"\s*")
 FILE_PREAMBLE = ("# keylists.cusf -- CompUtils' settings file: the methods it runs jobs with, and their basis sets\n"
                  "# and blocks. Edit them in the TUI: Config > Job Keylists.\n"
                  "# Each section starts at its '=== Name ===' line; a section a level doesn't have follows the next level.\n")
 
 
+# ─── Section Parsers ──────────────────────────────────────────────────
+
+def ExtractOrcaBlocks(data) -> dict[str, str]:
+    """Extract tagged %blocks from an ORCA Blocks section (keylists.cusf) mmap data stream (split by
+    SplitOrcaBlocks). A block's tag is the preceding '# @NAME' directive if present, else the block name. Tags are
+    lowercased."""
+    blocks: dict[str, str] = {}
+    data.seek(0)
+    lines = [rawLine.decode().replace("\r\n", "\n") for rawLine in iter(data.readline, b"")]
+    for directiveTag, blockText in SplitOrcaBlocks(lines):
+        blockName = OrcaBlockName(blockText)
+        if blockName in RESERVED_ORCA_BLOCKS:
+            console.print(f"[warning]ORCA Blocks: %{blockName} is written by CompUtils. Ignoring this block.[/warning]")
+            continue
+        tag = directiveTag or blockName
+        if tag in blocks:
+            console.print(f"[error]Duplicate tag '{tag}' in ORCA Blocks. Keeping the first definition.[/error]")
+            continue
+        blocks[tag] = blockText
+    return blocks
+
+
+def RouteEntries(data) -> list[tuple[str, list[tuple[int, str]]]]:
+    """(directive name or '', [(line index, stage route), ...]) for each route in a methods section (keylists.cusf's
+    Optimization or Single Point Methods), in order. A route is a line that is neither blank nor a # comment; a line
+    starting with '>' is a later stage of the route above it ('>' with no route above is skipped). '# @NAME' names the
+    route after it (lowercased). Line indices count from 0, so the TUI's editor can tell which stage its cursor is on."""
+    entries: list[tuple[str, list[tuple[int, str]]]] = []
+    pendingTag = ""
+    data.seek(0)
+    for index, rawLine in enumerate(iter(data.readline, b"")):
+        line = rawLine.decode().strip()
+        tagMatch = _TAG_DIRECTIVE_RE.match(line)
+        if tagMatch:
+            pendingTag = tagMatch.group(1).lower()
+            continue
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith(">"):
+            stage = line[1:].strip()
+            if entries and stage:
+                entries[-1][1].append((index, stage))
+            continue
+        entries.append((pendingTag, [(index, line)]))
+        pendingTag = ""
+    return entries
+
+
+def JoinStages(stages: list[tuple[int, str]]) -> str:
+    """A route's stages as one route card: 'route -> route' (STAGE_JOIN)."""
+    return STAGE_JOIN.join(route for _, route in stages)
+
+
+def NamedRoutes(entries: list[tuple[str, list[tuple[int, str]]]]) -> list[tuple[str, list[tuple[int, str]]]]:
+    """RouteEntries named as the Optimization Methods are: the '# @NAME' directive, else the method (the first token
+    without Gaussian's /basis), both lowercased. No route is dropped: a repeated name is numbered (ts, ts-2, ...), as
+    two unnamed routes of one method are."""
+    named, taken = [], set()
+    for tag, stages in entries:
+        # A CREST option line's first flag names it without its dashes (--gfn2: gfn2)
+        tag = tag or stages[0][1].split()[0].split("/")[0].lstrip("-").lower()
+        name, number = tag, 2
+        while name in taken:
+            name, number = f"{tag}-{number}", number + 1
+        taken.add(name)
+        named.append((name, stages))
+    return named
+
+
+def ExtractOptMethods(data) -> dict[str, str]:
+    """Named routes from an Optimization Methods section (NamedRoutes): name -> route card (stages joined with
+    STAGE_JOIN), in order."""
+    return {name: JoinStages(stages) for name, stages in NamedRoutes(RouteEntries(data))}
+
+
+def ExtractCrestMethods(data) -> dict[str, str]:
+    """Named option lines from a Conformer Search Methods section (NamedRoutes): name -> CREST's options, one line each
+    ('>' lines mean nothing to CREST, so only an entry's first line counts)."""
+    return {name: stages[0][1] for name, stages in NamedRoutes(RouteEntries(data))}
+
+
+def ExtractBenchmarkMethods(data) -> list[str]:
+    """The route cards of a Single Point Methods section, in order (stages joined with STAGE_JOIN); entry 0 is -sp's
+    default. '# @NAME' lines are allowed and ignored."""
+    return [JoinStages(stages) for _, stages in RouteEntries(data)]
+
+
+@dataclass
+class BasisEntry:
+    tokens: list[str]   # element tokens as written (e.g. "-C"), or center numbers when byCenter
+    body: str           # everything after the element line ('****' included for basis groups)
+    byCenter: bool = False
+
+    @property
+    def elements(self) -> list[str]:
+        return [] if self.byCenter else [NormalizeElement(token) for token in self.tokens]
+
+
+@dataclass
+class MixedBasis:
+    basis: list[BasisEntry]
+    ecp: list[BasisEntry]
+
+
+def _ElementLine(line: str) -> tuple[list[str], bool] | None:
+    """'C H N O 0' -> (tokens, False); '1 2 3 0' -> (tokens, True); anything else -> None."""
+    lineMatch = _ELEMENT_LINE_RE.match(line)
+    if lineMatch is None:
+        return None
+    tokens = lineMatch.group(1).split()
+    if all(_ELEMENT_INT_RE.fullmatch(token) for token in tokens):
+        return tokens, True
+    if all(_ELEMENT_SYM_RE.fullmatch(token) and NormalizeElement(token) in ELEMENT_SET for token in tokens):
+        return tokens, False
+    return None
+
+
+def ExtractMixedBasisSets(data) -> dict[str, MixedBasis]:
+    """The Mixed Basis section as its sets: each `# @name` line starts a named set (a Gaussian route picks one with
+    {name}, as an ORCA route picks ORCA Blocks); whatever comes before the first is the unnamed set '' (the one a route
+    naming none uses). Each set is ExtractMixedBasis's syntax. A name given twice keeps its first set."""
+    data.seek(0)
+    lines = data.read().decode().replace("\r\n", "\n").split("\n")
+    chunks, name, current = [], "", []
+    for line in lines:
+        directive = _TAG_DIRECTIVE_FULL_RE.fullmatch(line.strip())
+        if directive:
+            chunks.append((name, current))
+            name, current = directive.group(1).lower(), []
+        else:
+            current.append(line)
+    chunks.append((name, current))
+    sets = {}
+    for setName, chunk in chunks:
+        text = "\n".join(chunk)
+        if (not setName and not text.strip()) or setName in sets:
+            if setName in sets:
+                console.print(f"[warning]Mixed Basis: the set @{escape(setName)} is named twice. Using the first."
+                              "[/warning]")
+            continue
+        sets[setName] = ExtractFromText(text + "\n", ExtractMixedBasis, empty=MixedBasis([], []))
+    return sets
+
+
+def ExtractMixedBasis(data) -> MixedBasis:
+    """Parse a Mixed Basis section (keylists.cusf: Gaussian Gen/GenECP syntax) from an mmap data stream."""
+    data.seek(0)
+    lines = [rawLine.decode().replace("\r\n", "\n").rstrip() for rawLine in iter(data.readline, b"")]
+    basis, ecp = [], []
+    index = 0
+
+    def SkipBlank() -> None:
+        nonlocal index
+        while index < len(lines) and not lines[index].strip():
+            index += 1
+
+    # Basis section: element line, body, ****
+    SkipBlank()
+    while index < len(lines) and lines[index].strip():
+        header = _ElementLine(lines[index])
+        if header is None:
+            console.print(f"[warning]Mixed Basis line {index + 1}: expected an element line like 'C H N O 0', "
+                          f"got '{escape(lines[index])}'. Ignoring the rest of the section.[/warning]")
+            return MixedBasis(basis, ecp)
+        index += 1
+        body = []
+        while index < len(lines) and lines[index].strip() != "****":
+            body.append(lines[index])
+            index += 1
+        body.append("****")
+        index += 1
+        basis.append(BasisEntry(header[0], "\n".join(body) + "\n", header[1]))
+
+    # ECP section: element line, body until the next element line or blank line
+    SkipBlank()
+    while index < len(lines) and lines[index].strip():
+        header = _ElementLine(lines[index])
+        if header is None:
+            console.print(f"[warning]Mixed Basis line {index + 1}: expected an ECP element line like 'Co 0', "
+                          f"got '{escape(lines[index])}'. Ignoring the rest of the section.[/warning]")
+            break
+        index += 1
+        body = []
+        # Only an element line ends an entry: explicit ECP data can contain all-numeric lines ending in 0
+        while index < len(lines) and lines[index].strip():
+            nextHeader = _ElementLine(lines[index])
+            if nextHeader and not nextHeader[1]:
+                break
+            body.append(lines[index])
+            index += 1
+        ecp.append(BasisEntry(header[0], "\n".join(body) + "\n", header[1]))
+
+    for sectionName, entries in (("basis", basis), ("ECP", ecp)):
+        seen = set()
+        for entry in entries:
+            if entry.byCenter:
+                console.print(f"[warning]Mixed Basis: {sectionName} group '{' '.join(entry.tokens)} 0' addresses atoms "
+                              "by center number and can't be filtered by element. It is written to every job as-is.[/warning]")
+                continue
+            duplicates = [token for token in entry.tokens if NormalizeElement(token) in seen]
+            if duplicates:
+                console.print(f"[warning]Mixed Basis: {', '.join(NormalizeElement(t) for t in duplicates)} already has "
+                              f"a {sectionName} entry. Keeping the first one.[/warning]")
+                entry.tokens = [token for token in entry.tokens if token not in duplicates]
+            seen.update(entry.elements)
+    return MixedBasis([entry for entry in basis if entry.tokens], [entry for entry in ecp if entry.tokens])
+
+
 @dataclass(frozen=True)
 class Section:
     name: str
-    extractor: object       # fileops extractor run on the section's text
+    extractor: object       # parser run on the section's text
     empty: object           # zero-argument factory: the value without the section
-    legacyFile: str = ""    # the project file this section replaced (read until `cu -refresh` merges it)
 
 
 SECTIONS = {section.name: section for section in (
-    Section(OPTIMIZATION, ExtractOptMethods, dict, "optmethods.txt"),
+    Section(OPTIMIZATION, ExtractOptMethods, dict),
     Section(BENCHMARK, ExtractBenchmarkMethods, list),
-    Section(MIXED_BASIS, ExtractMixedBasisSets, dict, "mixedbasis.txt"),
-    Section(ORCA_BLOCKS, ExtractOrcaBlocks, dict, "orcablocks.txt"),
+    Section(MIXED_BASIS, ExtractMixedBasisSets, dict),
+    Section(ORCA_BLOCKS, ExtractOrcaBlocks, dict),
     Section(CONFORMER_SEARCH, ExtractCrestMethods, dict),
 )}
 
@@ -205,29 +410,8 @@ def _LoadKeylists(path: Path) -> dict:
     return _ParseParts(parts)
 
 
-@functools.cache
-def _LoadLegacyFile(path: Path, name: str):
-    section = SECTIONS[name]
-    with MapFile(path) as data:
-        return section.extractor(data)
-
-
-@functools.cache
-def _LegacyBenchmark(tomlPath: Path) -> list[str] | None:
-    """The old benchmarkMethods key in a TOML file, if it holds a list of route strings."""
-    try:
-        with open(tomlPath, "rb") as file:
-            value = tom.load(file).get(LEGACY_KEY)
-    except (OSError, tom.TOMLDecodeError):
-        return None
-    if isinstance(value, list) and value and all(isinstance(entry, str) for entry in value):
-        return list(value)
-    return None
-
-
 def ClearCaches() -> None:
-    for loader in (_LoadKeylists, _LoadLegacyFile, _LegacyBenchmark):
-        loader.cache_clear()
+    _LoadKeylists.cache_clear()
 
 
 # ─── Levels ───────────────────────────────────────────────────────────
@@ -236,8 +420,6 @@ def ClearCaches() -> None:
 class Level:
     label: str                  # Project, Global
     path: Path                  # this level's keylists.cusf (absolute; may not exist), or its old jobRelatedKeylists
-    legacyFolder: Path | None   # where the files the sections replaced are still read from
-    legacyToml: Path | None     # the TOML whose old benchmarkMethods key is still read
 
 
 def KeylistsPath(folder: Path) -> Path:
@@ -249,7 +431,7 @@ def KeylistsPath(folder: Path) -> Path:
 
 def GlobalLevel() -> Level:
     binDirectory = Path(Defaults.binDirectory).expanduser().absolute()
-    return Level("Global", KeylistsPath(binDirectory), None, binDirectory / "programs.toml")
+    return Level("Global", KeylistsPath(binDirectory))
 
 
 def Levels() -> list[Level]:
@@ -259,7 +441,7 @@ def Levels() -> list[Level]:
     levels = []
     if root is not None:
         marker = ProjectFilePath(root, "").absolute()
-        levels.append(Level("Project", KeylistsPath(marker), marker, marker / "project.toml"))
+        levels.append(Level("Project", KeylistsPath(marker)))
     global_ = GlobalLevel()
     if all(global_.path != level.path for level in levels):
         levels.append(global_)
@@ -267,25 +449,12 @@ def Levels() -> list[Level]:
 
 
 def LevelSections(level: Level, texts: dict[Path, str] | None = None) -> dict[str, tuple[object, Path]]:
-    """{section: (parsed value, the file it came from)} for every section this level has: its keylists file (or its
-    unsaved text in texts), then the legacy files and TOML key standing in for sections it doesn't have."""
+    """{section: (parsed value, the file it came from)} for every section this level has."""
     if texts and level.path in texts:
         parsed = ParseKeylists(texts[level.path])
     else:
         parsed = _LoadKeylists(level.path) if HasContent(level.path) else {}
-    found = {name: (value, level.path) for name, value in parsed.items()}
-    for section in SECTIONS.values():
-        if section.name in found:
-            continue
-        if section.legacyFile and level.legacyFolder is not None:
-            legacy = level.legacyFolder / section.legacyFile
-            if HasContent(legacy):
-                found[section.name] = (_LoadLegacyFile(legacy, section.name), legacy)
-        elif section.name == BENCHMARK and level.legacyToml is not None and level.legacyToml.is_file():
-            entries = _LegacyBenchmark(level.legacyToml)
-            if entries is not None:
-                found[BENCHMARK] = (entries, level.legacyToml)
-    return found
+    return {name: (value, level.path) for name, value in parsed.items()}
 
 
 def KeylistSource(name: str, texts: dict[Path, str] | None = None) -> tuple[Level, Path] | None:
@@ -393,25 +562,15 @@ def DefaultText(benchmark: list[str]) -> str:
 
 
 def EnsureGlobalKeylists() -> bool:
-    """Generate the global file if it is missing (Defaults.Load, like a missing TOML): its Single Point Methods seeded
-    from programs.toml's old benchmarkMethods key, else the default suite. True if it was written."""
+    """Generate the global file if it is missing (Defaults.Load, like a missing TOML). True if it was written."""
     global_ = GlobalLevel()
     if global_.path.exists():
         return False
-    seeded = _LegacyBenchmark(global_.legacyToml) if global_.legacyToml.is_file() else None
-    console.print(f"[warning]\\[config] {KEYLISTS_FILE} not found — generating it"
-                  f"{' (Single Point Methods from programs.toml)' if seeded else ''}.[/warning]")
-    if not WriteKeylists(global_.path, DefaultText(seeded or DEFAULT_BENCHMARK)):
+    console.print(f"[warning]\\[config] {KEYLISTS_FILE} not found — generating it.[/warning]")
+    if not WriteKeylists(global_.path, DefaultText(DEFAULT_BENCHMARK)):
         return False
     ClearCaches()
     return True
-
-
-def GlobalBenchmark() -> list[str] | None:
-    """The global level's Single Point Methods (its file, else programs.toml's old key), or None without one."""
-    global_ = GlobalLevel()
-    found = LevelSections(global_).get(BENCHMARK)
-    return None if found is None else found[0]
 
 
 def SetGlobalSection(name: str, body: str) -> bool:
@@ -426,38 +585,11 @@ def SetGlobalSection(name: str, body: str) -> bool:
     return WriteKeylists(path, text)
 
 
-def SetGlobalBenchmark(entries: list[str]) -> bool:
-    """A lab profile's benchmarkMethods: the global file's Single Point Methods section."""
-    global_ = GlobalLevel()
-    return SaveSection(global_.path, BENCHMARK, "\n".join(entries))
-
-
-def _Difference(expected, readBack) -> str:
-    """The first thing a merged section would read back differently, for MergeLegacy's message."""
-    if isinstance(expected, list):
-        readBack = readBack or []
-        for index, entry in enumerate(expected):
-            if index >= len(readBack):
-                return f": entry {index} '{entry}' would be lost"
-            if readBack[index] != entry:
-                return f": entry {index} '{entry}' would read as '{readBack[index]}'"
-        return f": it would gain entry {len(expected)} '{readBack[len(expected)]}'"
-    if isinstance(expected, dict):
-        readBack = readBack or {}
-        for key, value in expected.items():
-            if key not in readBack:
-                return f": '{key}' would be lost"
-            if readBack[key] != value:
-                return f": '{key}' would read differently"
-        return f": it would gain '{next(key for key in readBack if key not in expected)}'"
-    return ": its basis or ECP entries would read differently"
-
-
-def _RenameOld(level: Level) -> Level | None:
+def RenameOld(level: Level) -> bool:
     """`cu -refresh`: a level's old jobRelatedKeylists becomes keylists.cusf, its old section headers their current
-    ones (Benchmark Methods -> Single Point Methods). The level as it now is, or None if the file couldn't be moved."""
+    ones (Benchmark Methods -> Single Point Methods). Returns False only on write or OS error."""
     if level.path.name != OLD_KEYLISTS_FILE:
-        return level
+        return True
     new = level.path.with_name(KEYLISTS_FILE)
     try:
         text = level.path.read_text(encoding="utf-8")
@@ -472,56 +604,12 @@ def _RenameOld(level: Level) -> Level | None:
             if part.name:
                 part.header = f"=== {part.name} ==="
         if not WriteKeylists(new, preamble + "".join(part.header + part.body for part in parts)):
-            return None
+            return False
         BackUpFile(level.path)
     except OSError as error:
         console.print(f"[error]Could not rename {level.path} to {new.name}: {error}[/error]")
-        return None
+        return False
     ClearCaches()
     console.print(f"[good]Renamed {level.path.name} to {new.name} ({level.label}); the old file is kept as a "
                   f"backup.[/good]")
-    from dataclasses import replace
-    return replace(level, path=new)
-
-
-def MergeLegacy(level: Level) -> bool:
-    """`cu -refresh`: write what the old files and TOML key give this level into its keylists file, section by section
-    (only for sections it doesn't have yet), and back the merged old files up to .bak (refresh drops the TOML key
-    itself). A section is merged only if it reads back the same: TOML entries as the old Catalog read them (stripped,
-    blank ones skipped), old files as their extractor reads them (bytes, line endings as written). A section that
-    wouldn't is named and left where it is. False if any was left, so refresh rewrites nothing that still holds it."""
-    level = _RenameOld(level)
-    if level is None:
-        return False
-    found = LevelSections(level)
-    legacy = {name: (value, source) for name, (value, source) in found.items() if source != level.path}
-    if not legacy:
-        return True
-    text = level.path.read_text(encoding="utf-8") if level.path.is_file() else FILE_PREAMBLE + "\n"
-    merged, left = [], []
-    for name, (value, source) in legacy.items():
-        if source.suffix == ".toml":
-            expected = [entry.strip() for entry in value if entry.strip()]
-            body = "\n".join(expected)
-        else:
-            expected, body = value, source.read_bytes().decode()
-        candidate = ReplaceSection(text, name, body)
-        readBack = ParseKeylists(candidate).get(name)
-        if readBack != expected:
-            left.append(f"{name} (from {source}){_Difference(expected, readBack)}")
-            continue
-        text = candidate
-        merged.append((name, source))
-    if merged:
-        if not WriteKeylists(level.path, text):
-            return False
-        for _, source in merged:
-            if source.suffix != ".toml":
-                BackUpFile(source)
-        ClearCaches()
-        console.print(f"[good]Merged into {level.path}: "
-                      f"{', '.join(f'{name} (from {source.name})' for name, source in merged)}.[/good]")
-    for reason in left:
-        console.print(f"[error]{escape(str(level.path))}: {escape(reason)}. It was left where it is; fix it there "
-                      f"(or add the section in Config › Job Keylists) and run the refresh again.[/error]")
-    return not left
+    return True

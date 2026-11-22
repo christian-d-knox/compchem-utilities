@@ -5,8 +5,7 @@ A profile is a TOML file the lab shares privately (e.g. readable only by its gro
 asks for it (SetupProfile); `cu -profile FILE` applies one any time. The layout is in
 example-profile.toml:
     name = "..."          shown when the profile is applied
-    [settings]            global config keys (the notification bot, ...); benchmarkMethods (a list of route cards) is
-                          written into the global keylists.cusf's Single Point Methods
+    [settings]            global config keys (the notification bot, ...)
     [clusters.NAME]       a cluster setup offers: its submissionList (unless NAME is built in), plus its settings
     [keylists]            whole keylists.cusf sections (each a triple-quoted string under its section name),
                           written into the global file on apply (the lab's standard methods; a project's own section
@@ -34,8 +33,7 @@ from rich.markup import escape
 
 from .console  import console
 from .defaults import Defaults, Cluster, BUILTIN_CLUSTERS
-from .keylists import (BENCHMARK, LEGACY_KEY, SECTIONS, GlobalBenchmark, SectionName, SetGlobalBenchmark,
-                       SetGlobalSection)
+from .keylists import SECTIONS, SectionName, SetGlobalSection
 from .prompts  import AskBool, AskStr
 
 PROFILE_FILE = "profile.toml"
@@ -57,8 +55,6 @@ class Profile:
     name: str
     settings: dict
     clusters: list[Cluster]
-    # [settings] benchmarkMethods: the benchmark suite, now keylists.cusf's global Single Point Methods section
-    benchmark: list[str] | None = None
     # [keylists]: {section name: its text}, written into the global keylists.cusf
     keylists: dict[str, str] = field(default_factory=dict)
 
@@ -190,12 +186,6 @@ def ReadProfile(text: str, source: str) -> Profile | None:
     for key in data.keys() - {"name", "settings", "clusters", "keylists"}:
         console.print(f"[warning]\\[profile] Unknown entry '{key}' in {source}. Ignored.[/warning]")
     table = dict(_Table(data, "settings", source))
-    benchmark = table.pop(LEGACY_KEY, None)
-    if benchmark is not None and not (isinstance(benchmark, list) and benchmark
-                                      and all(isinstance(entry, str) for entry in benchmark)):
-        console.print(f"[warning]\\[profile] {LEGACY_KEY} in {escape(source)} \\[settings] should be a list of route cards. "
-                      f"Ignored.[/warning]")
-        benchmark = None
     settings = _CheckedSettings(table, f"{source} [settings]")
     clusters = []
     for name, table in _Table(data, "clusters", source).items():
@@ -224,13 +214,8 @@ def ReadProfile(text: str, source: str) -> Profile | None:
                           f"text (a triple-quoted string). Ignored.[/warning]")
         else:
             keylists[section] = body
-    if benchmark is not None and BENCHMARK in keylists:
-        console.print(f"[warning]\\[profile] {escape(source)} gives Single Point Methods twice ({LEGACY_KEY} and "
-                      f"\\[keylists]). Using \\[keylists].[/warning]")
-        benchmark = None
     name = data.get("name")
-    return Profile(name if isinstance(name, str) and name else Path(source).stem, settings, clusters, benchmark,
-                   keylists)
+    return Profile(name if isinstance(name, str) and name else Path(source).stem, settings, clusters, keylists)
 
 
 def InstalledProfile() -> Profile | None:
@@ -289,9 +274,6 @@ def ApplyProfile(source: Path | None = None) -> bool:
     for key in changed:
         setattr(Defaults, key, values[key])
     Defaults._SaveKeys(changed)
-    # The suite goes into the global keylists.cusf (a project's Single Point Methods still win inside it)
-    if profile.benchmark is not None and GlobalBenchmark() != profile.benchmark and SetGlobalBenchmark(profile.benchmark):
-        changed.append(BENCHMARK)
     # The lab's standard sections, written at the global level
     changed += [name for name, body in profile.keylists.items() if SetGlobalSection(name, body)]
     from .project import ReloadConfig

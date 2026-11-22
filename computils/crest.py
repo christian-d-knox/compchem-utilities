@@ -26,8 +26,8 @@ from pathlib import Path
 import regex
 
 from .defaults import Defaults
-from .fileops  import (CREST_PROGRAM, TERMINATION_TAIL, ElectronProblem, ExtractFrom, ExtractTermination, ExtractXyz,
-                       FindInMap, Formula, HasContent, Symbols, fileCreation)
+from .elements import ElectronProblem, Formula, Symbols
+from .fileops  import CREST_PROGRAM, TERMINATION_TAIL, ExtractFrom, ExtractTermination, ExtractXyz, FindInMap, HasContent, fileCreation
 from .molecule import Molecule
 
 # What a CREST job runs, as the stalker plans its one stage and the data file names its section
@@ -49,7 +49,6 @@ _CONSTRAINT_LINE_SPLIT_RE = regex.compile(r"[;\n]")
 _NON_DIGIT_RE = regex.compile(r"\D")
 DEFAULT_FORCE_CONSTANT = 1.0
 BEST_FILE = "crest_best.xyz"
-CONFORMERS_FILE = "crest_conformers.xyz"
 CUSTOM = "Custom"
 
 

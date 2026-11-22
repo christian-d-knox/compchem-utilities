@@ -18,8 +18,7 @@ from textual.widgets import DataTable, Static
 from ..defaults import Defaults
 from ..stalk    import (AWAITING_PING, LoadTracked, HasLiveJobs, PollQueue, DismissJobs, HeadLine, ProgressLines,
                         StagePosition, TrackedJob, CancelJobs)
-from .common    import NAV_BINDINGS, Column, NavFooter, Notice, Popup
-from .home      import ShortPath, TitleLine
+from .common    import NAV_BINDINGS, Column, NavFooter, Notice, Popup, ShortPath, TitleLine
 from .inspect   import Styled
 
 # The three state panes: id, title, column headers

@@ -11,8 +11,9 @@ import regex
 from .actions  import Action, SpinState, NTS_SP
 from .catalog  import Catalog, ParseRouteTemplate, RouteTemplate, UnknownSelectors
 from .defaults import Defaults
-from .fileops  import (ElectronProblem, MoleculeElements, NamedRoutes, ReRunTemplate, Retarget, StageProblem,
-                       extensionGetter, fileCreation)
+from .elements import ElectronProblem, MoleculeElements
+from .fileops  import ReRunTemplate, Retarget, StageProblem, extensionGetter, fileCreation
+from .keylists import NamedRoutes
 from .intent   import IntentDraft
 from .jobs     import DefaultMemoryRatio, HeaderSends, JobInputText, OptMethods, StagesProblem, WallTimeProblem
 from .molecule import Molecule

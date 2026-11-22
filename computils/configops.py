@@ -496,9 +496,7 @@ def _SplitPair(raw: str, sep: str, usageHint: str) -> tuple[str, str]:
 
 def _ParseKeylistsState(path: Path) -> dict[str, tuple[object, str]]:
     """Return {sectionName: (parsedValue, sourceLabel)} for effective keylists."""
-    projectSections = LevelSections(
-        Level("Project", path, path.parent, path.parent / PROJECT_CONFIG)
-    ) if path is not None else {}
+    projectSections = LevelSections(Level("Project", path)) if path is not None else {}
     globalSections = LevelSections(GlobalLevel())
     state = {}
     for name in SECTIONS:
